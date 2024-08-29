@@ -1,0 +1,32 @@
+{
+  "deno.future": true,
+  "deno.enable": true,
+  "deno.enablePaths": [
+    "."
+  ],
+  "deno.documentPreloadLimit": 2000,
+  "editor.formatOnSave": true,
+  "editor.defaultFormatter": "denoland.vscode-deno",
+  "[typescript]": {
+    "editor.defaultFormatter": "denoland.vscode-deno",
+    "editor.codeActionsOnSave": {
+      "source.addMissingImports": "always",
+      "source.organizeImports": "always",
+      "source.fixAll": "always"
+    }
+  },
+  "[typescriptreact]": {
+    "editor.defaultFormatter": "denoland.vscode-deno",
+    "editor.codeActionsOnSave": {
+      "source.addMissingImports": "always",
+      "source.organizeImports": "always",
+      "source.fixAll": "always"
+    }
+  },
+  "[yaml]": {
+    "editor.tabSize": 2
+  },
+  "[css]": {
+    "editor.defaultFormatter": "vscode.css-language-features"
+  }
+}

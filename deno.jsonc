@@ -1,0 +1,50 @@
+{
+  "name": "@ein/bash-executor",
+  "version": "0.1.0",
+  "exports": "./mod.ts",
+  "description": "Bash executor - execute bash AST nodes given by @ein/bash-parser",
+  "repository": "https://github.com/mattiasrunge/bash-executor",
+  "license": "MIT",
+  "author": "Mattias Runge-Broberg <mattias@runge.se>",
+  "type": "module",
+  "publish": {
+    "exclude": [
+      "test",
+      ".vscode",
+      ".github",
+      "CODE_OF_CONDUCT.md",
+      "CONTRIBUTING.md"
+    ]
+  },
+  "compilerOptions": {
+    "strict": true
+  },
+  "lint": {
+    "rules": {
+      "exclude": [
+        "require-await",
+        "no-explicit-any"
+      ]
+    }
+  },
+  "fmt": {
+    "lineWidth": 175,
+    "indentWidth": 2,
+    "singleQuote": true,
+    "proseWrap": "preserve"
+  },
+  "imports": {
+    "@std/assert": "jsr:@std/assert@^1.0.2",
+    "@std/path": "jsr:@std/path@^1.0.2",
+    "@ein/bash-parser": "jsr:@ein/bash-parser@^0.9.3",
+    "~/": "./src/"
+  },
+  "tasks": {
+    "check": "deno lint && deno fmt --check && deno publish --dry-run && deno task test && deno task coverage",
+    "coverage-clean": "rm -rf coverage",
+    "coverage": "false && deno coverage coverage && deno coverage coverage --html",
+    "test": "deno task coverage-clean && deno test -R --coverage=coverage",
+    "test-nc": "deno task coverage-clean && deno test -R --coverage=coverage --no-check",
+    "test-fast": "deno test -A --parallel --no-check --quiet"
+  }
+}
