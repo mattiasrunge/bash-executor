@@ -20,6 +20,9 @@ import {
 } from '@ein/bash-parser';
 import type { ExecContextIf, ShellIf } from './types.ts';
 
+/**
+ * Class responsible for executing AST nodes parsed from shell scripts.
+ */
 export class AstExecutor {
   private shell: ShellIf;
 
@@ -27,6 +30,12 @@ export class AstExecutor {
     this.shell = shell;
   }
 
+  /**
+   * Executes a shell script source code.
+   * @param {string} source - The shell script source code.
+   * @param {ExecContextIf} ctx - The execution context.
+   * @returns {Promise<number>} - The exit code of the executed script.
+   */
   public async execute(source: string, ctx: ExecContextIf): Promise<number> {
     const ast = await parse(source, {
       // TODO: Evaluate if this is good enough or an external library should be used
@@ -36,6 +45,12 @@ export class AstExecutor {
     return await this.executeNode(ast, ctx);
   }
 
+  /**
+   * Executes an AST node based on its type.
+   * @param {AstNode} node - The AST node to execute.
+   * @param {ExecContextIf} ctx - The execution context.
+   * @returns {Promise<number>} - The exit code of the executed node.
+   */
   public async executeNode(node: AstNode, ctx: ExecContextIf): Promise<number> {
     switch (node.type) {
       case 'Script':

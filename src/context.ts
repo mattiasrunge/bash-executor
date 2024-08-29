@@ -3,6 +3,9 @@ import type { ExecContextIf, FunctionDef, IO } from './types.ts';
 
 // TODO: We need to define when cwd or params should go to parent or not...
 
+/**
+ * Execution context for shell commands, managing environment variables, I/O streams, and function definitions.
+ */
 export class ExecContext implements ExecContextIf {
   private cwd = '/';
   private parent?: ExecContext;
