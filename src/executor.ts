@@ -109,10 +109,16 @@ export class AstExecutor {
     }
   }
 
-  protected async executeScript(node: AstNodeScript, ctx: ExecContextIf): Promise<any> {
+  protected async executeScript(node: AstNodeScript, ctx: ExecContextIf): Promise<number> {
     for (const command of node.commands) {
-      await this.executeNode(command, ctx);
+      const exitCode = await this.executeNode(command, ctx);
+
+      if (exitCode != 0) {
+        return exitCode
+      }
     }
+
+    return 0;
   }
 
   protected async executeCommand(node: AstNodeCommand, parentCtx: ExecContextIf): Promise<number> {
