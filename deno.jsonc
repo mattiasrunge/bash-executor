@@ -1,6 +1,6 @@
 {
   "name": "@ein/bash-executor",
-  "version": "0.1.3",
+  "version": "0.2.2",
   "exports": "./mod.ts",
   "description": "Bash executor - execute bash AST nodes given by @ein/bash-parser",
   "repository": "https://github.com/mattiasrunge/bash-executor",
