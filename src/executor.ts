@@ -113,8 +113,8 @@ export class AstExecutor {
     for (const command of node.commands) {
       const exitCode = await this.executeNode(command, ctx);
 
-      if (exitCode != 0) {
-        return exitCode
+      if (exitCode !== 0) {
+        return exitCode;
       }
     }
 
