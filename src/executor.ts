@@ -249,7 +249,7 @@ export class AstExecutor {
   }
 
   protected async executeIf(node: AstNodeIf, ctx: ExecContextIf): Promise<number> {
-    if (await this.executeNode(node.clause, ctx)) {
+    if (await this.executeNode(node.clause, ctx) === 0) {
       return await this.executeNode(node.then, ctx);
     } else if (node.else) {
       return await this.executeNode(node.else, ctx);
@@ -259,7 +259,7 @@ export class AstExecutor {
   }
 
   protected async executeWhile(node: AstNodeWhile, ctx: ExecContextIf): Promise<number> {
-    while (await this.executeNode(node.clause, ctx)) {
+    while (await this.executeNode(node.clause, ctx) === 0) {
       const code = await this.executeNode(node.do, ctx);
 
       if (code !== 0) {
@@ -271,7 +271,7 @@ export class AstExecutor {
   }
 
   protected async executeUntil(node: AstNodeUntil, ctx: ExecContextIf): Promise<number> {
-    while (!(await this.executeNode(node.clause, ctx))) {
+    while (await this.executeNode(node.clause, ctx) === 0) {
       const code = await this.executeNode(node.do, ctx);
 
       if (code !== 0) {
@@ -287,6 +287,16 @@ export class AstExecutor {
       ctx.setParams({ [node.name.text]: word.text });
 
       const code = await this.executeNode(node.do, ctx);
+
+      // TODO: Not sure how we should handle continue or break
+      // might need some implementation in bash-parser
+      // if (code === BREAK_CODE) {
+      //   return 0;
+      // }
+
+      // if (code === CONTINUE_CODE) {
+      //   continue;
+      // }
 
       if (code !== 0) {
         return code;
