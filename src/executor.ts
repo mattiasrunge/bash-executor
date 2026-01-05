@@ -163,10 +163,17 @@ export class AstExecutor {
     // Apply IO redirections
     this.applyRedirections(ctx, node.suffix?.filter((arg) => arg.type === 'Redirect'));
 
+    // Expand command
+    const expandedName = await this.resolveExpansions(node.name, ctx);
+
+    if (expandedName.code !== 0) {
+      return expandedName.code;
+    }
+
     // Execute command
     const code = await this.shell.execCommand(
       ctx,
-      node.name.text,
+      expandedName.value,
       args || [],
       {
         async: node.async,
@@ -284,7 +291,13 @@ export class AstExecutor {
 
   protected async executeFor(node: AstNodeFor, ctx: ExecContextIf): Promise<number> {
     for (const word of node.wordlist || []) {
-      ctx.setParams({ [node.name.text]: word.text });
+      const expanded = await this.resolveExpansions(word, ctx);
+
+      if (expanded.code !== 0) {
+        return expanded.code;
+      }
+
+      ctx.setParams({ [node.name.text]: expanded.value });
 
       const code = await this.executeNode(node.do, ctx);
 
