@@ -129,15 +129,17 @@ export class AstExecutor {
     const params: Record<string, string> = {};
 
     for (const arg of node.prefix?.filter((arg) => arg.type === 'AssignmentWord') || []) {
-      const { value, code } = await this.resolveExpansions(arg, ctx);
+      const { values, code } = await this.resolveExpansions(arg, ctx);
 
       if (code !== 0) {
         // TODO: Print error to stderr?
         return code;
       }
 
-      const [k, v] = value.split('=');
-      params[k] = v;
+      for (const value of values) {
+        const [k, v] = value.split('=');
+        params[k] = v;
+      }
     }
     ctx.setParams(params);
 
@@ -150,14 +152,14 @@ export class AstExecutor {
     const args: string[] = [];
 
     for (const arg of node.suffix?.filter((arg) => arg.type === 'Word') || []) {
-      const { value, code } = await this.resolveExpansions(arg, ctx);
+      const { values, code } = await this.resolveExpansions(arg, ctx);
 
       if (code !== 0) {
         // TODO: Print error to stderr?
         return code;
       }
 
-      args.push(value);
+      args.push(...values);
     }
 
     // Apply IO redirections
@@ -173,7 +175,7 @@ export class AstExecutor {
     // Execute command
     const code = await this.shell.execCommand(
       ctx,
-      expandedName.value,
+      expandedName.values[0], // TODO: Can we expand to more than one value here?
       args || [],
       {
         async: node.async,
@@ -297,22 +299,24 @@ export class AstExecutor {
         return expanded.code;
       }
 
-      ctx.setParams({ [node.name.text]: expanded.value });
+      for (const value of expanded.values) {
+        ctx.setParams({ [node.name.text]: value });
 
-      const code = await this.executeNode(node.do, ctx);
+        const code = await this.executeNode(node.do, ctx);
 
-      // TODO: Not sure how we should handle continue or break
-      // might need some implementation in bash-parser
-      // if (code === BREAK_CODE) {
-      //   return 0;
-      // }
+        // TODO: Not sure how we should handle continue or break
+        // might need some implementation in bash-parser
+        // if (code === BREAK_CODE) {
+        //   return 0;
+        // }
 
-      // if (code === CONTINUE_CODE) {
-      //   continue;
-      // }
+        // if (code === CONTINUE_CODE) {
+        //   continue;
+        // }
 
-      if (code !== 0) {
-        return code;
+        if (code !== 0) {
+          return code;
+        }
       }
     }
 
@@ -346,9 +350,9 @@ export class AstExecutor {
     return await this.executeNode(node.right, ctx);
   }
 
-  protected async resolveExpansions(node: AstNodeWord | AstNodeAssignmentWord, ctx: ExecContextIf): Promise<{ value: string; code: number }> {
+  protected async resolveExpansions(node: AstNodeWord | AstNodeAssignmentWord, ctx: ExecContextIf): Promise<{ values: string[]; code: number }> {
     if (!node.expansion || node.expansion.length === 0) {
-      return { value: node.text, code: 0 };
+      return { values: [node.text], code: 0 };
     }
 
     const rValue = new utils.ReplaceString(node.text);
@@ -381,7 +385,7 @@ export class AstExecutor {
           await this.shell.pipeClose(cmdCtx.getStdout());
 
           if (code !== 0) {
-            return { value: rValue.text, code };
+            return { values: [rValue.text], code };
           }
 
           const output = await this.shell.pipeRead(cmdCtx.getStdout());
@@ -397,13 +401,13 @@ export class AstExecutor {
       }
     }
 
-    let value = rValue.text;
+    const value = rValue.text;
     const result = utils.unquoteWord(value);
 
-    if (result.values.length > 0) {
-      value = utils.unescape(result.values[0]);
+    if (result.values.length === 0) {
+      return { values: [value], code: 0 };
     }
 
-    return { value, code: 0 };
+    return { values: result.values.map(utils.unescape), code: 0 };
   }
 }
