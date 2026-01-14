@@ -35,6 +35,23 @@ export class ExecContext implements ExecContextIf {
     return new ExecContext(this);
   }
 
+  subContext(): ExecContextIf {
+    const ctx = new ExecContext();
+
+    ctx.setCwd(this.getCwd());
+    ctx.setEnv(this.getEnv());
+    ctx.setParams(this.getParams());
+    ctx.redirectStdin(this.getStdin());
+    ctx.redirectStdout(this.getStdout());
+    ctx.redirectStderr(this.getStderr());
+
+    for (const fn of Object.values(this.fns)) {
+      ctx.setFunction(fn.name, fn.body, fn.ctx);
+    }
+
+    return ctx;
+  }
+
   getCwd(): string {
     if (this.parent) {
       return this.parent.getCwd();
@@ -166,9 +183,11 @@ export class ExecContext implements ExecContextIf {
   getStdin(): string {
     return this.io.stdin;
   }
+
   getStdout(): string {
     return this.io.stdout;
   }
+
   getStderr(): string {
     return this.io.stderr;
   }

@@ -128,6 +128,12 @@ export interface ExecContextIf {
   spawnContext: () => ExecContextIf;
 
   /**
+   * Spawns a new execution context for sub shells.
+   * @returns {ExecContextIf} The new execution context.
+   */
+  subContext(): ExecContextIf;
+
+  /**
    * Gets the current working directory.
    * @returns {string} The current working directory.
    */
