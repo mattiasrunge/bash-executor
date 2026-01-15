@@ -216,6 +216,26 @@ export interface ExecContextIf {
   getFunction: (name: string) => FunctionDef | null;
 
   /**
+   * Sets an alias in the execution context.
+   * @param {string} name - The name of the alias.
+   * @param {string[]} args - The arguments of the alias.
+   */
+  setAlias: (name: string, args: string[]) => void;
+
+  /**
+   * Unsets an alias in the execution context.
+   * @param {string} name - The name of the alias.
+   */
+  unsetAlias: (name: string) => void;
+
+  /**
+   * Gets an alias from the execution context.
+   * @param {string} name - The name of the alias.
+   * @returns {string[] | null} The alias arguments or null if not found.
+   */
+  getAlias: (name: string) => string[] | null;
+
+  /**
    * Redirects the standard input.
    * @param {string} name - The name of the input source.
    * @returns {string} The redirected input source.

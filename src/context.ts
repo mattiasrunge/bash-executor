@@ -13,6 +13,7 @@ export class ExecContext implements ExecContextIf {
   private env: Record<string, string> = {};
   private params: Record<string, string> = {};
   private fns: Record<string, FunctionDef> = {};
+  private alias: Record<string, string[]> = {};
 
   constructor(parent?: ExecContext) {
     if (parent) {
@@ -47,6 +48,10 @@ export class ExecContext implements ExecContextIf {
 
     for (const fn of Object.values(this.fns)) {
       ctx.setFunction(fn.name, fn.body, fn.ctx);
+    }
+
+    for (const [ name, args ] of Object.entries(this.alias)) {
+      ctx.setAlias(name, args);
     }
 
     return ctx;
@@ -166,6 +171,30 @@ export class ExecContext implements ExecContextIf {
 
   getFunction(name: string): FunctionDef | null {
     return this.fns[name] || (this.parent && this.parent.getFunction(name));
+  }
+
+  setAlias(name: string, args: string[]): void {
+    if (this.parent) {
+      this.parent.setAlias(name, args)
+    } else {
+      this.alias[name] = args;
+    }
+  }
+
+  unsetAlias(name: string): void {
+    if (this.parent) {
+      this.parent.unsetAlias(name)
+    } else {
+      delete this.alias[name];
+    }
+  }
+
+  getAlias(name: string): string[] | null {
+    if (this.parent) {
+      return this.parent.getAlias(name);
+    }
+    
+    return this.alias[name] || null;
   }
 
   redirectStdin(name: string): string {
