@@ -50,7 +50,7 @@ export class ExecContext implements ExecContextIf {
       ctx.setFunction(fn.name, fn.body, fn.ctx);
     }
 
-    for (const [ name, args ] of Object.entries(this.alias)) {
+    for (const [name, args] of Object.entries(this.alias)) {
       ctx.setAlias(name, args);
     }
 
@@ -175,7 +175,7 @@ export class ExecContext implements ExecContextIf {
 
   setAlias(name: string, args: string[]): void {
     if (this.parent) {
-      this.parent.setAlias(name, args)
+      this.parent.setAlias(name, args);
     } else {
       this.alias[name] = args;
     }
@@ -183,7 +183,7 @@ export class ExecContext implements ExecContextIf {
 
   unsetAlias(name: string): void {
     if (this.parent) {
-      this.parent.unsetAlias(name)
+      this.parent.unsetAlias(name);
     } else {
       delete this.alias[name];
     }
@@ -193,7 +193,7 @@ export class ExecContext implements ExecContextIf {
     if (this.parent) {
       return this.parent.getAlias(name);
     }
-    
+
     return this.alias[name] || null;
   }
 
