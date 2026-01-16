@@ -18,7 +18,10 @@ import {
   parse,
   utils,
 } from '@ein/bash-parser';
-import type { ExecContextIf, ExecSyncResult, ShellIf } from './types.ts';
+import type { ExecContextIf, ShellIf } from './types.ts';
+
+const CONTINUE_CODE = -10 as const;
+const BREAK_CODE = -11 as const;
 
 /**
  * Class responsible for executing AST nodes parsed from shell scripts.
@@ -44,16 +47,12 @@ export class AstExecutor {
 
         resolveAlias: async (name: string) => ctx.getAlias(name),
 
-        resolveEnv: async (name: string) => ctx.getEnv()[name] || null,
-
-        resolvePath: this.shell.resolvePath ? (async (text: string) => this.shell.resolvePath!(text, ctx)) : undefined,
-
         resolveHomeUser: this.shell.resolveHomeUser ? (async (username: string | null) => this.shell.resolveHomeUser!(username, ctx)) : undefined,
       });
 
       return await this.executeNode(ast, ctx);
     } catch (e) {
-      console.error('executer', e);
+      // console.error('executer', e);
       throw e;
     }
   }
@@ -92,43 +91,6 @@ export class AstExecutor {
         return this.executeCompondList(node as AstNodeCompoundList, ctx);
       default:
         throw new Error(`Unknown node type: ${node.type}`);
-    }
-  }
-
-  protected async executeSync(scriptAST: AstNodeScript, ctx: ExecContextIf): Promise<ExecSyncResult> {
-    let stdoutFd: string = '';
-    let stderrFd: string = '';
-    try {
-      // Create temporary pipes for capturing output
-      stdoutFd = await this.shell.pipeOpen();
-      stderrFd = await this.shell.pipeOpen();
-
-      // Setup piped context
-      const cmdCtx = ctx.spawnContext();
-      cmdCtx.redirectStdout(stdoutFd);
-      cmdCtx.redirectStderr(stderrFd);
-
-      // Execute
-      const exitCode = await this.executeNode(scriptAST, cmdCtx);
-
-      // Send EOF so reads does not block
-      await this.shell.pipeWrite(stdoutFd, '');
-      await this.shell.pipeWrite(stderrFd, '');
-
-      // Read all output
-      const stdout = await this.shell.pipeRead(stdoutFd);
-      const stderr = await this.shell.pipeRead(stderrFd);
-
-      return { code: exitCode, stdout, stderr };
-    } catch (err) {
-      return {
-        code: 1,
-        stdout: '',
-        stderr: `Error: ${(err as Error).message}\n`,
-      };
-    } finally {
-      stdoutFd && await this.shell.pipeRemove(stdoutFd);
-      stderrFd && await this.shell.pipeRemove(stderrFd);
     }
   }
 
@@ -321,6 +283,14 @@ export class AstExecutor {
     while (await this.executeNode(node.clause, ctx) === 0) {
       const code = await this.executeNode(node.do, ctx);
 
+      if (code === BREAK_CODE) {
+        return 0;
+      }
+
+      if (code === CONTINUE_CODE) {
+        continue;
+      }
+
       if (code !== 0) {
         return code;
       }
@@ -332,6 +302,14 @@ export class AstExecutor {
   protected async executeUntil(node: AstNodeUntil, ctx: ExecContextIf): Promise<number> {
     while (await this.executeNode(node.clause, ctx) === 0) {
       const code = await this.executeNode(node.do, ctx);
+
+      if (code === BREAK_CODE) {
+        return 0;
+      }
+
+      if (code === CONTINUE_CODE) {
+        continue;
+      }
 
       if (code !== 0) {
         return code;
@@ -354,15 +332,13 @@ export class AstExecutor {
 
         const code = await this.executeNode(node.do, ctx);
 
-        // TODO: Not sure how we should handle continue or break
-        // might need some implementation in bash-parser
-        // if (code === BREAK_CODE) {
-        //   return 0;
-        // }
+        if (code === BREAK_CODE) {
+          return 0;
+        }
 
-        // if (code === CONTINUE_CODE) {
-        //   continue;
-        // }
+        if (code === CONTINUE_CODE) {
+          continue;
+        }
 
         if (code !== 0) {
           return code;
@@ -402,7 +378,16 @@ export class AstExecutor {
 
   protected async resolveExpansions(node: AstNodeWord | AstNodeAssignmentWord, ctx: ExecContextIf): Promise<{ values: string[]; code: number }> {
     if (!node.expansion || node.expansion.length === 0) {
-      return { values: [node.text], code: 0 };
+      let code = 0;
+      if (node.type === 'Word') {
+        if (node.text === 'continue') {
+          code = CONTINUE_CODE;
+        } else if (node.text === 'break') {
+          code = BREAK_CODE;
+        }
+      }
+
+      return { values: [node.text], code };
     }
 
     const rValue = new utils.ReplaceString(node.text);
@@ -432,7 +417,9 @@ export class AstExecutor {
         try {
           const code = await this.executeNode(xp.commandAST, cmdCtx);
 
-          await this.shell.pipeClose(cmdCtx.getStdout());
+          // Send EOF so reads does not block
+          await this.shell.pipeWrite(cmdCtx.getStdout(), '');
+          // await this.shell.pipeClose(cmdCtx.getStdout());
 
           if (code !== 0) {
             return { values: [rValue.text], code };
@@ -451,13 +438,26 @@ export class AstExecutor {
       }
     }
 
+    const hasPathExpansion = node.expansion.some((xp) => xp.type === 'PathExpansion' && !xp.resolved);
     const value = rValue.text;
-    const result = utils.unquoteWord(value);
+    const unquotedResult = utils.unquoteWord(value);
+    let result = { values: [value], code: 0 };
 
-    if (result.values.length === 0) {
-      return { values: [value], code: 0 };
+    if (unquotedResult.values.length > 0) {
+      result = { values: unquotedResult.values.map(utils.unescape), code: 0 };
     }
 
-    return { values: result.values.map(utils.unescape), code: 0 };
+    // Path globbing expansion must be done last
+    if (hasPathExpansion && this.shell.resolvePath) {
+      const newValues: string[] = [];
+
+      for (const path of result.values) {
+        newValues.push(...(await this.shell.resolvePath(path, ctx)));
+      }
+
+      result.values = newValues;
+    }
+
+    return result;
   }
 }
