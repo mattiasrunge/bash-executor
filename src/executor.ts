@@ -41,6 +41,9 @@ export class AstExecutor {
    */
   public async execute(source: string, ctx: ExecContextIf): Promise<number> {
     try {
+      // Resolvers given here will be evaluated at parse time.
+      // Most things we want to evaluate at execution time and
+      // that is instead done during execution with resolveExpansions.
       const ast = await parse(source, {
         // TODO: Evaluate if this is good enough or an external library should be used
         runArithmeticExpression: async (expression: string, _arithmeticAST: AstNode) => new Function(`return ${expression}`)().toString(),
