@@ -13,7 +13,7 @@ export class ExecContext implements ExecContextIf {
   private env: Record<string, string> = {};
   private params: Record<string, string> = {};
   private fns: Record<string, FunctionDef> = {};
-  private alias: Record<string, string[]> = {};
+  private alias: Record<string, string> = {};
 
   constructor(parent?: ExecContext) {
     if (parent) {
@@ -173,11 +173,11 @@ export class ExecContext implements ExecContextIf {
     return this.fns[name] || (this.parent && this.parent.getFunction(name));
   }
 
-  setAlias(name: string, args: string[]): void {
+  setAlias(name: string, alias: string): void {
     if (this.parent) {
-      this.parent.setAlias(name, args);
+      this.parent.setAlias(name, alias);
     } else {
-      this.alias[name] = args;
+      this.alias[name] = alias;
     }
   }
 
@@ -189,12 +189,12 @@ export class ExecContext implements ExecContextIf {
     }
   }
 
-  getAlias(name: string): string[] | null {
+  getAlias(name: string): string | undefined {
     if (this.parent) {
       return this.parent.getAlias(name);
     }
 
-    return this.alias[name] || null;
+    return this.alias[name];
   }
 
   redirectStdin(name: string): string {

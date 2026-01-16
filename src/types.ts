@@ -36,6 +36,19 @@ export type ExecCommandOptions = {
 };
 
 /**
+ * Result of a synchronous execution
+ * @typedef {Object} ExecSyncResult
+ * @property {string} stdout - The standard output stream.
+ * @property {string} stderr - The standard error stream.
+ * @property {number} code - The exit code of the command
+ */
+export type ExecSyncResult = {
+  stdout: string;
+  stderr: string;
+  code: number;
+};
+
+/**
  * Interface for the shell operations.
  * @interface ShellIf
  */
@@ -109,11 +122,35 @@ export interface ShellIf {
   pipeRead: (name: string) => Promise<string>;
 
   /**
+   * Write to a pipe.
+   * @param {string} name - The name of the pipe.
+   * @param {string} data - The content to write to the pipe.
+   * @returns {Promise<void>}
+   */
+  pipeWrite: (name: string, data: string) => Promise<void>;
+
+  /**
    * Runs a script.
    * @param {string} script - The script to run.
    * @returns {Promise<number>} The exit code of the script.
    */
   run: (script: string) => Promise<number>;
+
+  /**
+   * A callback to resolve path globbing. If specified, the parser calls it whenever it needs to resolve path globbing. It should return the expanded path. If the option is not specified, the parser won't try to resolve any path globbing.
+   *
+   * @param text - The text to resolve.
+   * @returns The expanded path.
+   */
+  resolvePath?: (text: string, ctx: ExecContextIf) => Promise<string[]>;
+
+  /**
+   * A callback to resolve users' home directories. If specified, the parser calls it whenever it needs to resolve a tilde expansion. If the option is not specified, the parser won't try to resolve any tilde expansion. When the callback is called with a null value for `username`, the callback should return the current user's home directory.
+   *
+   * @param username - The username whose home directory to resolve, or `null` for the current user.
+   * @returns The home directory of the specified user, or the current user's home directory if `username` is `null`.
+   */
+  resolveHomeUser?: (username: string | null, ctx: ExecContextIf) => Promise<string>;
 }
 
 /**
@@ -218,9 +255,9 @@ export interface ExecContextIf {
   /**
    * Sets an alias in the execution context.
    * @param {string} name - The name of the alias.
-   * @param {string[]} args - The arguments of the alias.
+   * @param {string} args - The arguments of the alias.
    */
-  setAlias: (name: string, args: string[]) => void;
+  setAlias: (name: string, alias: string) => void;
 
   /**
    * Unsets an alias in the execution context.
@@ -231,9 +268,9 @@ export interface ExecContextIf {
   /**
    * Gets an alias from the execution context.
    * @param {string} name - The name of the alias.
-   * @returns {string[] | null} The alias arguments or null if not found.
+   * @returns {string | undefined} The alias arguments or undefined if not found.
    */
-  getAlias: (name: string) => string[] | null;
+  getAlias: (name: string) => string | undefined;
 
   /**
    * Redirects the standard input.

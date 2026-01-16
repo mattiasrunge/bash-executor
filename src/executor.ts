@@ -18,7 +18,7 @@ import {
   parse,
   utils,
 } from '@ein/bash-parser';
-import type { ExecContextIf, ShellIf } from './types.ts';
+import type { ExecContextIf, ExecSyncResult, ShellIf } from './types.ts';
 
 /**
  * Class responsible for executing AST nodes parsed from shell scripts.
@@ -37,12 +37,25 @@ export class AstExecutor {
    * @returns {Promise<number>} - The exit code of the executed script.
    */
   public async execute(source: string, ctx: ExecContextIf): Promise<number> {
-    const ast = await parse(source, {
-      // TODO: Evaluate if this is good enough or an external library should be used
-      runArithmeticExpression: async (expression: string, _arithmeticAST: AstNode) => new Function(`return ${expression}`)().toString(),
-    });
+    try {
+      const ast = await parse(source, {
+        // TODO: Evaluate if this is good enough or an external library should be used
+        runArithmeticExpression: async (expression: string, _arithmeticAST: AstNode) => new Function(`return ${expression}`)().toString(),
 
-    return await this.executeNode(ast, ctx);
+        resolveAlias: async (name: string) => ctx.getAlias(name),
+
+        resolveEnv: async (name: string) => ctx.getEnv()[name] || null,
+
+        resolvePath: this.shell.resolvePath ? (async (text: string) => this.shell.resolvePath!(text, ctx)) : undefined,
+
+        resolveHomeUser: this.shell.resolveHomeUser ? (async (username: string | null) => this.shell.resolveHomeUser!(username, ctx)) : undefined,
+      });
+
+      return await this.executeNode(ast, ctx);
+    } catch (e) {
+      console.error('executer', e);
+      throw e;
+    }
   }
 
   /**
@@ -79,6 +92,43 @@ export class AstExecutor {
         return this.executeCompondList(node as AstNodeCompoundList, ctx);
       default:
         throw new Error(`Unknown node type: ${node.type}`);
+    }
+  }
+
+  protected async executeSync(scriptAST: AstNodeScript, ctx: ExecContextIf): Promise<ExecSyncResult> {
+    let stdoutFd: string = '';
+    let stderrFd: string = '';
+    try {
+      // Create temporary pipes for capturing output
+      stdoutFd = await this.shell.pipeOpen();
+      stderrFd = await this.shell.pipeOpen();
+
+      // Setup piped context
+      const cmdCtx = ctx.spawnContext();
+      cmdCtx.redirectStdout(stdoutFd);
+      cmdCtx.redirectStderr(stderrFd);
+
+      // Execute
+      const exitCode = await this.executeNode(scriptAST, cmdCtx);
+
+      // Send EOF so reads does not block
+      await this.shell.pipeWrite(stdoutFd, '');
+      await this.shell.pipeWrite(stderrFd, '');
+
+      // Read all output
+      const stdout = await this.shell.pipeRead(stdoutFd);
+      const stderr = await this.shell.pipeRead(stderrFd);
+
+      return { code: exitCode, stdout, stderr };
+    } catch (err) {
+      return {
+        code: 1,
+        stdout: '',
+        stderr: `Error: ${(err as Error).message}\n`,
+      };
+    } finally {
+      stdoutFd && await this.shell.pipeRemove(stdoutFd);
+      stderrFd && await this.shell.pipeRemove(stderrFd);
     }
   }
 
