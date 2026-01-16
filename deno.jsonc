@@ -1,6 +1,6 @@
 {
   "name": "@ein/bash-executor",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "exports": "./mod.ts",
   "description": "Bash executor - execute bash AST nodes given by @ein/bash-parser",
   "repository": "https://github.com/mattiasrunge/bash-executor",
@@ -35,8 +35,7 @@
   },
   "imports": {
     "@std/assert": "jsr:@std/assert@^1.0.2",
-    "@std/path": "jsr:@std/path@^1.0.2",
-    "@ein/bash-parser": "jsr:@ein/bash-parser@^0.11.0",
+    "@ein/bash-parser": "jsr:@ein/bash-parser@^0.11.1",
     "~/": "./src/"
   },
   "tasks": {
