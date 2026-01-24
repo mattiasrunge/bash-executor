@@ -201,11 +201,13 @@ export class ExecContext implements ExecContextIf {
     return this.io.stdin = name;
   }
 
-  redirectStdout(name: string): string {
+  redirectStdout(name: string, append?: boolean): string {
+    this.io.stdoutAppend = append;
     return this.io.stdout = name;
   }
 
-  redirectStderr(name: string): string {
+  redirectStderr(name: string, append?: boolean): string {
+    this.io.stderrAppend = append;
     return this.io.stderr = name;
   }
 
@@ -219,5 +221,13 @@ export class ExecContext implements ExecContextIf {
 
   getStderr(): string {
     return this.io.stderr;
+  }
+
+  getStdoutAppend(): boolean {
+    return !!this.io.stdoutAppend;
+  }
+
+  getStderrAppend(): boolean {
+    return !!this.io.stderrAppend;
   }
 }

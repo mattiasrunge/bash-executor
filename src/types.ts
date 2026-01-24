@@ -23,7 +23,9 @@ export type FunctionDef = {
 export type IO = {
   stdin: string;
   stdout: string;
+  stdoutAppend?: boolean;
   stderr: string;
+  stderrAppend?: boolean;
 };
 
 /**
@@ -282,16 +284,18 @@ export interface ExecContextIf {
   /**
    * Redirects the standard output.
    * @param {string} name - The name of the output destination.
+   * @param {boolean} append - Optional if we should append destination
    * @returns {string} The redirected output destination.
    */
-  redirectStdout: (name: string) => string;
+  redirectStdout: (name: string, append?: boolean) => string;
 
   /**
    * Redirects the standard error.
    * @param {string} name - The name of the error destination.
+   * * @param {boolean} append - Optional if we should append destination
    * @returns {string} The redirected error destination.
    */
-  redirectStderr: (name: string) => string;
+  redirectStderr: (name: string, append?: boolean) => string;
 
   /**
    * Gets the standard input.
@@ -310,4 +314,16 @@ export interface ExecContextIf {
    * @returns {string} The standard error.
    */
   getStderr: () => string;
+
+  /**
+   * Gets the append flag for standard output.
+   * @returns {boolean} The standard output append flag.
+   */
+  getStdoutAppend: () => boolean;
+
+  /**
+   * Gets the appen flag for standard error.
+   * @returns {boolean} The standard error append flag.
+   */
+  getStderrAppend: () => boolean;
 }

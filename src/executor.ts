@@ -110,9 +110,9 @@ export class AstExecutor {
       } else if (r.op.text === '>>') {
         // TODO: Implement append redirection
         if (r.numberIo?.text === '2') {
-          ctx.redirectStderr(r.file.text);
+          ctx.redirectStderr(r.file.text, true);
         } else {
-          ctx.redirectStdout(r.file.text);
+          ctx.redirectStdout(r.file.text, true);
         }
       } else if (r.op.text === '>&') {
         if (r.numberIo?.text === '2') {
