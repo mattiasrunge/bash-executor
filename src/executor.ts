@@ -1,4 +1,5 @@
 import {
+  type AstArithmeticExpression,
   type AstNode,
   type AstNodeAssignmentWord,
   type AstNodeCase,
@@ -45,9 +46,6 @@ export class AstExecutor {
       // Most things we want to evaluate at execution time and
       // that is instead done during execution with resolveExpansions.
       const ast = await parse(source, {
-        // TODO: Evaluate if this is good enough or an external library should be used
-        runArithmeticExpression: async (expression: string, _arithmeticAST: AstNode) => new Function(`return ${expression}`)().toString(),
-
         resolveAlias: async (name: string) => ctx.getAlias(name),
 
         resolveHomeUser: this.shell.resolveHomeUser ? (async (username: string | null) => this.shell.resolveHomeUser!(username, ctx)) : undefined,
@@ -187,6 +185,8 @@ export class AstExecutor {
       return expandedName.code;
     }
 
+    // TODO: We can fail for any number of things above, should we apply the bang inversion to those as well?
+
     // Execute command
     const code = await this.shell.execCommand(
       ctx,
@@ -197,7 +197,7 @@ export class AstExecutor {
       },
     );
 
-    return code;
+    return node.bang ? (code === 0 ? 1 : 0) : code;
   }
 
   protected async executeSubshell(node: AstNodeSubshell, ctx: ExecContextIf): Promise<number> {
@@ -438,6 +438,14 @@ export class AstExecutor {
         } finally {
           this.shell.pipeRemove(cmdCtx.getStdout()).catch((err) => console.error('Failed to remove pipe from command expansion: ', err));
         }
+      } else if (xp.type === 'ArithmeticExpansion') {
+        const result = await this.evaluateArithmetic(xp.arithmeticAST, ctx);
+
+        rValue.replace(
+          xp.loc!.start,
+          xp.loc!.end + 1,
+          String(result),
+        );
       }
     }
 
@@ -462,5 +470,173 @@ export class AstExecutor {
     }
 
     return result;
+  }
+
+  /**
+   * Evaluates a arithmetic AST node.
+   * @param node - The AST node to evaluate
+   * @param ctx - The execution context for variable resolution
+   * @returns The numeric result of the arithmetic expression
+   */
+  protected async evaluateArithmetic(node: AstArithmeticExpression, ctx: ExecContextIf): Promise<number> {
+    if (!node) {
+      return 0;
+    }
+
+    switch (node.type) {
+      case 'NumericLiteral':
+        return node.value;
+
+      case 'Identifier': {
+        const params = {
+          ...await ctx.getEnv(),
+          ...await ctx.getParams(),
+        };
+        const value = params[node.name] || '0';
+        return parseInt(value, 10) || 0;
+      }
+
+      case 'UnaryExpression': {
+        const arg = await this.evaluateArithmetic(node.argument, ctx);
+        switch (node.operator) {
+          case '-':
+            return -arg;
+          case '+':
+            return +arg;
+          case '!':
+            return arg === 0 ? 1 : 0;
+          case '~':
+            return ~arg;
+          default:
+            throw new Error(`Unsupported unary operator: ${(node as unknown as { operator: string }).operator}`);
+        }
+      }
+
+      case 'BinaryExpression': {
+        const left = await this.evaluateArithmetic(node.left, ctx);
+        const right = await this.evaluateArithmetic(node.right, ctx);
+        switch (node.operator) {
+          case '+':
+            return left + right;
+          case '-':
+            return left - right;
+          case '*':
+            return left * right;
+          case '/':
+            return right === 0 ? 0 : Math.trunc(left / right);
+          case '%':
+            return right === 0 ? 0 : left % right;
+          case '**':
+            return Math.pow(left, right);
+          case '&':
+            return left & right;
+          case '|':
+            return left | right;
+          case '^':
+            return left ^ right;
+          case '<<':
+            return left << right;
+          case '>>':
+            return left >> right;
+          case '<':
+            return left < right ? 1 : 0;
+          case '>':
+            return left > right ? 1 : 0;
+          case '<=':
+            return left <= right ? 1 : 0;
+          case '>=':
+            return left >= right ? 1 : 0;
+          case '==':
+            return left === right ? 1 : 0;
+          case '!=':
+            return left !== right ? 1 : 0;
+          default:
+            throw new Error(`Unsupported binary operator: ${(node as unknown as { operator: string }).operator}`);
+        }
+      }
+
+      case 'LogicalExpression': {
+        const left = await this.evaluateArithmetic(node.left, ctx);
+        if (node.operator === '&&') {
+          return left === 0 ? 0 : (await this.evaluateArithmetic(node.right, ctx)) === 0 ? 0 : 1;
+        } else if (node.operator === '||') {
+          return left !== 0 ? 1 : (await this.evaluateArithmetic(node.right, ctx)) !== 0 ? 1 : 0;
+        }
+        throw new Error(`Unsupported logical operator: ${node.operator}`);
+      }
+
+      case 'ConditionalExpression': {
+        const test = await this.evaluateArithmetic(node.test, ctx);
+        return test !== 0 ? await this.evaluateArithmetic(node.consequent, ctx) : await this.evaluateArithmetic(node.alternate, ctx);
+      }
+
+      case 'SequenceExpression': {
+        let result = 0;
+        for (const expr of node.expressions) {
+          result = await this.evaluateArithmetic(expr, ctx);
+        }
+        return result;
+      }
+
+      case 'AssignmentExpression': {
+        const varName = node.left.name;
+        let value: number;
+
+        if (node.operator === '=') {
+          value = await this.evaluateArithmetic(node.right, ctx);
+        } else {
+          const currentValue = await this.evaluateArithmetic(node.left, ctx);
+          const rightValue = await this.evaluateArithmetic(node.right, ctx);
+          switch (node.operator) {
+            case '+=':
+              value = currentValue + rightValue;
+              break;
+            case '-=':
+              value = currentValue - rightValue;
+              break;
+            case '*=':
+              value = currentValue * rightValue;
+              break;
+            case '/=':
+              value = rightValue === 0 ? 0 : Math.trunc(currentValue / rightValue);
+              break;
+            case '%=':
+              value = rightValue === 0 ? 0 : currentValue % rightValue;
+              break;
+            case '&=':
+              value = currentValue & rightValue;
+              break;
+            case '|=':
+              value = currentValue | rightValue;
+              break;
+            case '^=':
+              value = currentValue ^ rightValue;
+              break;
+            case '<<=':
+              value = currentValue << rightValue;
+              break;
+            case '>>=':
+              value = currentValue >> rightValue;
+              break;
+            default:
+              throw new Error(`Unsupported assignment operator: ${(node as unknown as { operator: string }).operator}`);
+          }
+        }
+
+        ctx.setParams({ [varName]: String(value) });
+        return value;
+      }
+
+      case 'UpdateExpression': {
+        const varName = node.argument.name;
+        const currentValue = await this.evaluateArithmetic(node.argument, ctx);
+        const newValue = node.operator === '++' ? currentValue + 1 : currentValue - 1;
+        ctx.setParams({ [varName]: String(newValue) });
+        return node.prefix ? newValue : currentValue;
+      }
+
+      default:
+        throw new Error(`Unsupported arithmetic node type: ${(node as unknown as { type: string }).type}`);
+    }
   }
 }
