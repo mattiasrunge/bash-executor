@@ -1,6 +1,7 @@
 import {
   type AstArithmeticExpression,
   type AstNode,
+  type AstNodeArithmeticCommand,
   type AstNodeAssignmentWord,
   type AstNodeCase,
   type AstNodeCommand,
@@ -90,6 +91,8 @@ export class AstExecutor {
         return this.executeLogicalExpression(node as AstNodeLogicalExpression, ctx);
       case 'CompoundList':
         return this.executeCompondList(node as AstNodeCompoundList, ctx);
+      case 'ArithmeticCommand':
+        return this.executeArithmeticCommand(node as AstNodeArithmeticCommand, ctx);
       default:
         throw new Error(`Unknown node type: ${node.type}`);
     }
@@ -273,6 +276,7 @@ export class AstExecutor {
   }
 
   protected async executeIf(node: AstNodeIf, ctx: ExecContextIf): Promise<number> {
+    console.log('if', JSON.stringify(node, null, 2));
     if (await this.executeNode(node.clause, ctx) === 0) {
       return await this.executeNode(node.then, ctx);
     } else if (node.else) {
@@ -377,6 +381,12 @@ export class AstExecutor {
     }
 
     return await this.executeNode(node.right, ctx);
+  }
+
+  protected async executeArithmeticCommand(node: AstNodeArithmeticCommand, ctx: ExecContextIf): Promise<number> {
+    const result = await this.evaluateArithmetic(node.arithmeticAST, ctx);
+    // In bash, (( expr )) returns 0 (success) if expr is non-zero, 1 (failure) if expr is zero
+    return result !== 0 ? 0 : 1;
   }
 
   protected async resolveExpansions(node: AstNodeWord | AstNodeAssignmentWord, ctx: ExecContextIf): Promise<{ values: string[]; code: number }> {
