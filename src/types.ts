@@ -255,6 +255,12 @@ export interface ExecContextIf {
   getFunction: (name: string) => FunctionDef | null;
 
   /**
+   * Gets all functions from the execution context including parent contexts.
+   * @returns {Record<string, FunctionDef>} All function definitions.
+   */
+  getFunctions: () => Record<string, FunctionDef>;
+
+  /**
    * Sets an alias in the execution context.
    * @param {string} name - The name of the alias.
    * @param {string} args - The arguments of the alias.

@@ -46,7 +46,7 @@ export class ExecContext implements ExecContextIf {
     ctx.redirectStdout(this.getStdout());
     ctx.redirectStderr(this.getStderr());
 
-    for (const fn of Object.values(this.fns)) {
+    for (const fn of Object.values(this.getFunctions())) {
       ctx.setFunction(fn.name, fn.body, fn.ctx);
     }
 
@@ -171,6 +171,17 @@ export class ExecContext implements ExecContextIf {
 
   getFunction(name: string): FunctionDef | null {
     return this.fns[name] || (this.parent && this.parent.getFunction(name));
+  }
+
+  getFunctions(): Record<string, FunctionDef> {
+    if (this.parent) {
+      return {
+        ...this.parent.getFunctions(),
+        ...this.fns,
+      };
+    }
+
+    return this.fns;
   }
 
   setAlias(name: string, alias: string): void {

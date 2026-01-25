@@ -1,6 +1,6 @@
 {
   "name": "@ein/bash-executor",
-  "version": "0.6.2",
+  "version": "0.7.0",
   "exports": "./mod.ts",
   "description": "Bash executor - execute bash AST nodes given by @ein/bash-parser",
   "repository": "https://github.com/mattiasrunge/bash-executor",
@@ -34,7 +34,8 @@
     "proseWrap": "preserve"
   },
   "imports": {
-    "@ein/bash-parser": "jsr:@ein/bash-parser@^0.14.0"
+    "@ein/bash-parser": "jsr:@ein/bash-parser@^0.15.0",
+    "@std/assert": "jsr:@std/assert@^1.0.2"
   },
   "tasks": {
     "check": "deno lint && deno fmt --check && deno publish --dry-run && deno task test && deno task coverage",

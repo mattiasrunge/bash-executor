@@ -306,7 +306,7 @@ export class AstExecutor {
   }
 
   protected async executeUntil(node: AstNodeUntil, ctx: ExecContextIf): Promise<number> {
-    while (await this.executeNode(node.clause, ctx) === 0) {
+    while (await this.executeNode(node.clause, ctx) !== 0) {
       const code = await this.executeNode(node.do, ctx);
 
       if (code === BREAK_CODE) {
@@ -355,12 +355,81 @@ export class AstExecutor {
     return 0;
   }
 
-  protected async executeCase(node: AstNodeCase, ctx: ExecContextIf): Promise<any> {
+  protected async executeCase(node: AstNodeCase, ctx: ExecContextIf): Promise<number> {
+    // Expand the clause value
+    const clauseExpanded = await this.resolveExpansions(node.clause, ctx);
+    if (clauseExpanded.code !== 0) {
+      return clauseExpanded.code;
+    }
+    const clauseValue = clauseExpanded.values[0] || '';
+
     for (const caseItem of node.cases || []) {
-      if (caseItem.pattern.some((pattern) => pattern.text === node.clause.text)) {
-        await this.executeNode(caseItem.body, ctx);
-        break;
+      // Check if any pattern matches
+      const matched = caseItem.pattern.some((pattern) => {
+        // Expand the pattern
+        const patternText = pattern.text;
+        // Convert glob pattern to regex
+        return this.matchGlobPattern(patternText, clauseValue);
+      });
+
+      if (matched) {
+        return await this.executeNode(caseItem.body, ctx);
       }
+    }
+
+    return 0;
+  }
+
+  /**
+   * Matches a glob pattern against a value.
+   * Supports *, ?, and character classes.
+   */
+  protected matchGlobPattern(pattern: string, value: string): boolean {
+    // Convert glob pattern to regex
+    let regex = '^';
+    for (let i = 0; i < pattern.length; i++) {
+      const c = pattern[i];
+      switch (c) {
+        case '*':
+          regex += '.*';
+          break;
+        case '?':
+          regex += '.';
+          break;
+        case '[': {
+          // Find the closing bracket
+          const end = pattern.indexOf(']', i + 1);
+          if (end !== -1) {
+            regex += pattern.slice(i, end + 1);
+            i = end;
+          } else {
+            regex += '\\[';
+          }
+          break;
+        }
+        case '\\':
+        case '^':
+        case '$':
+        case '.':
+        case '+':
+        case '(':
+        case ')':
+        case '{':
+        case '}':
+        case '|':
+          regex += '\\' + c;
+          break;
+        default:
+          regex += c;
+      }
+    }
+    regex += '$';
+
+    try {
+      return new RegExp(regex).test(value);
+    } catch {
+      // If regex is invalid, fall back to exact match
+      return pattern === value;
     }
   }
 
@@ -399,7 +468,9 @@ export class AstExecutor {
         }
       }
 
-      return { values: [node.text], code };
+      // Process escape sequences even when there are no expansions
+      // Note: Don't use unquoteWord here - quotes are already processed by the parser
+      return { values: [utils.unescape(node.text)], code };
     }
 
     const rValue = new utils.ReplaceString(node.text);
@@ -487,7 +558,7 @@ export class AstExecutor {
    * @param ctx - The execution context for variable resolution
    * @returns The numeric result of the arithmetic expression
    */
-  protected async evaluateArithmetic(node: AstArithmeticExpression, ctx: ExecContextIf): Promise<number> {
+  protected async evaluateArithmetic(node: AstArithmeticExpression | { type: 'CommandSubstitution'; commandAST: AstNode }, ctx: ExecContextIf): Promise<number> {
     if (!node) {
       return 0;
     }
@@ -642,6 +713,26 @@ export class AstExecutor {
         const newValue = node.operator === '++' ? currentValue + 1 : currentValue - 1;
         ctx.setParams({ [varName]: String(newValue) });
         return node.prefix ? newValue : currentValue;
+      }
+
+      case 'CommandSubstitution': {
+        const cmdNode = node as { type: 'CommandSubstitution'; commandAST: AstNode };
+        if (!cmdNode.commandAST) {
+          return 0;
+        }
+        const cmdCtx = ctx.spawnContext();
+        cmdCtx.setLocalEnv({ IS_TTY: '0' });
+        cmdCtx.redirectStdout(await this.shell.pipeOpen());
+
+        try {
+          await this.executeNode(cmdNode.commandAST, cmdCtx);
+          await this.shell.pipeWrite(cmdCtx.getStdout(), '');
+          const output = await this.shell.pipeRead(cmdCtx.getStdout());
+          const trimmed = output.trim();
+          return trimmed === '' ? 0 : parseInt(trimmed, 10) || 0;
+        } finally {
+          this.shell.pipeRemove(cmdCtx.getStdout()).catch((err) => console.error('Failed to remove pipe from command substitution: ', err));
+        }
       }
 
       default:
