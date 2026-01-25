@@ -276,7 +276,6 @@ export class AstExecutor {
   }
 
   protected async executeIf(node: AstNodeIf, ctx: ExecContextIf): Promise<number> {
-    console.log('if', JSON.stringify(node, null, 2));
     if (await this.executeNode(node.clause, ctx) === 0) {
       return await this.executeNode(node.then, ctx);
     } else if (node.else) {
