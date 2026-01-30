@@ -1,12 +1,5 @@
 import { assertEquals } from '@std/assert';
-import type { AstNode } from '@ein/bash-parser';
-import {
-  AstExecutor,
-  ExecContext,
-  type ExecCommandOptions,
-  type ExecContextIf,
-  type ShellIf,
-} from '../mod.ts';
+import { AstExecutor, type ExecCommandOptions, ExecContext, type ExecContextIf, type ShellIf } from '../mod.ts';
 
 /**
  * Test shell that supports resolvePath and resolveHomeUser callbacks
@@ -37,7 +30,7 @@ class CallbackTestShell implements ShellIf {
   }
 
   // Implement resolvePath callback for glob expansion
-  async resolvePath(pattern: string, _ctx: ExecContextIf): Promise<string[]> {
+  async resolvePath(_ctx: ExecContextIf, pattern: string): Promise<string[]> {
     this.pathResolutions.push(pattern);
     if (this.pathMap[pattern]) {
       return this.pathMap[pattern];
@@ -49,8 +42,8 @@ class CallbackTestShell implements ShellIf {
   // Implement resolveHomeUser callback for tilde expansion
   // Returns empty string when not found to preserve original
   async resolveHomeUser(
-    username: string | null,
     _ctx: ExecContextIf,
+    username: string | null,
   ): Promise<string> {
     this.homeResolutions.push(username ?? '');
     if (username === null && this.homeMap['']) {
@@ -63,7 +56,7 @@ class CallbackTestShell implements ShellIf {
     return '';
   }
 
-  async execCommand(
+  async execute(
     ctx: ExecContextIf,
     name: string,
     args: string[],
@@ -83,25 +76,6 @@ class CallbackTestShell implements ShellIf {
     if (name === 'true') return 0;
     if (name === 'false') return 1;
     return 127;
-  }
-
-  async execSyncCommand(
-    ctx: ExecContextIf,
-    name: string,
-    args: string[],
-  ): Promise<{ stdout: string; stderr: string }> {
-    if (name === 'echo') {
-      return { stdout: args.join(' '), stderr: '' };
-    }
-    return { stdout: '', stderr: '' };
-  }
-
-  async execSubshell(
-    ctx: ExecContextIf,
-    cmd: AstNode,
-    _opts: ExecCommandOptions,
-  ): Promise<number> {
-    return this.executor.executeNode(cmd, ctx);
   }
 
   async pipeOpen(): Promise<string> {
@@ -134,6 +108,18 @@ class CallbackTestShell implements ShellIf {
         pipe.data.push(data);
       }
     }
+  }
+
+  isPipe(name: string): boolean {
+    return name === '0' || name === '1' || name === '2' || this.pipes.has(name);
+  }
+
+  async pipeFromFile(_ctx: ExecContextIf, _path: string, _pipe: string): Promise<void> {
+    throw new Error('Not implemented');
+  }
+
+  async pipeToFile(_ctx: ExecContextIf, _pipe: string, _path: string, _append: boolean): Promise<void> {
+    throw new Error('Not implemented');
   }
 
   getOutput(): string {

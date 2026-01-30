@@ -14,6 +14,9 @@ export class ExecContext implements ExecContextIf {
   private params: Record<string, string> = {};
   private fns: Record<string, FunctionDef> = {};
   private alias: Record<string, string> = {};
+  private readonlyVars = new Set<string>();
+  private integerVars = new Set<string>();
+  private dirStack: string[] = [];
 
   constructor(parent?: ExecContext) {
     if (parent) {
@@ -50,8 +53,21 @@ export class ExecContext implements ExecContextIf {
       ctx.setFunction(fn.name, fn.body, fn.ctx);
     }
 
-    for (const [name, args] of Object.entries(this.alias)) {
+    for (const [name, args] of Object.entries(this.getAliases())) {
       ctx.setAlias(name, args);
+    }
+
+    // Copy variable attributes
+    for (const name of this.readonlyVars) {
+      ctx.setReadonlyVar(name, true);
+    }
+    for (const name of this.integerVars) {
+      ctx.setIntegerVar(name, true);
+    }
+
+    // Copy directory stack
+    for (const dir of this.getDirStack().reverse()) {
+      ctx.pushDirStack(dir);
     }
 
     return ctx;
@@ -206,6 +222,94 @@ export class ExecContext implements ExecContextIf {
     }
 
     return this.alias[name];
+  }
+
+  getAliases(): Record<string, string> {
+    if (this.parent) {
+      return this.parent.getAliases();
+    }
+
+    return { ...this.alias };
+  }
+
+  isReadonlyVar(name: string): boolean {
+    if (this.parent) {
+      return this.parent.isReadonlyVar(name);
+    }
+
+    return this.readonlyVars.has(name);
+  }
+
+  setReadonlyVar(name: string, readonly: boolean): void {
+    if (this.parent) {
+      this.parent.setReadonlyVar(name, readonly);
+    } else if (readonly) {
+      this.readonlyVars.add(name);
+    } else {
+      this.readonlyVars.delete(name);
+    }
+  }
+
+  isIntegerVar(name: string): boolean {
+    if (this.parent) {
+      return this.parent.isIntegerVar(name);
+    }
+
+    return this.integerVars.has(name);
+  }
+
+  setIntegerVar(name: string, integer: boolean): void {
+    if (this.parent) {
+      this.parent.setIntegerVar(name, integer);
+    } else if (integer) {
+      this.integerVars.add(name);
+    } else {
+      this.integerVars.delete(name);
+    }
+  }
+
+  getDirStack(): string[] {
+    if (this.parent) {
+      return this.parent.getDirStack();
+    }
+
+    return [...this.dirStack];
+  }
+
+  pushDirStack(dir: string): void {
+    if (this.parent) {
+      this.parent.pushDirStack(dir);
+    } else {
+      this.dirStack.unshift(dir);
+    }
+  }
+
+  popDirStack(): string | undefined {
+    if (this.parent) {
+      return this.parent.popDirStack();
+    }
+
+    return this.dirStack.shift();
+  }
+
+  clearDirStack(): void {
+    if (this.parent) {
+      this.parent.clearDirStack();
+    } else {
+      this.dirStack.length = 0;
+    }
+  }
+
+  removeDirStackAt(index: number): string | undefined {
+    if (this.parent) {
+      return this.parent.removeDirStackAt(index);
+    }
+
+    if (index < 0 || index >= this.dirStack.length) {
+      return undefined;
+    }
+
+    return this.dirStack.splice(index, 1)[0];
   }
 
   redirectStdin(name: string): string {

@@ -159,13 +159,13 @@ Deno.test('Error Handling', async (t) => {
     assertEquals(result.exitCode, 127);
   });
 
-  // Note: Current executor stops on first non-zero exit code (like set -e)
-  // In standard bash without set -e, 'false; false; exit 5' would return 5
-  await t.step('first failure stops script', async () => {
+  // Standard bash behavior: non-zero exit code does NOT stop script execution
+  // (unless set -e is enabled). The script continues to the next command.
+  await t.step('non-zero exit code does not stop script', async () => {
     const shell = new TestShell();
-    const result = await shell.runAndCapture('false; echo "never"; exit 5');
-    assertEquals(result.exitCode, 1);
-    assertEquals(result.stdout, '');
+    const result = await shell.runAndCapture('false; echo "continues"; exit 5');
+    assertEquals(result.exitCode, 5);
+    assertEquals(result.stdout, 'continues\n');
   });
 });
 

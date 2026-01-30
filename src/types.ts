@@ -1,4 +1,4 @@
-import type { AstNode, AstNodeCompoundList } from '@ein/bash-parser';
+import type { AstNodeCompoundList } from '@ein/bash-parser';
 
 /**
  * Represents a function definition in the execution context.
@@ -50,49 +50,51 @@ export type ExecSyncResult = {
   code: number;
 };
 
+export const PATH_TEST_OPERATOR_MAP = {
+  '-e': 'EXISTS',
+  '-f': 'REGULAR_FILE',
+  '-d': 'DIRECTORY',
+  '-r': 'READABLE',
+  '-w': 'WRITABLE',
+  '-x': 'EXECUTABLE',
+  '-s': 'NON_EMPTY',
+  '-L': 'SYMLINK',
+  '-h': 'SYMLINK',
+  '-b': 'BLOCK_DEVICE',
+  '-c': 'CHAR_DEVICE',
+  '-p': 'NAMED_PIPE',
+  '-S': 'SOCKET',
+  '-g': 'SETGID',
+  '-u': 'SETUID',
+  '-k': 'STICKY',
+  '-O': 'OWNED_BY_EUID',
+  '-G': 'OWNED_BY_EGID',
+  '-N': 'MODIFIED_SINCE_LAST_READ',
+  '-t': 'FD_IS_TERMINAL',
+  '-nt': 'NEWER_THAN',
+  '-ot': 'OLDER_THAN',
+  '-ef': 'SAME_DEVICE_AND_INODE',
+} as const;
+type PathTestOperator = keyof typeof PATH_TEST_OPERATOR_MAP;
+export type PathTestOperation = typeof PATH_TEST_OPERATOR_MAP[PathTestOperator];
+
 /**
  * Interface for the shell operations.
  * @interface ShellIf
  */
 export interface ShellIf {
   /**
-   * Executes a synchronous command.
-   * @param {ExecContextIf} ctx - The execution context.
-   * @param {string} name - The name of the command.
-   * @param {string[]} args - The arguments for the command.
-   * @returns {Promise<{ stdout: string; stderr: string }>} The output of the command.
-   */
-  execSyncCommand: (
-    ctx: ExecContextIf,
-    name: string,
-    args: string[],
-  ) => Promise<{ stdout: string; stderr: string }>;
-
-  /**
-   * Executes a command.
+   * Executes an external command (not a builtin or function - those are handled by the executor).
    * @param {ExecContextIf} ctx - The execution context.
    * @param {string} name - The name of the command.
    * @param {string[]} args - The arguments for the command.
    * @param {ExecCommandOptions} opts - The options for the command execution.
    * @returns {Promise<number>} The exit code of the command.
    */
-  execCommand: (
+  execute: (
     ctx: ExecContextIf,
     name: string,
     args: string[],
-    opts: ExecCommandOptions,
-  ) => Promise<number>;
-
-  /**
-   * Executes a subshell command.
-   * @param {ExecContextIf} ctx - The execution context.
-   * @param {AstNode} cmd - The AST node representing the command.
-   * @param {ExecCommandOptions} opts - The options for the command execution.
-   * @returns {Promise<number>} The exit code of the command.
-   */
-  execSubshell: (
-    ctx: ExecContextIf,
-    cmd: AstNode,
     opts: ExecCommandOptions,
   ) => Promise<number>;
 
@@ -132,27 +134,70 @@ export interface ShellIf {
   pipeWrite: (name: string, data: string) => Promise<void>;
 
   /**
-   * Runs a script.
-   * @param {string} script - The script to run.
-   * @returns {Promise<number>} The exit code of the script.
+   * Checks if a name refers to a managed pipe (as opposed to a file path).
+   * @param {string} name - The name to check.
+   * @returns {boolean} True if the name is a managed pipe.
    */
-  run: (script: string) => Promise<number>;
+  isPipe: (name: string) => boolean;
+
+  /**
+   * Streams data from a file to a pipe. The shell reads from the file and writes to the pipe.
+   * When done reading, the pipe should be closed to signal EOF.
+   * @param {ExecContextIf} ctx - The execution context.
+   * @param {string} path - The file path to read from.
+   * @param {string} pipe - The pipe name to write to.
+   * @returns {Promise<void>}
+   */
+  pipeFromFile: (ctx: ExecContextIf, path: string, pipe: string) => Promise<void>;
+
+  /**
+   * Streams data from a pipe to a file. The shell reads from the pipe and writes to the file.
+   * @param {ExecContextIf} ctx - The execution context.
+   * @param {string} pipe - The pipe name to read from.
+   * @param {string} path - The file path to write to.
+   * @param {boolean} append - Whether to append to the file or overwrite.
+   * @returns {Promise<void>}
+   */
+  pipeToFile: (ctx: ExecContextIf, pipe: string, path: string, append: boolean) => Promise<void>;
 
   /**
    * A callback to resolve path globbing. If specified, the parser calls it whenever it needs to resolve path globbing. It should return the expanded path. If the option is not specified, the parser won't try to resolve any path globbing.
    *
+   * @param ctx - The execution context.
    * @param text - The text to resolve.
    * @returns The expanded path.
    */
-  resolvePath?: (text: string, ctx: ExecContextIf) => Promise<string[]>;
+  resolvePath?: (ctx: ExecContextIf, text: string) => Promise<string[]>;
 
   /**
    * A callback to resolve users' home directories. If specified, the parser calls it whenever it needs to resolve a tilde expansion. If the option is not specified, the parser won't try to resolve any tilde expansion. When the callback is called with a null value for `username`, the callback should return the current user's home directory.
    *
+   * @param ctx - The execution context.
    * @param username - The username whose home directory to resolve, or `null` for the current user.
    * @returns The home directory of the specified user, or the current user's home directory if `username` is `null`.
    */
-  resolveHomeUser?: (username: string | null, ctx: ExecContextIf) => Promise<string>;
+  resolveHomeUser?: (ctx: ExecContextIf, username: string | null) => Promise<string>;
+
+  /**
+   * A callback to read file contents directly. If specified, the source builtin will use this.
+   *
+   * @param ctx - The execution context.
+   * @param path - The file path to read.
+   * @returns The file contents.
+   * @throws If the file cannot be read.
+   */
+  readFile?: (ctx: ExecContextIf, path: string) => Promise<string>;
+
+  /**
+   * A callback to test a path and see if it passes the operation
+   *
+   * @param ctx - The execution context.
+   * @param path - The path to check.
+   * @param op - The test operation to check.
+   * @param path - Optional second path which is needed for some test operations.
+   * @returns If the path passed the operation test or not.
+   */
+  testPath?: (ctx: ExecContextIf, path: string, op: PathTestOperation, path2?: string) => Promise<boolean>;
 }
 
 /**
@@ -279,6 +324,70 @@ export interface ExecContextIf {
    * @returns {string | undefined} The alias arguments or undefined if not found.
    */
   getAlias: (name: string) => string | undefined;
+
+  /**
+   * Gets all aliases from the execution context.
+   * @returns {Record<string, string>} All alias definitions.
+   */
+  getAliases: () => Record<string, string>;
+
+  /**
+   * Checks if a variable is marked as readonly.
+   * @param {string} name - The variable name.
+   * @returns {boolean} True if the variable is readonly.
+   */
+  isReadonlyVar: (name: string) => boolean;
+
+  /**
+   * Sets or unsets the readonly flag for a variable.
+   * @param {string} name - The variable name.
+   * @param {boolean} readonly - Whether the variable should be readonly.
+   */
+  setReadonlyVar: (name: string, readonly: boolean) => void;
+
+  /**
+   * Checks if a variable is marked as integer.
+   * @param {string} name - The variable name.
+   * @returns {boolean} True if the variable is an integer variable.
+   */
+  isIntegerVar: (name: string) => boolean;
+
+  /**
+   * Sets or unsets the integer flag for a variable.
+   * @param {string} name - The variable name.
+   * @param {boolean} integer - Whether the variable should be an integer.
+   */
+  setIntegerVar: (name: string, integer: boolean) => void;
+
+  /**
+   * Gets the directory stack.
+   * @returns {string[]} The directory stack (top of stack is index 0).
+   */
+  getDirStack: () => string[];
+
+  /**
+   * Pushes a directory onto the stack.
+   * @param {string} dir - The directory to push.
+   */
+  pushDirStack: (dir: string) => void;
+
+  /**
+   * Pops a directory from the stack.
+   * @returns {string | undefined} The popped directory, or undefined if stack is empty.
+   */
+  popDirStack: () => string | undefined;
+
+  /**
+   * Clears the directory stack.
+   */
+  clearDirStack: () => void;
+
+  /**
+   * Removes a directory from the stack at a specific index.
+   * @param {number} index - The index to remove (0-based from top).
+   * @returns {string | undefined} The removed directory, or undefined if index is invalid.
+   */
+  removeDirStackAt: (index: number) => string | undefined;
 
   /**
    * Redirects the standard input.

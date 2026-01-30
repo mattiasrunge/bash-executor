@@ -1,11 +1,4 @@
-import type { AstNode } from '@ein/bash-parser';
-import {
-  AstExecutor,
-  ExecContext,
-  type ExecCommandOptions,
-  type ExecContextIf,
-  type ShellIf,
-} from '../../mod.ts';
+import { AstExecutor, createBuiltinRegistry, type ExecCommandOptions, ExecContext, type ExecContextIf, type ShellIf } from '../../mod.ts';
 
 /**
  * PipeBuffer - Async pipe with proper backpressure and EOF signaling
@@ -180,7 +173,7 @@ export class TestShell implements ShellIf {
   private capturedStderr: string[];
 
   constructor() {
-    this.executor = new AstExecutor(this);
+    this.executor = new AstExecutor(this, { builtins: createBuiltinRegistry() });
     this.ctx = new ExecContext();
     this.pipes = new Map();
     this.pipeCounter = 0;
@@ -192,53 +185,12 @@ export class TestShell implements ShellIf {
   }
 
   /**
-   * Register built-in test commands
+   * Register mock commands for external utilities used in tests.
+   * Note: Builtins like echo, printf, true, false, exit, test, [, export, unset, read, return, :
+   * are now handled by the real builtin registry passed to AstExecutor.
+   * This method only registers mock versions of external commands like cat, grep, wc.
    */
   private registerBuiltins(): void {
-    // echo - write arguments to stdout
-    this.mockCommands.set('echo', async (_ctx, args) => {
-      const output = args.join(' ') + '\n';
-      return { code: 0, stdout: output };
-    });
-
-    // printf - formatted output without trailing newline
-    this.mockCommands.set('printf', async (_ctx, args) => {
-      if (args.length === 0) return { code: 0, stdout: '' };
-      // Simple printf implementation - just joins args
-      const format = args[0];
-      const values = args.slice(1);
-      let output = format;
-      // Handle basic %s substitution
-      let i = 0;
-      output = output.replace(/%s/g, () => values[i++] || '');
-      // Handle escape sequences
-      output = output.replace(/\\n/g, '\n');
-      output = output.replace(/\\t/g, '\t');
-      return { code: 0, stdout: output };
-    });
-
-    // true - always succeeds
-    this.mockCommands.set('true', async () => ({ code: 0 }));
-
-    // false - always fails
-    this.mockCommands.set('false', async () => ({ code: 1 }));
-
-    // exit - return specific exit code
-    this.mockCommands.set('exit', async (_ctx, args) => {
-      const code = parseInt(args[0] || '0', 10);
-      return { code: isNaN(code) ? 0 : code };
-    });
-
-    // test / [ - conditional expressions
-    this.mockCommands.set('test', async (_ctx, args) => {
-      return { code: this.evaluateTestExpression(args) ? 0 : 1 };
-    });
-    this.mockCommands.set('[', async (_ctx, args) => {
-      // Remove trailing ]
-      const testArgs = args[args.length - 1] === ']' ? args.slice(0, -1) : args;
-      return { code: this.evaluateTestExpression(testArgs) ? 0 : 1 };
-    });
-
     // cat - read from stdin or echo args
     this.mockCommands.set('cat', async (ctx, args) => {
       const stdin = ctx.getStdin();
@@ -287,95 +239,6 @@ export class TestShell implements ShellIf {
       }
       return { code: 0, stdout: '0\n' };
     });
-
-    // read - read a line from stdin into a variable
-    this.mockCommands.set('read', async (ctx, args) => {
-      const varName = args[0] || 'REPLY';
-      const stdin = ctx.getStdin();
-      if (stdin !== '0' && this.pipes.has(stdin)) {
-        const content = await this.pipeRead(stdin);
-        const firstLine = content.split('\n')[0] || '';
-        ctx.setParams({ [varName]: firstLine });
-        return { code: 0 };
-      }
-      return { code: 1 };
-    });
-
-    // export - set environment variable
-    this.mockCommands.set('export', async (ctx, args) => {
-      for (const arg of args) {
-        const eqIdx = arg.indexOf('=');
-        if (eqIdx > 0) {
-          const name = arg.substring(0, eqIdx);
-          const value = arg.substring(eqIdx + 1);
-          ctx.setEnv({ [name]: value });
-        }
-      }
-      return { code: 0 };
-    });
-
-    // unset - unset a variable
-    this.mockCommands.set('unset', async (ctx, args) => {
-      for (const name of args) {
-        ctx.setParams({ [name]: null });
-      }
-      return { code: 0 };
-    });
-
-    // return - return from a function with exit code
-    this.mockCommands.set('return', async (_ctx, args) => {
-      const code = parseInt(args[0] || '0', 10);
-      return { code: isNaN(code) ? 0 : code };
-    });
-
-    // colon / : - null command, always succeeds
-    this.mockCommands.set(':', async () => ({ code: 0 }));
-  }
-
-  /**
-   * Evaluate a test expression (for test / [ commands)
-   */
-  private evaluateTestExpression(args: string[]): boolean {
-    if (args.length === 0) return false;
-
-    // Handle negation
-    if (args[0] === '!') {
-      return !this.evaluateTestExpression(args.slice(1));
-    }
-
-    // Unary string operators
-    if (args[0] === '-n') return (args[1]?.length || 0) > 0;
-    if (args[0] === '-z') return !args[1] || args[1].length === 0;
-
-    // Binary comparison operators
-    if (args.length >= 3) {
-      const left = args[0];
-      const op = args[1];
-      const right = args[2];
-
-      switch (op) {
-        case '=':
-        case '==':
-          return left === right;
-        case '!=':
-          return left !== right;
-        case '-eq':
-          return parseInt(left) === parseInt(right);
-        case '-ne':
-          return parseInt(left) !== parseInt(right);
-        case '-lt':
-          return parseInt(left) < parseInt(right);
-        case '-le':
-          return parseInt(left) <= parseInt(right);
-        case '-gt':
-          return parseInt(left) > parseInt(right);
-        case '-ge':
-          return parseInt(left) >= parseInt(right);
-      }
-    }
-
-    // Single argument - true if non-empty
-    return (args[0]?.length || 0) > 0;
   }
 
   /**
@@ -396,54 +259,13 @@ export class TestShell implements ShellIf {
 
   // ShellIf implementation
 
-  async execSyncCommand(
-    ctx: ExecContextIf,
-    name: string,
-    args: string[],
-  ): Promise<{ stdout: string; stderr: string }> {
-    const handler = this.mockCommands.get(name);
-    if (handler) {
-      const result = await handler(ctx, args);
-      return { stdout: result.stdout || '', stderr: result.stderr || '' };
-    }
-
-    // Check if it's a function
-    const fn = ctx.getFunction(name);
-    if (fn) {
-      const fnCtx = fn.ctx.spawnContext();
-      // Set positional parameters
-      const posParams: Record<string, string> = {};
-      args.forEach((arg, i) => {
-        posParams[(i + 1).toString()] = arg;
-      });
-      fnCtx.setLocalParams(posParams);
-
-      // Capture output for sync execution
-      const prevStdout = this.capturedStdout;
-      const prevStderr = this.capturedStderr;
-      this.capturedStdout = [];
-      this.capturedStderr = [];
-
-      await this.executor.executeNode(fn.body, fnCtx);
-
-      const stdout = this.capturedStdout.join('');
-      const stderr = this.capturedStderr.join('');
-
-      this.capturedStdout = prevStdout;
-      this.capturedStderr = prevStderr;
-
-      return { stdout, stderr };
-    }
-
-    return { stdout: '', stderr: '' };
-  }
-
-  async execCommand(
+  async execute(
     ctx: ExecContextIf,
     name: string,
     args: string[],
     _opts: ExecCommandOptions,
   ): Promise<number> {
+    // Check for mock command (external commands only - functions are handled by executor)
     const handler = this.mockCommands.get(name);
     if (handler) {
       const result = await handler(ctx, args);
@@ -452,37 +274,9 @@ export class TestShell implements ShellIf {
       return result.code;
     }
 
-    // Check if it's a function
-    const fn = ctx.getFunction(name);
-    if (fn) {
-      const fnCtx = fn.ctx.spawnContext();
-      // Set positional parameters
-      const posParams: Record<string, string> = {};
-      args.forEach((arg, i) => {
-        posParams[(i + 1).toString()] = arg;
-      });
-      fnCtx.setLocalParams(posParams);
-
-      // Inherit I/O from caller context
-      fnCtx.redirectStdin(ctx.getStdin());
-      fnCtx.redirectStdout(ctx.getStdout());
-      fnCtx.redirectStderr(ctx.getStderr());
-
-      return await this.executor.executeNode(fn.body, fnCtx);
-    }
-
     // Unknown command
     await this.writeToStream(ctx.getStderr(), `${name}: command not found\n`);
     return 127;
-  }
-
-  async execSubshell(
-    ctx: ExecContextIf,
-    cmd: AstNode,
-    _opts: ExecCommandOptions,
-  ): Promise<number> {
-    const subCtx = ctx.subContext();
-    return this.executor.executeNode(cmd, subCtx);
   }
 
   async pipeOpen(): Promise<string> {
@@ -513,6 +307,16 @@ export class TestShell implements ShellIf {
   }
 
   async pipeWrite(name: string, data: string): Promise<void> {
+    // Handle standard streams (stdout and stderr)
+    if (name === '1') {
+      this.capturedStdout.push(data);
+      return;
+    }
+    if (name === '2') {
+      this.capturedStderr.push(data);
+      return;
+    }
+
     const pipe = this.pipes.get(name);
     if (pipe && !pipe.isClosed) {
       if (data === '') {
@@ -524,13 +328,36 @@ export class TestShell implements ShellIf {
     }
   }
 
+  isPipe(name: string): boolean {
+    // Standard streams are always considered "pipes" (managed FDs)
+    if (name === '0' || name === '1' || name === '2') {
+      return true;
+    }
+    return this.pipes.has(name);
+  }
+
+  async pipeFromFile(_ctx: ExecContextIf, _path: string, _pipe: string): Promise<void> {
+    // TestShell doesn't support file I/O - this is a no-op for tests
+    // Real implementations would read from path and write to pipe
+    throw new Error('pipeFromFile not implemented in TestShell');
+  }
+
+  async pipeToFile(_ctx: ExecContextIf, _pipe: string, _path: string, _append: boolean): Promise<void> {
+    // TestShell doesn't support file I/O - this is a no-op for tests
+    // Real implementations would read from pipe and write to path
+    throw new Error('pipeToFile not implemented in TestShell');
+  }
+
+  // Test utilities
+
+  /**
+   * Run a script and return just the exit code
+   */
   async run(script: string): Promise<number> {
     this.capturedStdout = [];
     this.capturedStderr = [];
     return this.executor.execute(script, this.ctx);
   }
-
-  // Test utilities
 
   /**
    * Run a script and capture all output for assertions

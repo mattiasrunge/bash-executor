@@ -1,12 +1,5 @@
 import { assertEquals } from '@std/assert';
-import type { AstNode } from '@ein/bash-parser';
-import {
-  AstExecutor,
-  ExecContext,
-  type ExecCommandOptions,
-  type ExecContextIf,
-  type ShellIf,
-} from '../mod.ts';
+import { AstExecutor, type ExecCommandOptions, ExecContext, type ExecContextIf, type ShellIf } from '../mod.ts';
 
 /**
  * Simple test shell that tracks alias resolution
@@ -30,7 +23,7 @@ class AliasTestShell implements ShellIf {
     return this.executor.execute(script, ctx);
   }
 
-  async execCommand(
+  async execute(
     _ctx: ExecContextIf,
     name: string,
     args: string[],
@@ -41,23 +34,6 @@ class AliasTestShell implements ShellIf {
     if (name === 'false') return 1;
     if (name === 'echo') return 0;
     return 0;
-  }
-
-  async execSyncCommand(
-    ctx: ExecContextIf,
-    name: string,
-    args: string[],
-  ): Promise<{ stdout: string; stderr: string }> {
-    await this.execCommand(ctx, name, args, {});
-    return { stdout: '', stderr: '' };
-  }
-
-  async execSubshell(
-    ctx: ExecContextIf,
-    cmd: AstNode,
-    _opts: ExecCommandOptions,
-  ): Promise<number> {
-    return this.executor.executeNode(cmd, ctx);
   }
 
   async pipeOpen(): Promise<string> {
@@ -72,6 +48,18 @@ class AliasTestShell implements ShellIf {
     return '';
   }
   async pipeWrite(_name: string, _data: string): Promise<void> {}
+
+  isPipe(name: string): boolean {
+    return name === '0' || name === '1' || name === '2' || this.pipes.has(name);
+  }
+
+  async pipeFromFile(_ctx: ExecContextIf, _path: string, _pipe: string): Promise<void> {
+    throw new Error('Not implemented');
+  }
+
+  async pipeToFile(_ctx: ExecContextIf, _pipe: string, _path: string, _append: boolean): Promise<void> {
+    throw new Error('Not implemented');
+  }
 
   reset(): void {
     this.executedCommands = [];
