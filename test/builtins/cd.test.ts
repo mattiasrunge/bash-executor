@@ -1,6 +1,6 @@
-import { assertEquals } from 'jsr:@std/assert';
-import { ExecContext } from '../../src/context.ts';
+import { assertEquals } from '@std/assert';
 import { cdBuiltin } from '../../src/builtins/cd.ts';
+import { ExecContext } from '../../src/context.ts';
 
 // Mock shell for testing
 const mockShell = {} as Parameters<typeof cdBuiltin>[2];

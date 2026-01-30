@@ -1,4 +1,4 @@
-import { assertEquals } from 'jsr:@std/assert';
+import { assertEquals } from '@std/assert';
 import { exportBuiltin, localBuiltin, unsetBuiltin } from '../../src/builtins/variables.ts';
 import { ExecContext } from '../../src/context.ts';
 

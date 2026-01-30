@@ -1,4 +1,4 @@
-import { assertEquals } from 'jsr:@std/assert';
+import { assertEquals } from '@std/assert';
 import { createBuiltinRegistry } from '../../src/builtins/mod.ts';
 import { ExecContext } from '../../src/context.ts';
 import { AstExecutor } from '../../src/executor.ts';

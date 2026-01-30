@@ -1,4 +1,4 @@
-import { assertEquals, assertStringIncludes } from 'jsr:@std/assert';
+import { assertEquals, assertStringIncludes } from '@std/assert';
 import { dirsBuiltin, popdBuiltin, pushdBuiltin } from '../../src/builtins/dirstack.ts';
 import { ExecContext } from '../../src/context.ts';
 import type { ShellIf } from '../../src/types.ts';

@@ -1,4 +1,4 @@
-import { assertEquals, assertNotEquals } from '@std/assert';
+import { assertEquals } from '@std/assert';
 import { ExecContext } from '../src/context.ts';
 
 Deno.test('ExecContext - Basic Construction', async (t) => {

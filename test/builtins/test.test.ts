@@ -1,4 +1,4 @@
-import { assertEquals } from 'jsr:@std/assert';
+import { assertEquals } from '@std/assert';
 import { bracketBuiltin, testBuiltin } from '../../src/builtins/test.ts';
 import { ExecContext } from '../../src/context.ts';
 import type { ShellIf } from '../../src/types.ts';

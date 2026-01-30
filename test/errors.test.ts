@@ -1,6 +1,6 @@
 import { assertEquals, assertInstanceOf } from '@std/assert';
+import { BashSyntaxError } from '../mod.ts';
 import { TestShell } from './lib/test-shell.ts';
-import { BashExecutorError, BashSyntaxError } from '../mod.ts';
 
 Deno.test('Error Classes', async (t) => {
   await t.step('BashSyntaxError has location from parser', async () => {

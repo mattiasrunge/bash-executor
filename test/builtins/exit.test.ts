@@ -1,17 +1,6 @@
-import { assertEquals } from 'jsr:@std/assert';
+import { assertEquals } from '@std/assert';
+import { exitBuiltin, getExitCode, getReturnCode, isExitSignal, isReturnSignal, makeExitSignal, makeReturnSignal, returnBuiltin } from '../../src/builtins/exit.ts';
 import { ExecContext } from '../../src/context.ts';
-import {
-  EXIT_SIGNAL_BASE,
-  exitBuiltin,
-  getExitCode,
-  getReturnCode,
-  isExitSignal,
-  isReturnSignal,
-  makeExitSignal,
-  makeReturnSignal,
-  RETURN_SIGNAL_BASE,
-  returnBuiltin,
-} from '../../src/builtins/exit.ts';
 
 // Mock shell for testing
 const mockShell = {} as Parameters<typeof exitBuiltin>[2];

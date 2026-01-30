@@ -1,4 +1,4 @@
-import { assertEquals, assertStringIncludes } from 'jsr:@std/assert';
+import { assertEquals, assertStringIncludes } from '@std/assert';
 import { createBuiltinBuiltin, createCommandBuiltin, createTypeBuiltin } from '../../src/builtins/introspection.ts';
 import { createBuiltinRegistry } from '../../src/builtins/mod.ts';
 import { ExecContext } from '../../src/context.ts';

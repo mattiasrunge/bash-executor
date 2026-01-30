@@ -1,4 +1,4 @@
-import { assertEquals } from 'jsr:@std/assert';
+import { assertEquals } from '@std/assert';
 import { letBuiltin } from '../../src/builtins/let.ts';
 import { ExecContext } from '../../src/context.ts';
 import type { ShellIf } from '../../src/types.ts';
@@ -174,25 +174,25 @@ Deno.test('let builtin', async (t) => {
   await t.step('logical operators', async (t) => {
     await t.step('logical AND (&&)', async () => {
       const ctx = new ExecContext();
-      let result = await letBuiltin(ctx, ['x = 1 && 1'], mockShell, noopExecute);
+      await letBuiltin(ctx, ['x = 1 && 1'], mockShell, noopExecute);
       assertEquals(ctx.getEnv()['x'], '1');
-      result = await letBuiltin(ctx, ['x = 1 && 0'], mockShell, noopExecute);
+      await letBuiltin(ctx, ['x = 1 && 0'], mockShell, noopExecute);
       assertEquals(ctx.getEnv()['x'], '0');
     });
 
     await t.step('logical OR (||)', async () => {
       const ctx = new ExecContext();
-      let result = await letBuiltin(ctx, ['x = 0 || 1'], mockShell, noopExecute);
+      await letBuiltin(ctx, ['x = 0 || 1'], mockShell, noopExecute);
       assertEquals(ctx.getEnv()['x'], '1');
-      result = await letBuiltin(ctx, ['x = 0 || 0'], mockShell, noopExecute);
+      await letBuiltin(ctx, ['x = 0 || 0'], mockShell, noopExecute);
       assertEquals(ctx.getEnv()['x'], '0');
     });
 
     await t.step('logical NOT (!)', async () => {
       const ctx = new ExecContext();
-      let result = await letBuiltin(ctx, ['x = !0'], mockShell, noopExecute);
+      await letBuiltin(ctx, ['x = !0'], mockShell, noopExecute);
       assertEquals(ctx.getEnv()['x'], '1');
-      result = await letBuiltin(ctx, ['x = !5'], mockShell, noopExecute);
+      await letBuiltin(ctx, ['x = !5'], mockShell, noopExecute);
       assertEquals(ctx.getEnv()['x'], '0');
     });
   });
@@ -200,46 +200,46 @@ Deno.test('let builtin', async (t) => {
   await t.step('bitwise operators', async (t) => {
     await t.step('bitwise AND', async () => {
       const ctx = new ExecContext();
-      const result = await letBuiltin(ctx, ['x = 12 & 10'], mockShell, noopExecute); // 1100 & 1010 = 1000
+      await letBuiltin(ctx, ['x = 12 & 10'], mockShell, noopExecute); // 1100 & 1010 = 1000
       assertEquals(ctx.getEnv()['x'], '8');
     });
 
     await t.step('bitwise OR', async () => {
       const ctx = new ExecContext();
-      const result = await letBuiltin(ctx, ['x = 12 | 10'], mockShell, noopExecute); // 1100 | 1010 = 1110
+      await letBuiltin(ctx, ['x = 12 | 10'], mockShell, noopExecute); // 1100 | 1010 = 1110
       assertEquals(ctx.getEnv()['x'], '14');
     });
 
     await t.step('bitwise XOR', async () => {
       const ctx = new ExecContext();
-      const result = await letBuiltin(ctx, ['x = 12 ^ 10'], mockShell, noopExecute); // 1100 ^ 1010 = 0110
+      await letBuiltin(ctx, ['x = 12 ^ 10'], mockShell, noopExecute); // 1100 ^ 1010 = 0110
       assertEquals(ctx.getEnv()['x'], '6');
     });
 
     await t.step('left shift', async () => {
       const ctx = new ExecContext();
-      const result = await letBuiltin(ctx, ['x = 1 << 4'], mockShell, noopExecute);
+      await letBuiltin(ctx, ['x = 1 << 4'], mockShell, noopExecute);
       assertEquals(ctx.getEnv()['x'], '16');
     });
 
     await t.step('right shift', async () => {
       const ctx = new ExecContext();
-      const result = await letBuiltin(ctx, ['x = 16 >> 2'], mockShell, noopExecute);
+      await letBuiltin(ctx, ['x = 16 >> 2'], mockShell, noopExecute);
       assertEquals(ctx.getEnv()['x'], '4');
     });
   });
 
   await t.step('ternary operator', async () => {
     const ctx = new ExecContext();
-    let result = await letBuiltin(ctx, ['x = 1 ? 10 : 20'], mockShell, noopExecute);
+    await letBuiltin(ctx, ['x = 1 ? 10 : 20'], mockShell, noopExecute);
     assertEquals(ctx.getEnv()['x'], '10');
-    result = await letBuiltin(ctx, ['x = 0 ? 10 : 20'], mockShell, noopExecute);
+    await letBuiltin(ctx, ['x = 0 ? 10 : 20'], mockShell, noopExecute);
     assertEquals(ctx.getEnv()['x'], '20');
   });
 
   await t.step('parentheses for grouping', async () => {
     const ctx = new ExecContext();
-    const result = await letBuiltin(ctx, ['x = (2 + 3) * 4'], mockShell, noopExecute);
+    await letBuiltin(ctx, ['x = (2 + 3) * 4'], mockShell, noopExecute);
     assertEquals(ctx.getEnv()['x'], '20');
   });
 

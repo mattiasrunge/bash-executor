@@ -69,7 +69,6 @@ export const declareBuiltin: BuiltinHandler = async (
   let setExport = false;
   let setInteger = false;
   let unsetReadonly = false;
-  let unsetExport = false;
   let showFunctions = false;
   let showFunctionNames = false;
 

@@ -1,4 +1,4 @@
-import { assertEquals } from 'jsr:@std/assert';
+import { assertEquals } from '@std/assert';
 import { colonBuiltin, falseBuiltin, trueBuiltin } from '../../src/builtins/trivial.ts';
 import { ExecContext } from '../../src/context.ts';
 
