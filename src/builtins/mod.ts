@@ -9,67 +9,59 @@
 export * from './types.ts';
 
 // Export individual builtins
-export { colonBuiltin, trueBuiltin, falseBuiltin } from './trivial.ts';
+export { aliasBuiltin, unaliasBuiltin } from './alias.ts';
+export { cdBuiltin } from './cd.ts';
+export { clearAttributes, declareBuiltin, isReadonly, typesetBuiltin } from './declare.ts';
+export { clearDirStack, dirsBuiltin, getDirStack, popdBuiltin, pushdBuiltin } from './dirstack.ts';
 export { echoBuiltin } from './echo.ts';
-export { pwdBuiltin } from './pwd.ts';
+export { evalBuiltin } from './eval.ts';
 export {
-  exitBuiltin,
-  returnBuiltin,
   EXIT_SIGNAL_BASE,
   EXIT_SIGNAL_MAX,
-  RETURN_SIGNAL_BASE,
-  RETURN_SIGNAL_MAX,
-  isExitSignal,
-  isReturnSignal,
+  exitBuiltin,
   getExitCode,
   getReturnCode,
+  isExitSignal,
+  isReturnSignal,
   makeExitSignal,
   makeReturnSignal,
+  RETURN_SIGNAL_BASE,
+  RETURN_SIGNAL_MAX,
+  returnBuiltin,
 } from './exit.ts';
-export { cdBuiltin } from './cd.ts';
-export { exportBuiltin, unsetBuiltin, localBuiltin } from './variables.ts';
-export { aliasBuiltin, unaliasBuiltin } from './alias.ts';
-export { testBuiltin, bracketBuiltin } from './test.ts';
-export { evalBuiltin } from './eval.ts';
-export { sourceBuiltin, dotBuiltin } from './source.ts';
-export { shiftBuiltin } from './shift.ts';
-export { printfBuiltin } from './printf.ts';
-export {
-  createTypeBuiltin,
-  createCommandBuiltin,
-  createBuiltinBuiltin,
-} from './introspection.ts';
+export { createBuiltinBuiltin, createCommandBuiltin, createTypeBuiltin } from './introspection.ts';
 export { letBuiltin } from './let.ts';
+export { printfBuiltin } from './printf.ts';
+export { pwdBuiltin } from './pwd.ts';
 export { readBuiltin } from './read.ts';
-export { declareBuiltin, typesetBuiltin, isReadonly, clearAttributes } from './declare.ts';
 export { readonlyBuiltin } from './readonly.ts';
-export { dirsBuiltin, pushdBuiltin, popdBuiltin, clearDirStack, getDirStack } from './dirstack.ts';
-export { setBuiltin, getShellOption, setShellOption, resetShellOptions } from './set.ts';
+export { getShellOption, resetShellOptions, setBuiltin, setShellOption } from './set.ts';
+export { shiftBuiltin } from './shift.ts';
+export { dotBuiltin, sourceBuiltin } from './source.ts';
+export { bracketBuiltin, testBuiltin } from './test.ts';
+export { colonBuiltin, falseBuiltin, trueBuiltin } from './trivial.ts';
+export { exportBuiltin, localBuiltin, unsetBuiltin } from './variables.ts';
 
-import type { BuiltinHandler, BuiltinRegistry } from './types.ts';
-import { colonBuiltin, trueBuiltin, falseBuiltin } from './trivial.ts';
-import { echoBuiltin } from './echo.ts';
-import { pwdBuiltin } from './pwd.ts';
-import { exitBuiltin, returnBuiltin } from './exit.ts';
-import { cdBuiltin } from './cd.ts';
-import { exportBuiltin, unsetBuiltin, localBuiltin } from './variables.ts';
 import { aliasBuiltin, unaliasBuiltin } from './alias.ts';
-import { testBuiltin, bracketBuiltin } from './test.ts';
-import { evalBuiltin } from './eval.ts';
-import { sourceBuiltin, dotBuiltin } from './source.ts';
-import { shiftBuiltin } from './shift.ts';
-import { printfBuiltin } from './printf.ts';
-import {
-  createTypeBuiltin,
-  createCommandBuiltin,
-  createBuiltinBuiltin,
-} from './introspection.ts';
-import { letBuiltin } from './let.ts';
-import { readBuiltin } from './read.ts';
+import { cdBuiltin } from './cd.ts';
 import { declareBuiltin, typesetBuiltin } from './declare.ts';
+import { dirsBuiltin, popdBuiltin, pushdBuiltin } from './dirstack.ts';
+import { echoBuiltin } from './echo.ts';
+import { evalBuiltin } from './eval.ts';
+import { exitBuiltin, returnBuiltin } from './exit.ts';
+import { createBuiltinBuiltin, createCommandBuiltin, createTypeBuiltin } from './introspection.ts';
+import { letBuiltin } from './let.ts';
+import { printfBuiltin } from './printf.ts';
+import { pwdBuiltin } from './pwd.ts';
+import { readBuiltin } from './read.ts';
 import { readonlyBuiltin } from './readonly.ts';
-import { dirsBuiltin, pushdBuiltin, popdBuiltin } from './dirstack.ts';
 import { setBuiltin } from './set.ts';
+import { shiftBuiltin } from './shift.ts';
+import { dotBuiltin, sourceBuiltin } from './source.ts';
+import { bracketBuiltin, testBuiltin } from './test.ts';
+import { colonBuiltin, falseBuiltin, trueBuiltin } from './trivial.ts';
+import type { BuiltinHandler, BuiltinRegistry } from './types.ts';
+import { exportBuiltin, localBuiltin, unsetBuiltin } from './variables.ts';
 
 /**
  * Create a new builtin registry with all implemented builtins.

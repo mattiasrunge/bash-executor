@@ -1,6 +1,6 @@
 import { assertEquals } from 'jsr:@std/assert';
+import { exportBuiltin, localBuiltin, unsetBuiltin } from '../../src/builtins/variables.ts';
 import { ExecContext } from '../../src/context.ts';
-import { exportBuiltin, unsetBuiltin, localBuiltin } from '../../src/builtins/variables.ts';
 
 // Mock shell for testing
 const mockShell = {} as Parameters<typeof exportBuiltin>[2];

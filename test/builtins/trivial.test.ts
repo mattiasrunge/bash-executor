@@ -1,6 +1,6 @@
 import { assertEquals } from 'jsr:@std/assert';
+import { colonBuiltin, falseBuiltin, trueBuiltin } from '../../src/builtins/trivial.ts';
 import { ExecContext } from '../../src/context.ts';
-import { colonBuiltin, trueBuiltin, falseBuiltin } from '../../src/builtins/trivial.ts';
 
 // Mock shell for testing
 const mockShell = {} as Parameters<typeof colonBuiltin>[2];
