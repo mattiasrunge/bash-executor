@@ -242,28 +242,28 @@ Deno.test('test builtin', async (t) => {
   await t.step('file tests delegate to shell', async (t) => {
     await t.step('-f returns true for regular file', async () => {
       const ctx = new ExecContext();
-      const shell = createMockShell({ '-f:/tmp/file': true });
+      const shell = createMockShell({ 'REGULAR_FILE:/tmp/file': true });
       const result = await testBuiltin(ctx, ['-f', '/tmp/file'], shell, noopExecute);
       assertEquals(result.code, 0);
     });
 
     await t.step('-f returns false for non-existent file', async () => {
       const ctx = new ExecContext();
-      const shell = createMockShell({ '-f:/tmp/file': false });
+      const shell = createMockShell({ 'REGULAR_FILE:/tmp/file': false });
       const result = await testBuiltin(ctx, ['-f', '/tmp/file'], shell, noopExecute);
       assertEquals(result.code, 1);
     });
 
     await t.step('-d returns true for directory', async () => {
       const ctx = new ExecContext();
-      const shell = createMockShell({ '-d:/tmp': true });
+      const shell = createMockShell({ 'DIRECTORY:/tmp': true });
       const result = await testBuiltin(ctx, ['-d', '/tmp'], shell, noopExecute);
       assertEquals(result.code, 0);
     });
 
     await t.step('-e returns true for existing path', async () => {
       const ctx = new ExecContext();
-      const shell = createMockShell({ '-e:/tmp/file': true });
+      const shell = createMockShell({ 'EXISTS:/tmp/file': true });
       const result = await testBuiltin(ctx, ['-e', '/tmp/file'], shell, noopExecute);
       assertEquals(result.code, 0);
     });
