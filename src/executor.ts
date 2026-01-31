@@ -31,7 +31,7 @@ import { getExitCode, getReturnCode, isExitSignal, isReturnSignal } from './buil
 import type { BuiltinRegistry } from './builtins/types.ts';
 import type { ErrorPosition } from './errors.ts';
 import { UnknownNodeTypeError, UnsupportedArithmeticNodeError, UnsupportedOperatorError } from './errors.ts';
-import type { ExecContextIf, ShellIf } from './types.ts';
+import type { ExecContextIf, ExecSyncResult, ShellIf } from './types.ts';
 
 const CONTINUE_CODE = -10 as const;
 const BREAK_CODE = -11 as const;
@@ -139,6 +139,51 @@ export class AstExecutor {
   }
 
   /**
+   * Executes a shell script and captures stdout/stderr.
+   * @param {string} source - The shell script source code.
+   * @param {ExecContextIf} ctx - The execution context.
+   * @returns {Promise<ExecSyncResult>} - The result including exit code, stdout, and stderr.
+   */
+  public async executeAndCapture(source: string, ctx: ExecContextIf): Promise<ExecSyncResult> {
+    let stdoutFd: string = '';
+    let stderrFd: string = '';
+
+    try {
+      // Create temporary pipes for capturing output
+      stdoutFd = await this.shell.pipeOpen();
+      stderrFd = await this.shell.pipeOpen();
+
+      // Setup piped context
+      const cmdCtx = ctx.spawnContext();
+      cmdCtx.redirectStdout(stdoutFd);
+      cmdCtx.redirectStderr(stderrFd);
+
+      // Execute
+      const code = await this.execute(source, cmdCtx);
+
+      // Send EOF so reads do not block
+      await this.shell.pipeWrite(stdoutFd, '');
+      await this.shell.pipeWrite(stderrFd, '');
+
+      // Read all output
+      const stdout = await this.shell.pipeRead(stdoutFd);
+      const stderr = await this.shell.pipeRead(stderrFd);
+
+      return { code, stdout, stderr };
+    } catch (err) {
+      return {
+        code: 1,
+        stdout: '',
+        stderr: `Error: ${(err as Error).message}\n`,
+      };
+    } finally {
+      // Cleanup pipes
+      if (stdoutFd) await this.shell.pipeRemove(stdoutFd).catch(() => {});
+      if (stderrFd) await this.shell.pipeRemove(stderrFd).catch(() => {});
+    }
+  }
+
+  /**
    * Executes an AST node based on its type.
    * @param {AstNode} node - The AST node to execute.
    * @param {ExecContextIf} ctx - The execution context.
@@ -197,10 +242,36 @@ export class AstExecutor {
           ctx.redirectStdout(r.file.text, true);
         }
       } else if (r.op.text === '>&') {
-        if (r.numberIo?.text === '2') {
-          ctx.redirectStderr(r.file.text);
+        const target = r.file.text;
+        const sourceFd = r.numberIo?.text;
+
+        // Check if target is a numeric file descriptor (fd duplication)
+        if (/^\d+$/.test(target)) {
+          // Get current destination of target fd
+          let targetDest: string;
+          if (target === '0') {
+            targetDest = ctx.getStdin();
+          } else if (target === '1') {
+            targetDest = ctx.getStdout();
+          } else if (target === '2') {
+            targetDest = ctx.getStderr();
+          } else {
+            targetDest = target; // Fallback for unknown fds
+          }
+
+          // Redirect source fd to target's destination
+          if (sourceFd === '2') {
+            ctx.redirectStderr(targetDest);
+          } else {
+            ctx.redirectStdout(targetDest);
+          }
         } else {
-          ctx.redirectStdout(r.file.text);
+          // Non-numeric target - it's a filename
+          if (sourceFd === '2') {
+            ctx.redirectStderr(target);
+          } else {
+            ctx.redirectStdout(target);
+          }
         }
       }
     }
@@ -295,6 +366,7 @@ export class AstExecutor {
     if (builtin) {
       const execute = (script: string) => this.execute(script, ctx);
       const result = await builtin(ctx, args || [], this.shell, execute);
+
       // Write stdout/stderr if present
       if (result.stdout) {
         await this.shell.pipeWrite(ctx.getStdout(), result.stdout);
@@ -1034,7 +1106,7 @@ export class AstExecutor {
           rValue.replace(
             xp.loc!.start,
             xp.loc!.end + 1,
-            output,
+            output.replace(/\n+$/, ''), // Strip trailing newlines for command expansion (POSIX)
           );
         } finally {
           this.shell.pipeRemove(cmdCtx.getStdout()).catch((err) => console.error('Failed to remove pipe from command expansion: ', err));

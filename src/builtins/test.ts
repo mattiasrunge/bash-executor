@@ -9,7 +9,7 @@
  * - Parentheses for grouping: ( expr )
  */
 
-import type { ExecContextIf, PathTestOperation, ShellIf } from '../types.ts';
+import { type ExecContextIf, PATH_TEST_OPERATOR_MAP, type ShellIf } from '../types.ts';
 import type { BuiltinHandler, BuiltinResult } from './types.ts';
 
 // File test operators that require shell delegation
@@ -110,7 +110,7 @@ async function evaluateExpr(
     // File tests - delegate to shell
     if (FILE_TEST_OPS.has(op)) {
       if (shell.testPath) {
-        return await shell.testPath(ctx, val, op as PathTestOperation, undefined);
+        return await shell.testPath(ctx, val, PATH_TEST_OPERATOR_MAP[op], undefined);
       }
 
       throw new Error(`'${op}' could not be evaluated, testPath is not defined in shell`);
@@ -138,7 +138,7 @@ async function evaluateExpr(
     // File comparisons - delegate to shell
     if (FILE_CMP_OPS.has(op)) {
       if (shell.testPath) {
-        return await shell.testPath(ctx, left, op as PathTestOperation, right);
+        return await shell.testPath(ctx, left, PATH_TEST_OPERATOR_MAP[op], right);
       }
 
       throw new Error(`'${op}' could not be evaluated, testPath is not defined in shell`);

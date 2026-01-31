@@ -69,6 +69,7 @@ export const declareBuiltin: BuiltinHandler = async (
   let setExport = false;
   let setInteger = false;
   let unsetReadonly = false;
+  let unsetExport = false;
   let showFunctions = false;
   let showFunctionNames = false;
 
@@ -200,6 +201,15 @@ export const declareBuiltin: BuiltinHandler = async (
     }
     if (setInteger) {
       ctx.setIntegerVar(name, true);
+    }
+    if (unsetExport) {
+      // Remove export attribute - move from env to params
+      const env = ctx.getEnv();
+      if (env[name] !== undefined) {
+        const currentValue = env[name];
+        ctx.setEnv({ [name]: null }); // Remove from env
+        ctx.setParams({ [name]: currentValue }); // Keep as local param
+      }
     }
 
     // Set value if provided

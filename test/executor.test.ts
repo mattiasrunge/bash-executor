@@ -78,3 +78,68 @@ fi
     );
   });
 });
+
+Deno.test('executeAndCapture', async (t) => {
+  await t.step('captures stdout', async () => {
+    const shell = new TestShell();
+    const result = await shell.executeAndCapture('echo "Hello, World!"');
+
+    assertEquals(result.code, 0);
+    assertEquals(result.stdout, 'Hello, World!\n');
+    assertEquals(result.stderr, '');
+  });
+
+  await t.step('captures multiple lines of stdout', async () => {
+    const shell = new TestShell();
+    const result = await shell.executeAndCapture('echo "line1"; echo "line2"');
+
+    assertEquals(result.code, 0);
+    assertEquals(result.stdout, 'line1\nline2\n');
+  });
+
+  await t.step('returns correct exit code on success', async () => {
+    const shell = new TestShell();
+    const result = await shell.executeAndCapture('true');
+
+    assertEquals(result.code, 0);
+  });
+
+  await t.step('returns correct exit code on failure', async () => {
+    const shell = new TestShell();
+    const result = await shell.executeAndCapture('exit 42');
+
+    assertEquals(result.code, 42);
+  });
+
+  await t.step('returns correct exit code from false', async () => {
+    const shell = new TestShell();
+    const result = await shell.executeAndCapture('false');
+
+    assertEquals(result.code, 1);
+  });
+
+  await t.step('handles syntax errors', async () => {
+    const shell = new TestShell();
+    const result = await shell.executeAndCapture('if then fi');
+
+    assertEquals(result.code, 1);
+    assertEquals(result.stdout, '');
+    assertEquals(result.stderr.includes('Error:'), true);
+  });
+
+  await t.step('captures command substitution output', async () => {
+    const shell = new TestShell();
+    const result = await shell.executeAndCapture('echo "value is $(echo test)"');
+
+    assertEquals(result.code, 0);
+    assertEquals(result.stdout, 'value is test\n');
+  });
+
+  await t.step('captures arithmetic output', async () => {
+    const shell = new TestShell();
+    const result = await shell.executeAndCapture('echo $((2 + 3))');
+
+    assertEquals(result.code, 0);
+    assertEquals(result.stdout, '5\n');
+  });
+});

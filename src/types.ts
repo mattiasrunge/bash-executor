@@ -50,7 +50,7 @@ export type ExecSyncResult = {
   code: number;
 };
 
-export const PATH_TEST_OPERATOR_MAP = {
+export const PATH_TEST_OPERATOR_MAP: Record<string, string> = {
   '-e': 'EXISTS',
   '-f': 'REGULAR_FILE',
   '-d': 'DIRECTORY',

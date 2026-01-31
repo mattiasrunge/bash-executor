@@ -1,4 +1,4 @@
-import { AstExecutor, createBuiltinRegistry, type ExecCommandOptions, ExecContext, type ExecContextIf, type ShellIf } from '../../mod.ts';
+import { AstExecutor, createBuiltinRegistry, type ExecCommandOptions, ExecContext, type ExecContextIf, type ExecSyncResult, type ShellIf } from '../../mod.ts';
 
 /**
  * PipeBuffer - Async pipe with proper backpressure and EOF signaling
@@ -191,12 +191,12 @@ export class TestShell implements ShellIf {
    * This method only registers mock versions of external commands like cat, grep, wc.
    */
   private registerBuiltins(): void {
-    // cat - read from stdin or echo args
+    // cat - read from stdin or echo args (outputs content as-is, no extra newline)
     this.mockCommands.set('cat', async (ctx, args) => {
       const stdin = ctx.getStdin();
       if (stdin !== '0' && this.pipes.has(stdin)) {
         const content = await this.pipeRead(stdin);
-        return { code: 0, stdout: content ? content + '\n' : '' };
+        return { code: 0, stdout: content };
       }
       return { code: 0, stdout: args.length > 0 ? args.join('\n') + '\n' : '' };
     });
@@ -302,8 +302,7 @@ export class TestShell implements ShellIf {
     const pipe = this.pipes.get(name);
     if (!pipe) return '';
 
-    const content = await pipe.readAll();
-    return content.replace(/\n$/, ''); // Trim trailing newline for command expansion
+    return await pipe.readAll();
   }
 
   async pipeWrite(name: string, data: string): Promise<void> {
@@ -375,6 +374,13 @@ export class TestShell implements ShellIf {
       params: { ...this.ctx.getParams() },
       env: { ...this.ctx.getEnv() },
     };
+  }
+
+  /**
+   * Run a script using executeAndCapture (captures via pipes)
+   */
+  async executeAndCapture(script: string): Promise<ExecSyncResult> {
+    return this.executor.executeAndCapture(script, this.ctx);
   }
 
   /**
