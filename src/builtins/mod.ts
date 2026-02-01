@@ -9,6 +9,7 @@
 export * from './types.ts';
 
 // Export individual builtins
+export { argBuiltin } from './arg.ts';
 export { aliasBuiltin, unaliasBuiltin } from './alias.ts';
 export { cdBuiltin } from './cd.ts';
 export { clearAttributes, declareBuiltin, isReadonly, typesetBuiltin } from './declare.ts';
@@ -42,6 +43,7 @@ export { bracketBuiltin, testBuiltin } from './test.ts';
 export { colonBuiltin, falseBuiltin, trueBuiltin } from './trivial.ts';
 export { exportBuiltin, localBuiltin, unsetBuiltin } from './variables.ts';
 
+import { argBuiltin } from './arg.ts';
 import { aliasBuiltin, unaliasBuiltin } from './alias.ts';
 import { cdBuiltin } from './cd.ts';
 import { declareBuiltin, typesetBuiltin } from './declare.ts';
@@ -126,6 +128,9 @@ export function createBuiltinRegistry(): BuiltinRegistry {
 
   // Phase 4: Shell options
   registry.set('set', setBuiltin);
+
+  // Phase 5: Argument parsing
+  registry.set('arg', argBuiltin);
 
   return registry;
 }
