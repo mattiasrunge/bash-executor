@@ -92,7 +92,7 @@ export const dirsBuiltin: BuiltinHandler = async (
 export const pushdBuiltin: BuiltinHandler = async (
   ctx: ExecContextIf,
   args: string[],
-  _shell: ShellIf,
+  shell: ShellIf,
 ): Promise<BuiltinResult> => {
   let noChange = false;
   let target: string | null = null;
@@ -119,6 +119,16 @@ export const pushdBuiltin: BuiltinHandler = async (
 
     const top = ctx.popDirStack()!;
     if (!noChange) {
+      if (shell.testPath) {
+        const isDir = await shell.testPath(ctx, top, 'DIRECTORY');
+        if (!isDir) {
+          ctx.pushDirStack(top); // Restore the stack
+          return {
+            code: 1,
+            stderr: `pushd: ${top}: No such file or directory\n`,
+          };
+        }
+      }
       ctx.setCwd(top);
       ctx.pushDirStack(currentDir);
     } else {
@@ -149,6 +159,15 @@ export const pushdBuiltin: BuiltinHandler = async (
     const rotated = [...stack.slice(index), ...stack.slice(0, index)];
 
     if (!noChange) {
+      if (shell.testPath) {
+        const isDir = await shell.testPath(ctx, rotated[0], 'DIRECTORY');
+        if (!isDir) {
+          return {
+            code: 1,
+            stderr: `pushd: ${rotated[0]}: No such file or directory\n`,
+          };
+        }
+      }
       ctx.setCwd(rotated[0]);
       ctx.clearDirStack();
       for (const dir of rotated.slice(1).reverse()) {
@@ -162,6 +181,17 @@ export const pushdBuiltin: BuiltinHandler = async (
 
   // Push directory
   const newDir = normalizePath(target, currentDir);
+
+  // Check if the directory exists
+  if (shell.testPath) {
+    const isDir = await shell.testPath(ctx, newDir, 'DIRECTORY');
+    if (!isDir) {
+      return {
+        code: 1,
+        stderr: `pushd: ${target}: No such file or directory\n`,
+      };
+    }
+  }
 
   if (!noChange) {
     ctx.pushDirStack(currentDir);
@@ -192,7 +222,7 @@ export const pushdBuiltin: BuiltinHandler = async (
 export const popdBuiltin: BuiltinHandler = async (
   ctx: ExecContextIf,
   args: string[],
-  _shell: ShellIf,
+  shell: ShellIf,
 ): Promise<BuiltinResult> => {
   let noChange = false;
   let target: string | null = null;
@@ -235,6 +265,16 @@ export const popdBuiltin: BuiltinHandler = async (
       // Pop current directory
       if (!noChange) {
         const newDir = ctx.popDirStack()!;
+        if (shell.testPath) {
+          const isDir = await shell.testPath(ctx, newDir, 'DIRECTORY');
+          if (!isDir) {
+            ctx.pushDirStack(newDir); // Restore the stack
+            return {
+              code: 1,
+              stderr: `popd: ${newDir}: No such file or directory\n`,
+            };
+          }
+        }
         ctx.setCwd(newDir);
         ctx.setEnv({ PWD: newDir, OLDPWD: currentDir });
       } else {
@@ -253,6 +293,16 @@ export const popdBuiltin: BuiltinHandler = async (
   const newDir = ctx.popDirStack()!;
 
   if (!noChange) {
+    if (shell.testPath) {
+      const isDir = await shell.testPath(ctx, newDir, 'DIRECTORY');
+      if (!isDir) {
+        ctx.pushDirStack(newDir); // Restore the stack
+        return {
+          code: 1,
+          stderr: `popd: ${newDir}: No such file or directory\n`,
+        };
+      }
+    }
     ctx.setCwd(newDir);
     ctx.setEnv({ PWD: newDir, OLDPWD: currentDir });
   }

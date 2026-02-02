@@ -27,7 +27,7 @@ function resolvePath(basePath: string, targetPath: string): string {
  * Note: The -L and -P options currently behave the same as we don't have
  * access to filesystem operations to resolve symlinks.
  */
-export const cdBuiltin: BuiltinHandler = async (ctx, args) => {
+export const cdBuiltin: BuiltinHandler = async (ctx, args, shell) => {
   // Parse options
   let _logical = true;
   const pathArgs: string[] = [];
@@ -74,6 +74,16 @@ export const cdBuiltin: BuiltinHandler = async (ctx, args) => {
       };
     }
     targetDir = oldpwd;
+    // Check if the directory exists
+    if (shell.testPath) {
+      const isDir = await shell.testPath(ctx, targetDir, 'DIRECTORY');
+      if (!isDir) {
+        return {
+          code: 1,
+          stderr: `cd: ${targetDir}: No such file or directory\n`,
+        };
+      }
+    }
     // Print the new directory when using cd -
     ctx.setCwd(targetDir);
     ctx.setEnv({ OLDPWD: currentDir, PWD: targetDir });
@@ -95,6 +105,17 @@ export const cdBuiltin: BuiltinHandler = async (ctx, args) => {
 
   // Resolve the target directory
   targetDir = resolvePath(currentDir, targetDir);
+
+  // Check if the directory exists
+  if (shell.testPath) {
+    const isDir = await shell.testPath(ctx, targetDir, 'DIRECTORY');
+    if (!isDir) {
+      return {
+        code: 1,
+        stderr: `cd: ${pathArgs[0] || targetDir}: No such file or directory\n`,
+      };
+    }
+  }
 
   // Update the context
   ctx.setCwd(targetDir);
