@@ -327,7 +327,7 @@ Deno.test('arg builtin', async (t) => {
   });
 
   await t.step('context isolation', async () => {
-    // Registry should be per-context
+    // Registry should be per-context (different root contexts)
     const ctx1 = new ExecContext();
     const ctx2 = new ExecContext();
 
@@ -339,5 +339,51 @@ Deno.test('arg builtin', async (t) => {
 
     // Should succeed with no error (no args defined means nothing to do)
     assertEquals(result.code, 0);
+  });
+
+  await t.step('spawned context shares registry with root', async () => {
+    // This tests the real-world scenario where each arg command
+    // runs in a different spawned context (via executeCommand)
+    const root = new ExecContext();
+    root.setParams({
+      '1': 'alice',
+      '2': '--verbose',
+      '#': '2',
+    });
+
+    // Simulate how the executor spawns a new context for each command
+    const ctx1 = root.spawnContext();
+    await argBuiltin(ctx1, ['<username>', 'string', 'User name'], mockShell, noopExecute);
+
+    const ctx2 = root.spawnContext();
+    await argBuiltin(ctx2, ['-v', '--verbose', 'Enable verbose mode'], mockShell, noopExecute);
+
+    const ctx3 = root.spawnContext();
+    await argBuiltin(ctx3, ['--export'], mockShell, noopExecute);
+
+    // Values should be exported to the environment (visible via root due to propagation)
+    assertEquals(root.getEnv()['USERNAME'], 'alice');
+    assertEquals(root.getEnv()['VERBOSE'], '1');
+  });
+
+  await t.step('subContext creates isolated registry', async () => {
+    // subContext creates a completely independent context (no parent link)
+    // This simulates script A calling script B
+    const scriptA = new ExecContext();
+    scriptA.setParams({ '1': 'from-A', '#': '1' });
+
+    await argBuiltin(scriptA.spawnContext(), ['<name>', 'string', 'Name'], mockShell, noopExecute);
+
+    // Script B gets its own isolated context via subContext
+    const scriptB = scriptA.subContext();
+    scriptB.setParams({ '1': 'from-B', '#': '1' });
+
+    await argBuiltin(scriptB.spawnContext(), ['<value>', 'string', 'Value'], mockShell, noopExecute);
+    await argBuiltin(scriptB.spawnContext(), ['--export'], mockShell, noopExecute);
+
+    // Script B should have its own exported value
+    assertEquals(scriptB.getEnv()['VALUE'], 'from-B');
+    // Script B should NOT have Script A's registry
+    assertEquals(scriptB.getEnv()['NAME'], undefined);
   });
 });

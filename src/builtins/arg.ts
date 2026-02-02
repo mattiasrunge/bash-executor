@@ -62,11 +62,24 @@ interface ArgRegistry {
 
 const argRegistries = new WeakMap<ExecContextIf, ArgRegistry>();
 
+/**
+ * Traverses up the context hierarchy to find the root context.
+ * This ensures all commands within a script share the same registry.
+ */
+function getRootContext(ctx: ExecContextIf): ExecContextIf {
+  let current = ctx;
+  while (current.getParent()) {
+    current = current.getParent()!;
+  }
+  return current;
+}
+
 function getOrCreateRegistry(ctx: ExecContextIf): ArgRegistry {
-  let registry = argRegistries.get(ctx);
+  const root = getRootContext(ctx);
+  let registry = argRegistries.get(root);
   if (!registry) {
     registry = { description: '', specs: [] };
-    argRegistries.set(ctx, registry);
+    argRegistries.set(root, registry);
   }
   return registry;
 }
@@ -544,7 +557,9 @@ export const argBuiltin: BuiltinHandler = async (
     }
 
     case 'export': {
-      const registry = argRegistries.get(ctx);
+      const root = getRootContext(ctx);
+      const registry = argRegistries.get(root);
+
       if (!registry || registry.specs.length === 0) {
         return { code: 0 }; // No args defined, nothing to do
       }
@@ -570,7 +585,7 @@ export const argBuiltin: BuiltinHandler = async (
         const helpText = generateHelp(registry, scriptName);
 
         // Clean up registry
-        argRegistries.delete(ctx);
+        argRegistries.delete(root);
 
         return { code: makeExitSignal(0), stdout: helpText };
       }
@@ -582,7 +597,7 @@ export const argBuiltin: BuiltinHandler = async (
         stderr += `Try '${scriptName} --help' for more information.\n`;
 
         // Clean up registry
-        argRegistries.delete(ctx);
+        argRegistries.delete(root);
 
         return { code: makeExitSignal(1), stderr };
       }
@@ -591,7 +606,7 @@ export const argBuiltin: BuiltinHandler = async (
       ctx.setEnv(result.values);
 
       // Clean up registry after export
-      argRegistries.delete(ctx);
+      argRegistries.delete(root);
 
       return { code: 0 };
     }

@@ -441,4 +441,10 @@ export interface ExecContextIf {
    * @returns {boolean} The standard error append flag.
    */
   getStderrAppend: () => boolean;
+
+  /**
+   * Gets the parent context, if any.
+   * @returns {ExecContextIf | undefined} The parent context or undefined if root.
+   */
+  getParent: () => ExecContextIf | undefined;
 }

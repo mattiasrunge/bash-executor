@@ -345,4 +345,8 @@ export class ExecContext implements ExecContextIf {
   getStderrAppend(): boolean {
     return !!this.io.stderrAppend;
   }
+
+  getParent(): ExecContextIf | undefined {
+    return this.parent;
+  }
 }
