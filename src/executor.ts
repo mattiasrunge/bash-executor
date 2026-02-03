@@ -1124,12 +1124,13 @@ export class AstExecutor {
 
     const hasPathExpansion = node.expansion.some((xp) => xp.type === 'PathExpansion' && !xp.resolved);
     const value = rValue.text;
-    const unquotedResult = utils.unquoteWord(value);
-    let result = { values: [value], code: 0 };
+    const protectedRanges = rValue.protectedRanges;
 
-    if (unquotedResult.values.length > 0) {
-      result = { values: unquotedResult.values.map(utils.unescape), code: 0 };
-    }
+    // Use unquoteWordWithProtectedRanges to preserve quotes that came from expansions
+    // (e.g., JSON content like {"key":"value"} should keep its quotes)
+    // This also preserves word splitting behavior for unquoted expansions
+    const unquotedResult = utils.unquoteWordWithProtectedRanges(value, protectedRanges);
+    const result = { values: unquotedResult.values, code: 0 };
 
     // Path globbing expansion must be done last
     if (hasPathExpansion && this.shell.resolvePath) {
