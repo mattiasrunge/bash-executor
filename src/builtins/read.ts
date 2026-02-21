@@ -16,6 +16,7 @@ function parseOptions(args: string[]): {
   raw: boolean;
   silent: boolean;
   nChars: number | null;
+  fd: string | null;
   varNames: string[];
 } {
   const options = {
@@ -24,6 +25,7 @@ function parseOptions(args: string[]): {
     raw: false,
     silent: false,
     nChars: null as number | null,
+    fd: null as string | null,
     varNames: [] as string[],
   };
 
@@ -46,6 +48,9 @@ function parseOptions(args: string[]): {
     } else if (arg === '-n' && i + 1 < args.length) {
       // Read exactly n characters
       options.nChars = Number.parseInt(args[++i], 10);
+    } else if (arg === '-u' && i + 1 < args.length) {
+      // Read from file descriptor
+      options.fd = args[++i];
     } else if (!arg.startsWith('-')) {
       // Variable names start here
       options.varNames = args.slice(i);
@@ -137,9 +142,9 @@ function processEscapes(str: string): string {
 /**
  * The read builtin command.
  *
- * Reads a line from standard input and splits it into words which are
- * assigned to the named variables. If there are more words than names,
- * the remaining words are all assigned to the last name.
+ * Reads a line from standard input (or specified FD) and splits it into
+ * words which are assigned to the named variables. If there are more
+ * words than names, the remaining words are all assigned to the last name.
  *
  * Options:
  * -p prompt  Display prompt before reading
@@ -147,15 +152,11 @@ function processEscapes(str: string): string {
  * -r         Raw mode: don't interpret backslash escapes
  * -s         Silent mode: don't echo input
  * -n num     Read exactly num characters
+ * -u fd      Read from file descriptor fd instead of stdin
  *
  * If no variable names are given, the line is stored in REPLY.
  *
  * Returns 0 on success, 1 on EOF or error.
- *
- * @example
- * read name age      -> reads "John 25" into name=John, age=25
- * read -p "Name: " n -> prompts "Name: " then reads into n
- * read -r line       -> reads without backslash processing
  */
 export const readBuiltin: BuiltinHandler = async (
   ctx: ExecContextIf,
@@ -169,30 +170,39 @@ export const readBuiltin: BuiltinHandler = async (
     await shell.pipeWrite(ctx.getStdout(), options.prompt);
   }
 
-  // Read from stdin
+  // Determine which FD to read from
+  const fd = options.fd || ctx.getStdin();
+
+  // Read one line from the FD
   let input: string;
   try {
-    input = await shell.pipeRead(ctx.getStdin());
+    if (shell.pipeReadLine) {
+      const line = await shell.pipeReadLine(fd, options.delimiter);
+      if (line === null) {
+        return { code: 1 };
+      }
+      input = line;
+    } else {
+      // Fallback for shells without pipeReadLine
+      input = await shell.pipeRead(fd);
+      if (input === '') {
+        return { code: 1 };
+      }
+      // Strip trailing delimiter
+      if (input.endsWith(options.delimiter)) {
+        input = input.slice(0, -options.delimiter.length);
+      } else if (input.endsWith('\n')) {
+        input = input.slice(0, -1);
+      }
+    }
   } catch {
     // EOF or read error
-    return { code: 1 };
-  }
-
-  // Handle empty input
-  if (input === '') {
     return { code: 1 };
   }
 
   // Handle -n option (read n characters)
   if (options.nChars !== null && options.nChars > 0) {
     input = input.slice(0, options.nChars);
-  }
-
-  // Remove trailing delimiter
-  if (input.endsWith(options.delimiter)) {
-    input = input.slice(0, -options.delimiter.length);
-  } else if (input.endsWith('\n')) {
-    input = input.slice(0, -1);
   }
 
   // Process backslash escapes unless -r is specified

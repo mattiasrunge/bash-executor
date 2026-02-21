@@ -161,6 +161,33 @@ export interface ShellIf {
   pipeToFile: (ctx: ExecContextIf, pipe: string, path: string, append: boolean) => Promise<void>;
 
   /**
+   * Opens an existing path as a file descriptor with the given mode.
+   * Unlike pipeOpen which creates a new ephemeral pipe, this opens an existing resource.
+   * @param {ExecContextIf} ctx - The execution context.
+   * @param {string} path - The path to open.
+   * @param {string} mode - The open mode (e.g. 'r', 'r+', 'w+').
+   * @param {string} [fd] - Optional FD number to assign. If not given, next free FD is used.
+   * @returns {Promise<string>} The assigned FD number.
+   */
+  fdOpen?: (ctx: ExecContextIf, path: string, mode: string, fd?: string) => Promise<string>;
+
+  /**
+   * Closes a file descriptor opened with fdOpen. Closes the handle without unlinking the resource.
+   * @param {string} fd - The file descriptor to close.
+   * @returns {Promise<void>}
+   */
+  fdClose?: (fd: string) => Promise<void>;
+
+  /**
+   * Reads one line (up to delimiter) from a file descriptor. Keeps the handle open between calls.
+   * Returns null on EOF.
+   * @param {string} fd - The file descriptor to read from.
+   * @param {string} [delimiter] - Line delimiter, defaults to '\n'.
+   * @returns {Promise<string | null>} The line without the delimiter, or null on EOF.
+   */
+  pipeReadLine?: (fd: string, delimiter?: string) => Promise<string | null>;
+
+  /**
    * A callback to resolve path globbing. If specified, the parser calls it whenever it needs to resolve path globbing. It should return the expanded path. If the option is not specified, the parser won't try to resolve any path globbing.
    *
    * @param ctx - The execution context.
@@ -447,4 +474,25 @@ export interface ExecContextIf {
    * @returns {ExecContextIf | undefined} The parent context or undefined if root.
    */
   getParent: () => ExecContextIf | undefined;
+
+  /**
+   * Gets the target for an arbitrary file descriptor (0-2 map to stdin/stdout/stderr).
+   * @param {string} fd - The file descriptor number.
+   * @returns {string | undefined} The target pipe/file name or undefined if not set.
+   */
+  getFd: (fd: string) => string | undefined;
+
+  /**
+   * Redirects an arbitrary file descriptor. For 0-2 delegates to redirectStdin/Stdout/Stderr.
+   * FDs 3+ propagate to parent context (shell-level persistence for exec).
+   * @param {string} fd - The file descriptor number.
+   * @param {string} target - The target pipe/file name.
+   */
+  redirectFd: (fd: string, target: string) => void;
+
+  /**
+   * Closes an arbitrary file descriptor by removing it from the context.
+   * @param {string} fd - The file descriptor number.
+   */
+  closeFd: (fd: string) => void;
 }

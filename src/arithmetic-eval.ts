@@ -211,7 +211,7 @@ export async function evaluateArithmetic(
 
       try {
         await options.executeNode(cmdNode.commandAST, cmdCtx);
-        await options.shell.pipeWrite(cmdCtx.getStdout(), '');
+        await options.shell.pipeClose(cmdCtx.getStdout());
         const output = await options.shell.pipeRead(cmdCtx.getStdout());
         const trimmed = output.trim();
         return trimmed === '' ? 0 : Number.parseInt(trimmed, 10) || 0;

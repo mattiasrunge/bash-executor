@@ -174,6 +174,16 @@ Deno.test('Conditional Command [[]]', async (t) => {
     assertEquals(result.exitCode, 0);
   });
 
+  await t.step('[[ =~ ]] sets BASH_REMATCH with capture groups', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture(`
+      if [[ "2024:03:15" =~ ^([0-9]{4}):([0-9]{2}):([0-9]{2})$ ]]; then
+        echo "\${BASH_REMATCH[0]} \${BASH_REMATCH[1]} \${BASH_REMATCH[2]} \${BASH_REMATCH[3]}"
+      fi
+    `);
+    assertEquals(result.stdout, '2024:03:15 2024 03 15\n');
+  });
+
   // Logical operators
   await t.step('[[ cond1 && cond2 ]] both true', async () => {
     const shell = new TestShell();

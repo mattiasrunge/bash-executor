@@ -171,6 +171,9 @@ export class TestShell implements ShellIf {
   private mockCommands: Map<string, MockCommandHandler>;
   private capturedStdout: string[];
   private capturedStderr: string[];
+  private files: Map<string, string>;
+  private fdReadBuffers: Map<string, string>;
+  private decoder = new TextDecoder();
 
   constructor() {
     this.executor = new AstExecutor(this, { builtins: createBuiltinRegistry() });
@@ -180,6 +183,8 @@ export class TestShell implements ShellIf {
     this.mockCommands = new Map();
     this.capturedStdout = [];
     this.capturedStderr = [];
+    this.files = new Map();
+    this.fdReadBuffers = new Map();
 
     this.registerBuiltins();
   }
@@ -335,16 +340,69 @@ export class TestShell implements ShellIf {
     return this.pipes.has(name);
   }
 
-  async pipeFromFile(_ctx: ExecContextIf, _path: string, _pipe: string): Promise<void> {
-    // TestShell doesn't support file I/O - this is a no-op for tests
-    // Real implementations would read from path and write to pipe
-    throw new Error('pipeFromFile not implemented in TestShell');
+  async pipeFromFile(_ctx: ExecContextIf, path: string, pipe: string): Promise<void> {
+    const content = this.files.get(path) || '';
+    if (content) {
+      await this.pipeWrite(pipe, content);
+    }
+    await this.pipeClose(pipe);
   }
 
-  async pipeToFile(_ctx: ExecContextIf, _pipe: string, _path: string, _append: boolean): Promise<void> {
-    // TestShell doesn't support file I/O - this is a no-op for tests
-    // Real implementations would read from pipe and write to path
-    throw new Error('pipeToFile not implemented in TestShell');
+  async pipeToFile(_ctx: ExecContextIf, pipe: string, path: string, append: boolean): Promise<void> {
+    const content = await this.pipeRead(pipe);
+    if (append) {
+      const existing = this.files.get(path) || '';
+      this.files.set(path, existing + content);
+    } else {
+      this.files.set(path, content);
+    }
+  }
+
+  async fdOpen(_ctx: ExecContextIf, path: string, _mode: string, fd?: string): Promise<string> {
+    fd = fd ?? `pipe_${++this.pipeCounter}`;
+    const pipe = new PipeBuffer();
+    // Pre-load file content if it exists, then close to signal EOF for reads
+    const content = this.files.get(path);
+    if (content !== undefined) {
+      if (content.length > 0) {
+        await pipe.write(content);
+      }
+      pipe.close();
+    }
+    this.pipes.set(fd, pipe);
+    return fd;
+  }
+
+  async fdClose(fd: string): Promise<void> {
+    const pipe = this.pipes.get(fd);
+    if (pipe && !pipe.isClosed) {
+      pipe.close();
+    }
+    this.pipes.delete(fd);
+    this.fdReadBuffers.delete(fd);
+  }
+
+  async pipeReadLine(fd: string, delimiter = '\n'): Promise<string | null> {
+    const pipe = this.pipes.get(fd);
+    if (!pipe) return null;
+
+    let buffer = this.fdReadBuffers.get(fd) || '';
+
+    while (true) {
+      const idx = buffer.indexOf(delimiter);
+      if (idx !== -1) {
+        this.fdReadBuffers.set(fd, buffer.substring(idx + delimiter.length));
+        return buffer.substring(0, idx);
+      }
+
+      const chunk = await pipe.read(4096);
+      if (chunk.length === 0) {
+        this.fdReadBuffers.delete(fd);
+        return buffer.length > 0 ? buffer : null;
+      }
+
+      buffer += this.decoder.decode(chunk);
+    }
   }
 
   // Test utilities
@@ -440,6 +498,20 @@ export class TestShell implements ShellIf {
   }
 
   /**
+   * Get the content of a virtual file
+   */
+  getFile(path: string): string {
+    return this.files.get(path) || '';
+  }
+
+  /**
+   * Set the content of a virtual file
+   */
+  setFile(path: string, content: string): void {
+    this.files.set(path, content);
+  }
+
+  /**
    * Register a mock command for testing
    */
   mockCommand(name: string, handler: MockCommandHandler): void {
@@ -463,6 +535,8 @@ export class TestShell implements ShellIf {
     this.pipeCounter = 0;
     this.capturedStdout = [];
     this.capturedStderr = [];
+    this.files.clear();
+    this.fdReadBuffers.clear();
     this.clearMocks();
   }
 }

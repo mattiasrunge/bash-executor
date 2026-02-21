@@ -17,6 +17,7 @@ export class ExecContext implements ExecContextIf {
   private readonlyVars = new Set<string>();
   private integerVars = new Set<string>();
   private dirStack: string[] = [];
+  private fds: Record<string, string> = {};
 
   constructor(parent?: ExecContext) {
     if (parent) {
@@ -69,6 +70,9 @@ export class ExecContext implements ExecContextIf {
     for (const dir of this.getDirStack().reverse()) {
       ctx.pushDirStack(dir);
     }
+
+    // Copy arbitrary file descriptors
+    ctx.fds = { ...this.fds };
 
     return ctx;
   }
@@ -344,6 +348,43 @@ export class ExecContext implements ExecContextIf {
 
   getStderrAppend(): boolean {
     return !!this.io.stderrAppend;
+  }
+
+  getFd(fd: string): string | undefined {
+    if (fd === '0') return this.getStdin();
+    if (fd === '1') return this.getStdout();
+    if (fd === '2') return this.getStderr();
+    if (this.fds[fd]) return this.fds[fd];
+    if (this.parent) return this.parent.getFd(fd);
+    return undefined;
+  }
+
+  redirectFd(fd: string, target: string): void {
+    if (fd === '0') {
+      this.redirectStdin(target);
+      return;
+    }
+    if (fd === '1') {
+      this.redirectStdout(target);
+      return;
+    }
+    if (fd === '2') {
+      this.redirectStderr(target);
+      return;
+    }
+    if (this.parent) {
+      this.parent.redirectFd(fd, target);
+      return;
+    }
+    this.fds[fd] = target;
+  }
+
+  closeFd(fd: string): void {
+    if (this.parent) {
+      this.parent.closeFd(fd);
+      return;
+    }
+    delete this.fds[fd];
   }
 
   getParent(): ExecContextIf | undefined {

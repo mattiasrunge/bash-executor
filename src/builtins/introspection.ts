@@ -27,8 +27,8 @@ async function captureCommandOutput(
     const code = await shell.execute(cmdCtx, name, args, {});
 
     // Signal EOF
-    await shell.pipeWrite(stdoutPipe, '');
-    await shell.pipeWrite(stderrPipe, '');
+    await shell.pipeClose(stdoutPipe);
+    await shell.pipeClose(stderrPipe);
 
     const stdout = await shell.pipeRead(stdoutPipe);
     const stderr = await shell.pipeRead(stderrPipe);

@@ -51,6 +51,21 @@ Deno.test('Prefix Variable Assignment', async (t) => {
     const result = await shell.runAndCapture('A=1 B=2 printvars');
     assertEquals(result.stdout, 'A=1,B=2');
   });
+
+  await t.step('prefix assignment does not leak to subsequent commands', async () => {
+    const shell = new TestShell();
+    shell.mockCommand('noop', async () => {
+      return { code: 0 };
+    });
+    const result = await shell.runAndCapture('VAR=123 noop; echo $VAR');
+    assertEquals(result.stdout, '\n');
+  });
+
+  await t.step('bare assignment persists in shell', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('VAR=123; echo $VAR');
+    assertEquals(result.stdout, '123\n');
+  });
 });
 
 Deno.test('Parameter Expansion', async (t) => {

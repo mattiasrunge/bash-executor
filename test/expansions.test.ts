@@ -130,6 +130,105 @@ Deno.test('Parameter Expansion', async (t) => {
   });
 });
 
+Deno.test('Parameter Expansion Operations', async (t) => {
+  await t.step('${var//pattern/replacement} global replace', async () => {
+    const shell = new TestShell();
+    shell.setParams({ TEXT: 'hello world' });
+    const result = await shell.runAndCapture('echo "${TEXT// /_}"');
+    assertEquals(result.stdout, 'hello_world\n');
+  });
+
+  await t.step('${var/pattern/replacement} single replace', async () => {
+    const shell = new TestShell();
+    shell.setParams({ TEXT: 'aabaa' });
+    const result = await shell.runAndCapture('echo "${TEXT/a/x}"');
+    assertEquals(result.stdout, 'xabaa\n');
+  });
+
+  await t.step('${var// /} remove all spaces', async () => {
+    const shell = new TestShell();
+    shell.setParams({ TEXT: 'a b c' });
+    const result = await shell.runAndCapture('echo "${TEXT// /}"');
+    assertEquals(result.stdout, 'abc\n');
+  });
+
+  await t.step('${var:-default} use default when empty', async () => {
+    const shell = new TestShell();
+    shell.setParams({ EMPTY: '' });
+    const result = await shell.runAndCapture('echo "${EMPTY:-fallback}"');
+    assertEquals(result.stdout, 'fallback\n');
+  });
+
+  await t.step('${var:-default} use value when set', async () => {
+    const shell = new TestShell();
+    shell.setParams({ SET: 'original' });
+    const result = await shell.runAndCapture('echo "${SET:-fallback}"');
+    assertEquals(result.stdout, 'original\n');
+  });
+
+  await t.step('${var:-default} use default when unset', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('echo "${UNSET:-fallback}"');
+    assertEquals(result.stdout, 'fallback\n');
+  });
+
+  await t.step('${#var} string length', async () => {
+    const shell = new TestShell();
+    shell.setParams({ TEXT: 'hello' });
+    const result = await shell.runAndCapture('echo "${#TEXT}"');
+    assertEquals(result.stdout, '5\n');
+  });
+
+  await t.step('${var:offset:length} substring', async () => {
+    const shell = new TestShell();
+    shell.setParams({ TEXT: 'hello world' });
+    const result = await shell.runAndCapture('echo "${TEXT:6:5}"');
+    assertEquals(result.stdout, 'world\n');
+  });
+
+  await t.step('${var:offset} substring to end', async () => {
+    const shell = new TestShell();
+    shell.setParams({ TEXT: 'hello world' });
+    const result = await shell.runAndCapture('echo "${TEXT:6}"');
+    assertEquals(result.stdout, 'world\n');
+  });
+
+  await t.step('nested ${a:-${b}} defaults', async () => {
+    const shell = new TestShell();
+    shell.setParams({ B: 'from_b' });
+    const result = await shell.runAndCapture('echo "${A:-${B}}"');
+    assertEquals(result.stdout, 'from_b\n');
+  });
+
+  await t.step('${var%pattern} remove shortest suffix', async () => {
+    const shell = new TestShell();
+    shell.setParams({ FILE: 'test.tar.gz' });
+    const result = await shell.runAndCapture('echo "${FILE%.*}"');
+    assertEquals(result.stdout, 'test.tar\n');
+  });
+
+  await t.step('${var%%pattern} remove longest suffix', async () => {
+    const shell = new TestShell();
+    shell.setParams({ FILE: 'test.tar.gz' });
+    const result = await shell.runAndCapture('echo "${FILE%%.*}"');
+    assertEquals(result.stdout, 'test\n');
+  });
+
+  await t.step('${var#pattern} remove shortest prefix', async () => {
+    const shell = new TestShell();
+    shell.setParams({ PATH_VAR: '/home/user/file.txt' });
+    const result = await shell.runAndCapture('echo "${PATH_VAR#*/}"');
+    assertEquals(result.stdout, 'home/user/file.txt\n');
+  });
+
+  await t.step('${var##pattern} remove longest prefix', async () => {
+    const shell = new TestShell();
+    shell.setParams({ PATH_VAR: '/home/user/file.txt' });
+    const result = await shell.runAndCapture('echo "${PATH_VAR##*/}"');
+    assertEquals(result.stdout, 'file.txt\n');
+  });
+});
+
 Deno.test('Mixed Expansions', async (t) => {
   await t.step('parameter and command expansion together', async () => {
     const shell = new TestShell();

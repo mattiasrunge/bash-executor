@@ -162,8 +162,8 @@ export class AstExecutor {
       const code = await this.execute(source, cmdCtx);
 
       // Send EOF so reads do not block
-      await this.shell.pipeWrite(stdoutFd, '');
-      await this.shell.pipeWrite(stderrFd, '');
+      await this.shell.pipeClose(stdoutFd);
+      await this.shell.pipeClose(stderrFd);
 
       // Read all output
       const stdout = await this.shell.pipeRead(stdoutFd);
@@ -224,44 +224,45 @@ export class AstExecutor {
     }
   }
 
-  protected applyRedirections(ctx: ExecContextIf, redirects?: AstNodeRedirect[]) {
+  protected async applyRedirections(ctx: ExecContextIf, redirects?: AstNodeRedirect[]) {
     for (const r of (redirects || [])) {
+      const { code, values } = await this.resolveExpansions(r.file, ctx);
+      const target = code === 0 ? values[0] || r.file.text : r.file.text;
+
       if (r.op.text === '<') {
-        ctx.redirectStdin(r.file.text);
+        ctx.redirectStdin(target);
       } else if (r.op.text === '>') {
         if (r.numberIo?.text === '2') {
-          ctx.redirectStderr(r.file.text);
+          ctx.redirectStderr(target);
         } else {
-          ctx.redirectStdout(r.file.text);
+          ctx.redirectStdout(target);
         }
       } else if (r.op.text === '>>') {
         // TODO: Implement append redirection
         if (r.numberIo?.text === '2') {
-          ctx.redirectStderr(r.file.text, true);
+          ctx.redirectStderr(target, true);
         } else {
-          ctx.redirectStdout(r.file.text, true);
+          ctx.redirectStdout(target, true);
         }
       } else if (r.op.text === '>&') {
-        const target = r.file.text;
         const sourceFd = r.numberIo?.text;
+
+        // Close FD: N>&- or >&-
+        if (target === '-') {
+          const fd = sourceFd || '1';
+          await this.shell.fdClose?.(fd);
+          ctx.closeFd(fd);
+          continue;
+        }
 
         // Check if target is a numeric file descriptor (fd duplication)
         if (/^\d+$/.test(target)) {
           // Get current destination of target fd
-          let targetDest: string;
-          if (target === '0') {
-            targetDest = ctx.getStdin();
-          } else if (target === '1') {
-            targetDest = ctx.getStdout();
-          } else if (target === '2') {
-            targetDest = ctx.getStderr();
-          } else {
-            targetDest = target; // Fallback for unknown fds
-          }
+          const targetDest = ctx.getFd(target) ?? target;
 
           // Redirect source fd to target's destination
-          if (sourceFd === '2') {
-            ctx.redirectStderr(targetDest);
+          if (sourceFd) {
+            ctx.redirectFd(sourceFd, targetDest);
           } else {
             ctx.redirectStdout(targetDest);
           }
@@ -272,6 +273,27 @@ export class AstExecutor {
           } else {
             ctx.redirectStdout(target);
           }
+        }
+      } else if (r.op.text === '<&') {
+        const sourceFd = r.numberIo?.text || '0';
+
+        // Close FD: N<&- or <&-
+        if (target === '-') {
+          await this.shell.fdClose?.(sourceFd);
+          ctx.closeFd(sourceFd);
+          continue;
+        }
+
+        if (/^\d+$/.test(target)) {
+          const targetDest = ctx.getFd(target) ?? target;
+          ctx.redirectFd(sourceFd, targetDest);
+        } else {
+          ctx.redirectStdin(target);
+        }
+      } else if (r.op.text === '<>') {
+        const fd = r.numberIo?.text || '0';
+        if (this.shell.fdOpen) {
+          await this.shell.fdOpen(ctx, target, 'r+', fd);
         }
       }
     }
@@ -306,6 +328,16 @@ export class AstExecutor {
   }
 
   protected async executeCommand(node: AstNodeCommand, parentCtx: ExecContextIf): Promise<number> {
+    // Handle exec: apply redirections to parent context, ignore args
+    if (node.name) {
+      const earlyName = await this.resolveExpansions(node.name, parentCtx);
+      if (earlyName.code === 0 && earlyName.values[0] === 'exec') {
+        const redirects = node.suffix?.filter((arg) => arg.type === 'Redirect') as AstNodeRedirect[] | undefined;
+        await this.applyRedirections(parentCtx, redirects);
+        return 0;
+      }
+    }
+
     // Create an execution context
     const ctx = parentCtx.spawnContext();
 
@@ -321,14 +353,17 @@ export class AstExecutor {
       }
 
       for (const value of values) {
-        const [k, v] = value.split('=');
-        params[k] = v;
+        const eqIdx = value.indexOf('=');
+        if (eqIdx !== -1) {
+          params[value.slice(0, eqIdx)] = value.slice(eqIdx + 1);
+        }
       }
     }
-    ctx.setParams(params);
-
-    // There is no command name, nothing to execute
-    if (!node?.name) {
+    // Bare assignments (no command) persist in shell, prefix assignments are scoped to the command
+    if (node?.name) {
+      ctx.setLocalParams(params);
+    } else {
+      ctx.setParams(params);
       return 0;
     }
 
@@ -347,7 +382,7 @@ export class AstExecutor {
     }
 
     // Apply IO redirections
-    this.applyRedirections(ctx, node.suffix?.filter((arg) => arg.type === 'Redirect'));
+    await this.applyRedirections(ctx, node.suffix?.filter((arg) => arg.type === 'Redirect'));
 
     // Expand command
     const expandedName = await this.resolveExpansions(node.name, ctx);
@@ -361,39 +396,41 @@ export class AstExecutor {
     const cmdName = expandedName.values[0]; // TODO: Can we expand to more than one value here?
     let code: number;
 
-    // Check for builtin first
-    const builtin = this.builtins?.get(cmdName);
-    if (builtin) {
-      const execute = (script: string) => this.execute(script, ctx);
-      const result = await builtin(ctx, args || [], this.shell, execute);
+    return this.withFileBridging(ctx, async () => {
+      // Check for builtin first
+      const builtin = this.builtins?.get(cmdName);
+      if (builtin) {
+        const execute = (script: string) => this.execute(script, ctx);
+        const result = await builtin(ctx, args || [], this.shell, execute);
 
-      // Write stdout/stderr if present
-      if (result.stdout) {
-        await this.shell.pipeWrite(ctx.getStdout(), result.stdout);
-      }
-      if (result.stderr) {
-        await this.shell.pipeWrite(ctx.getStderr(), result.stderr);
-      }
-      code = result.code;
-    } else {
-      // Check for function
-      const fn = ctx.getFunction(cmdName);
-      if (fn) {
-        code = await this.executeFunction(ctx, fn, args || []);
+        // Write stdout/stderr if present
+        if (result.stdout) {
+          await this.shell.pipeWrite(ctx.getStdout(), result.stdout);
+        }
+        if (result.stderr) {
+          await this.shell.pipeWrite(ctx.getStderr(), result.stderr);
+        }
+        code = result.code;
       } else {
-        // Execute external command
-        code = await this.shell.execute(
-          ctx,
-          cmdName,
-          args || [],
-          {
-            async: node.async,
-          },
-        );
+        // Check for function
+        const fn = ctx.getFunction(cmdName);
+        if (fn) {
+          code = await this.executeFunction(ctx, fn, args || []);
+        } else {
+          // Execute external command
+          code = await this.shell.execute(
+            ctx,
+            cmdName,
+            args || [],
+            {
+              async: node.async,
+            },
+          );
+        }
       }
-    }
 
-    return node.bang ? (code === 0 ? 1 : 0) : code;
+      return node.bang ? (code === 0 ? 1 : 0) : code;
+    });
   }
 
   /**
@@ -588,27 +625,25 @@ export class AstExecutor {
 
   protected async executeCompondList(node: AstNodeCompoundList, parentCtx: ExecContextIf): Promise<number> {
     const ctx = parentCtx.spawnContext();
-    this.applyRedirections(ctx, node.redirections);
+    await this.applyRedirections(ctx, node.redirections);
+
+    let lastCode = 0;
 
     for (const command of node.commands) {
-      const code = await this.executeNode(command, ctx);
+      lastCode = await this.executeNode(command, ctx);
 
-      // Propagate exit and return signals immediately
-      if (isExitSignal(code) || isReturnSignal(code)) {
-        return code;
-      }
-
-      if (code !== 0) {
-        return code;
+      // Propagate exit, return, break, and continue signals immediately
+      if (isExitSignal(lastCode) || isReturnSignal(lastCode) || lastCode === CONTINUE_CODE || lastCode === BREAK_CODE) {
+        return lastCode;
       }
     }
 
-    return 0;
+    return lastCode;
   }
 
   protected async registerFunction(node: AstNodeFunction, parentCtx: ExecContextIf): Promise<number> {
     const ctx = parentCtx.spawnContext();
-    this.applyRedirections(ctx, node.redirections);
+    await this.applyRedirections(ctx, node.redirections);
     parentCtx.setFunction(node.name.text, node.body, ctx);
 
     return 0;
@@ -727,6 +762,9 @@ export class AstExecutor {
       });
 
       if (matched) {
+        if (!caseItem.body) {
+          return 0;
+        }
         return await this.executeNode(caseItem.body, ctx);
       }
     }
@@ -956,10 +994,21 @@ export class AstExecutor {
 
     // Regex matching
     if (op === '=~') {
-      const rightText = await this.expandConditionalWord(node.right, ctx);
+      // For =~, use the raw text with only variable expansion (no unquoting)
+      // since shell metacharacters like () | are valid regex syntax
+      const rightText = await this.expandConditionalRegex(node.right, ctx);
       try {
         const regex = new RegExp(rightText);
-        return regex.test(left);
+        const match = left.match(regex);
+        if (match) {
+          const rematch: Record<string, string> = {};
+          for (let i = 0; i < match.length; i++) {
+            rematch[`BASH_REMATCH[${i}]`] = match[i] ?? '';
+          }
+          ctx.setParams(rematch);
+          return true;
+        }
+        return false;
       } catch {
         // Invalid regex - return false
         return false;
@@ -1032,7 +1081,7 @@ export class AstExecutor {
 
         try {
           await this.executeNode(xp.commandAST, cmdCtx);
-          await this.shell.pipeWrite(cmdCtx.getStdout(), '');
+          await this.shell.pipeClose(cmdCtx.getStdout());
           const output = await this.shell.pipeRead(cmdCtx.getStdout());
           rValue.replace(xp.loc!.start, xp.loc!.end + 1, output.trimEnd());
         } finally {
@@ -1048,6 +1097,35 @@ export class AstExecutor {
     // Process quotes but NOT word splitting (key difference from [ ])
     const unquoted = utils.unquoteWord(rValue.text);
     return utils.unescape(unquoted.values[0] ?? rValue.text);
+  }
+
+  /**
+   * Expands the right-hand side of =~ without unquoting (preserves regex metacharacters).
+   */
+  protected async expandConditionalRegex(
+    word: AstConditionalWord,
+    ctx: ExecContextIf,
+  ): Promise<string> {
+    if (!word.expansion || word.expansion.length === 0) {
+      return word.text;
+    }
+
+    const rValue = new utils.ReplaceString(word.text);
+
+    for (const xp of word.expansion) {
+      if (xp.resolved) continue;
+
+      if (xp.type === 'ParameterExpansion') {
+        const params = { ...ctx.getEnv(), ...ctx.getParams() };
+        rValue.replace(
+          xp.loc!.start,
+          xp.loc!.end + 1,
+          params[xp.parameter!] || '',
+        );
+      }
+    }
+
+    return rValue.text;
   }
 
   protected async resolveExpansions(node: AstNodeWord | AstNodeAssignmentWord, ctx: ExecContextIf): Promise<{ values: string[]; code: number }> {
@@ -1074,17 +1152,96 @@ export class AstExecutor {
       }
 
       if (xp.type === 'ParameterExpansion') {
-        // TODO: Handle kind and op word if needed
         const params = {
           ...ctx.getEnv(),
           ...ctx.getParams(),
         };
 
-        rValue.replace(
-          xp.loc!.start,
-          xp.loc!.end + 1,
-          params[xp.parameter!] || '',
-        );
+        // Special handling for $@ - expand to individual positional parameters
+        // In bash, "$@" expands to "$1" "$2" ... "$n" (each as a separate word)
+        if (xp.parameter === '@' && node.expansion!.length === 1) {
+          const count = parseInt(params['#'] || '0', 10);
+          const positionalArgs: string[] = [];
+          for (let i = 1; i <= count; i++) {
+            if (params[String(i)] !== undefined) {
+              positionalArgs.push(params[String(i)]);
+            }
+          }
+
+          // If the word is just "$@" or $@, return args as separate values
+          const textWithoutExpansion = node.text.slice(0, xp.loc!.start) + node.text.slice(xp.loc!.end + 1);
+          const stripped = textWithoutExpansion.replace(/"/g, '');
+          if (stripped === '') {
+            return { values: positionalArgs, code: 0 };
+          }
+
+          // $@ is part of a larger string, join with space
+          rValue.replace(xp.loc!.start, xp.loc!.end + 1, positionalArgs.join(' '));
+        } else {
+          const xpAny = xp as Record<string, unknown>;
+          const paramValue = params[xp.parameter!] ?? '';
+
+          let resolved: string;
+
+          if (xpAny.op === 'stringReplace') {
+            const pattern = String(xpAny.substitute ?? '');
+            const replacement = String(xpAny.replace ?? '');
+            if (xpAny.globally) {
+              resolved = paramValue.split(pattern).join(replacement);
+            } else {
+              const idx = paramValue.indexOf(pattern);
+              if (idx === -1) {
+                resolved = paramValue;
+              } else {
+                resolved = paramValue.slice(0, idx) + replacement + paramValue.slice(idx + pattern.length);
+              }
+            }
+          } else if (xpAny.op === 'useDefaultValue') {
+            // ${var:-word} — use word if var is unset or empty
+            resolved = paramValue || await this.resolveWordValue(xpAny.word, ctx);
+          } else if (xpAny.op === 'useDefaultValueIfUnset') {
+            // ${var-word} — use word if var is unset
+            resolved = params[xp.parameter!] !== undefined ? paramValue : await this.resolveWordValue(xpAny.word, ctx);
+          } else if (xpAny.op === 'useAlternativeValue') {
+            // ${var:+word} — use word if var is set and non-empty
+            resolved = paramValue ? await this.resolveWordValue(xpAny.word, ctx) : '';
+          } else if (xpAny.op === 'useAlternativeValueIfUnset') {
+            // ${var+word} — use word if var is set
+            resolved = params[xp.parameter!] !== undefined ? await this.resolveWordValue(xpAny.word, ctx) : '';
+          } else if (xpAny.op === 'stringLength') {
+            // ${#var}
+            resolved = String(paramValue.length);
+          } else if (xpAny.op === 'removeSmallestSuffixPattern') {
+            // ${var%pattern}
+            const pattern = await this.resolveWordValue(xpAny.word, ctx);
+            resolved = this.removeSuffix(paramValue, pattern, false);
+          } else if (xpAny.op === 'removeLargestSuffixPattern') {
+            // ${var%%pattern}
+            const pattern = await this.resolveWordValue(xpAny.word, ctx);
+            resolved = this.removeSuffix(paramValue, pattern, true);
+          } else if (xpAny.op === 'removeSmallestPrefixPattern') {
+            // ${var#pattern}
+            const pattern = await this.resolveWordValue(xpAny.word, ctx);
+            resolved = this.removePrefix(paramValue, pattern, false);
+          } else if (xpAny.op === 'removeLargestPrefixPattern') {
+            // ${var##pattern}
+            const pattern = await this.resolveWordValue(xpAny.word, ctx);
+            resolved = this.removePrefix(paramValue, pattern, true);
+          } else if (xpAny.op === 'substring') {
+            // ${var:offset:length}
+            const offset = Number(xpAny.offset) || 0;
+            const len = xpAny.length != null ? Number(xpAny.length) : undefined;
+            resolved = len != null ? paramValue.slice(offset, offset + len) : paramValue.slice(offset);
+          } else {
+            resolved = paramValue;
+          }
+
+          rValue.replace(
+            xp.loc!.start,
+            xp.loc!.end + 1,
+            resolved,
+          );
+        }
       } else if (xp.type === 'CommandExpansion') {
         const cmdCtx = ctx.spawnContext();
         cmdCtx.setLocalEnv({ TERM: '0' });
@@ -1093,9 +1250,8 @@ export class AstExecutor {
         try {
           const code = await this.executeNode(xp.commandAST, cmdCtx);
 
-          // Send EOF so reads does not block
-          await this.shell.pipeWrite(cmdCtx.getStdout(), '');
-          // await this.shell.pipeClose(cmdCtx.getStdout());
+          // Send EOF so reads do not block
+          await this.shell.pipeClose(cmdCtx.getStdout());
 
           if (code !== 0) {
             return { values: [rValue.text], code };
@@ -1126,6 +1282,12 @@ export class AstExecutor {
     const value = rValue.text;
     const protectedRanges = rValue.protectedRanges;
 
+    // POSIX: Assignment values do not undergo field splitting
+    if (node.type === 'AssignmentWord') {
+      const unquoted = utils.unquoteAssignmentWithProtectedRanges(value, protectedRanges);
+      return { values: [unquoted], code: 0 };
+    }
+
     // Use unquoteWordWithProtectedRanges to preserve quotes that came from expansions
     // (e.g., JSON content like {"key":"value"} should keep its quotes)
     // This also preserves word splitting behavior for unquoted expansions
@@ -1144,6 +1306,54 @@ export class AstExecutor {
     }
 
     return result;
+  }
+
+  private async resolveWordValue(word: unknown, ctx: ExecContextIf): Promise<string> {
+    if (!word || typeof word !== 'object') return '';
+    const w = word as AstNodeWord;
+    if (w.expansion && w.expansion.length > 0) {
+      const result = await this.resolveExpansions(w, ctx);
+      return result.values.join(' ');
+    }
+    return w.text ?? '';
+  }
+
+  private globToRegexStr(pattern: string): string {
+    let regex = '';
+    for (const ch of pattern) {
+      if (ch === '*') regex += '.*';
+      else if (ch === '?') regex += '.';
+      else regex += ch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    }
+    return regex;
+  }
+
+  private removePrefix(value: string, pattern: string, greedy: boolean): string {
+    const re = new RegExp('^' + this.globToRegexStr(pattern) + '$');
+    if (greedy) {
+      for (let i = value.length; i >= 0; i--) {
+        if (re.test(value.slice(0, i))) return value.slice(i);
+      }
+    } else {
+      for (let i = 0; i <= value.length; i++) {
+        if (re.test(value.slice(0, i))) return value.slice(i);
+      }
+    }
+    return value;
+  }
+
+  private removeSuffix(value: string, pattern: string, greedy: boolean): string {
+    const re = new RegExp('^' + this.globToRegexStr(pattern) + '$');
+    if (greedy) {
+      for (let i = 0; i <= value.length; i++) {
+        if (re.test(value.slice(i))) return value.slice(0, i);
+      }
+    } else {
+      for (let i = value.length; i >= 0; i--) {
+        if (re.test(value.slice(i))) return value.slice(0, i);
+      }
+    }
+    return value;
   }
 
   /**
@@ -1320,7 +1530,7 @@ export class AstExecutor {
 
         try {
           await this.executeNode(cmdNode.commandAST, cmdCtx);
-          await this.shell.pipeWrite(cmdCtx.getStdout(), '');
+          await this.shell.pipeClose(cmdCtx.getStdout());
           const output = await this.shell.pipeRead(cmdCtx.getStdout());
           const trimmed = output.trim();
           return trimmed === '' ? 0 : Number.parseInt(trimmed, 10) || 0;

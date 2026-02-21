@@ -193,6 +193,17 @@ Deno.test('Loop Control - Continue', async (t) => {
     `);
     assertEquals(result.stdout, '1\n2\n4\n5\n');
   });
+
+  await t.step('&& continue skips only matching iteration', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture(`
+      for mod in core media extra; do
+        [ "$mod" = "core" ] && continue
+        echo $mod
+      done
+    `);
+    assertEquals(result.stdout, 'media\nextra\n');
+  });
 });
 
 Deno.test('Until Loops', async (t) => {

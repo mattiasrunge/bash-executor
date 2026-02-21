@@ -2,6 +2,7 @@ import { assertEquals } from '@std/assert';
 import { readBuiltin } from '../../src/builtins/read.ts';
 import { ExecContext } from '../../src/context.ts';
 import type { ShellIf } from '../../src/types.ts';
+import { TestShell } from '../lib/test-shell.ts';
 
 // No-op execute function for tests
 const noopExecute = async (_script: string) => 0;
@@ -150,5 +151,48 @@ Deno.test('read builtin', async (t) => {
     const result = await readBuiltin(ctx, ['-n', '5', 'chars'], shell, noopExecute);
     assertEquals(result.code, 0);
     assertEquals(ctx.getEnv()['chars'], 'hello');
+  });
+});
+
+Deno.test('read -u fd', async (t) => {
+  await t.step('reads from specified FD', async () => {
+    const shell = new TestShell();
+    shell.setFile('/tmp/data', 'hello\n');
+    const result = await shell.runAndCapture(`
+      exec 3<>/tmp/data
+      read -u 3 line
+      echo "$line"
+    `);
+    assertEquals(result.exitCode, 0);
+    assertEquals(result.stdout, 'hello\n');
+  });
+
+  await t.step('reads multiple lines from FD', async () => {
+    const shell = new TestShell();
+    shell.setFile('/tmp/data', 'first\nsecond\nthird\n');
+    const result = await shell.runAndCapture(`
+      exec 3<>/tmp/data
+      read -u 3 a
+      read -u 3 b
+      read -u 3 c
+      echo "$a,$b,$c"
+    `);
+    assertEquals(result.exitCode, 0);
+    assertEquals(result.stdout, 'first,second,third\n');
+  });
+
+  await t.step('while read -u collects all lines', async () => {
+    const shell = new TestShell();
+    shell.setFile('/tmp/lines', 'one\ntwo\nthree\n');
+    const result = await shell.runAndCapture(`
+      exec 3<>/tmp/lines
+      OUT=""
+      while read -u 3 -r line; do
+        OUT="$OUT$line "
+      done
+      echo "$OUT"
+    `);
+    assertEquals(result.exitCode, 0);
+    assertEquals(result.stdout, 'one two three \n');
   });
 });
