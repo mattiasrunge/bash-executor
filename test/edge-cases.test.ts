@@ -52,6 +52,48 @@ Deno.test('Subshells', async (t) => {
   });
 });
 
+Deno.test('Subshell isolation', async (t) => {
+  await t.step('export in a subshell does not leak to the parent', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('(export LEAK=1); echo "[${LEAK}]"');
+    assertEquals(result.stdout, '[]\n');
+    assertEquals(shell.getEnv().LEAK, undefined);
+  });
+
+  await t.step('cd in a subshell does not change the parent cwd', async () => {
+    const shell = new TestShell();
+    shell.setCwd('/start');
+    const result = await shell.runAndCapture('(cd /elsewhere); pwd');
+    assertEquals(result.stdout, '/start\n');
+    assertEquals(shell.getCwd(), '/start');
+  });
+
+  await t.step('export in command substitution does not leak', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('echo $(export SUB=1; echo hi); echo "[${SUB}]"');
+    assertEquals(result.stdout, 'hi\n[]\n');
+    assertEquals(shell.getEnv().SUB, undefined);
+  });
+
+  await t.step('export in a pipeline stage does not leak', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('true | export PIPE=1; echo "[${PIPE}]"');
+    assertEquals(result.stdout, '[]\n');
+    assertEquals(shell.getEnv().PIPE, undefined);
+  });
+
+  await t.step('executeAndCapture does not leak env into the calling shell', async () => {
+    // Regression for the MURRiX pipeline-engine bug: a captured command exporting
+    // PATH must not clobber the persistent shell's executable search path.
+    const shell = new TestShell();
+    shell.setEnv({ PATH: '/bin' });
+    const result = await shell.executeAndCapture('export PATH=/tmp/node-path; echo done');
+    assertEquals(result.code, 0);
+    assertEquals(result.stdout, 'done\n');
+    assertEquals(shell.getEnv().PATH, '/bin');
+  });
+});
+
 Deno.test('Deeply Nested Structures', async (t) => {
   await t.step('deeply nested if statements', async () => {
     const shell = new TestShell();

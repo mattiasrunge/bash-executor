@@ -153,8 +153,9 @@ export class AstExecutor {
       stdoutFd = await this.shell.pipeOpen();
       stderrFd = await this.shell.pipeOpen();
 
-      // Setup piped context
-      const cmdCtx = ctx.spawnContext();
+      // Setup piped context — a subshell, so env/cwd changes (e.g. `export`) the
+      // captured command makes stay local and don't leak into the calling shell.
+      const cmdCtx = ctx.subContext();
       cmdCtx.redirectStdout(stdoutFd);
       cmdCtx.redirectStderr(stderrFd);
 
@@ -473,7 +474,8 @@ export class AstExecutor {
   }
 
   protected async executeSubshell(node: AstNodeSubshell, parentCtx: ExecContextIf): Promise<number> {
-    const ctx = parentCtx.spawnContext();
+    // `( … )` is a subshell: env/cwd changes inside must not escape to the parent.
+    const ctx = parentCtx.subContext();
     return this.withFileBridging(ctx, () => {
       return this.executeNode(node.list, ctx);
     });
@@ -556,8 +558,9 @@ export class AstExecutor {
 
     try {
       for (let n = 0; n < node.commands.length; n++) {
-        // Create a new context for the command
-        const cmdCtx = ctx.spawnContext();
+        // Each pipeline stage is a subshell — isolate env/cwd so a stage can't leak
+        // into the parent (or race the other concurrently-running stages).
+        const cmdCtx = ctx.subContext();
         const isFirstCommand = n === 0;
         const isLastCommand = n === node.commands.length - 1;
 
@@ -1075,7 +1078,9 @@ export class AstExecutor {
         );
       } else if (xp.type === 'CommandExpansion') {
         // Handle command substitution
-        const cmdCtx = ctx.spawnContext();
+        // Command substitution runs in a subshell — isolate env/cwd so it can't
+        // leak (e.g. `$(export X=1)` must not set X in the calling shell).
+        const cmdCtx = ctx.subContext();
         cmdCtx.setLocalEnv({ TERM: '0' });
         cmdCtx.redirectStdout(await this.shell.pipeOpen());
 
@@ -1243,7 +1248,9 @@ export class AstExecutor {
           );
         }
       } else if (xp.type === 'CommandExpansion') {
-        const cmdCtx = ctx.spawnContext();
+        // Command substitution runs in a subshell — isolate env/cwd so it can't
+        // leak (e.g. `$(export X=1)` must not set X in the calling shell).
+        const cmdCtx = ctx.subContext();
         cmdCtx.setLocalEnv({ TERM: '0' });
         cmdCtx.redirectStdout(await this.shell.pipeOpen());
 
@@ -1524,7 +1531,9 @@ export class AstExecutor {
         if (!cmdNode.commandAST) {
           return 0;
         }
-        const cmdCtx = ctx.spawnContext();
+        // Command substitution runs in a subshell — isolate env/cwd so it can't
+        // leak (e.g. `$(export X=1)` must not set X in the calling shell).
+        const cmdCtx = ctx.subContext();
         cmdCtx.setLocalEnv({ TERM: '0' });
         cmdCtx.redirectStdout(await this.shell.pipeOpen());
 
