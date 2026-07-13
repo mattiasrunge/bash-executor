@@ -9,7 +9,13 @@
  *   arg --option type = default "desc" # Named option with default
  *   arg -o --option type "desc"        # Short + long option
  *   arg -f --flag "desc"               # Boolean flag
+ *   arg --rest                         # Collect unconsumed args; leave them in $@ after --export
  *   arg --export                       # Parse $@ and export variables
+ *
+ * With `--rest`, args not matched by a declared spec are not errors: they are
+ * left in the positional parameters ($1..$#, $@) so a dispatcher can forward
+ * them, e.g. `arg '<subcommand>' string "…"; arg --rest; arg --export;
+ * foo-$SUBCOMMAND "$@"`. Note: `-h`/`--help` still shows this script's help.
  */
 
 import type { ExecContextIf } from '../types.ts';
@@ -54,6 +60,8 @@ type ArgSpec = PositionalArgSpec | OptionArgSpec | FlagArgSpec;
 interface ArgRegistry {
   description: string;
   specs: ArgSpec[];
+  /** When set, unconsumed args are collected instead of rejected, and `--export` leaves them in `$@`. */
+  rest: boolean;
 }
 
 // ============================================================================
@@ -78,7 +86,7 @@ function getOrCreateRegistry(ctx: ExecContextIf): ArgRegistry {
   const root = getRootContext(ctx);
   let registry = argRegistries.get(root);
   if (!registry) {
-    registry = { description: '', specs: [] };
+    registry = { description: '', specs: [], rest: false };
     argRegistries.set(root, registry);
   }
   return registry;
@@ -91,6 +99,7 @@ function getOrCreateRegistry(ctx: ExecContextIf): ArgRegistry {
 type ParseResult =
   | { type: 'desc'; description: string }
   | { type: 'export' }
+  | { type: 'rest' }
   | { type: 'spec'; spec: ArgSpec }
   | { type: 'error'; message: string };
 
@@ -234,6 +243,11 @@ function parseArgDeclaration(args: string[]): ParseResult {
     return { type: 'export' };
   }
 
+  // Handle --rest (collect unconsumed args and forward them via $@)
+  if (args[0] === '--rest') {
+    return { type: 'rest' };
+  }
+
   // Parse positional: <name> or [<name>]
   const positionalRequired = /^<([a-zA-Z_][a-zA-Z0-9_]*)>$/;
   const positionalOptional = /^\[<([a-zA-Z_][a-zA-Z0-9_]*)>\]$/;
@@ -338,11 +352,15 @@ interface ArgumentParseResult {
   values: Record<string, string>;
   errors: string[];
   helpRequested: boolean;
+  /** Args not consumed by any declared spec (only populated when `registry.rest` is set). */
+  restArgs: string[];
 }
 
 function parseArguments(registry: ArgRegistry, rawArgs: string[]): ArgumentParseResult {
   const values: Record<string, string> = {};
   const errors: string[] = [];
+  const restArgs: string[] = [];
+  const rest = registry.rest;
   let helpRequested = false;
 
   const positionalSpecs = registry.specs.filter((s) => s.kind === 'positional') as PositionalArgSpec[];
@@ -388,6 +406,8 @@ function parseArguments(registry: ArgRegistry, rawArgs: string[]): ArgumentParse
           const spec = positionalSpecs[positionalIndex];
           values[toEnvName(spec.name)] = rawArgs[i];
           positionalIndex++;
+        } else if (rest) {
+          restArgs.push(rawArgs[i]);
         } else {
           errors.push(`Unexpected argument: ${rawArgs[i]}`);
         }
@@ -412,7 +432,8 @@ function parseArguments(registry: ArgRegistry, rawArgs: string[]): ArgumentParse
       const spec = longOptionMap.get(optName);
 
       if (!spec) {
-        errors.push(`Unknown option: --${optName}`);
+        if (rest) restArgs.push(arg);
+        else errors.push(`Unknown option: --${optName}`);
         i++;
         continue;
       }
@@ -455,7 +476,8 @@ function parseArguments(registry: ArgRegistry, rawArgs: string[]): ArgumentParse
       const spec = shortOptionMap.get(optChar);
 
       if (!spec) {
-        errors.push(`Unknown option: -${optChar}`);
+        if (rest) restArgs.push(arg);
+        else errors.push(`Unknown option: -${optChar}`);
         i++;
         continue;
       }
@@ -492,6 +514,8 @@ function parseArguments(registry: ArgRegistry, rawArgs: string[]): ArgumentParse
         values[envName] = arg;
       }
       positionalIndex++;
+    } else if (rest) {
+      restArgs.push(arg);
     } else {
       errors.push(`Unexpected argument: ${arg}`);
     }
@@ -525,7 +549,7 @@ function parseArguments(registry: ArgRegistry, rawArgs: string[]): ArgumentParse
     }
   }
 
-  return { values, errors, helpRequested };
+  return { values, errors, helpRequested, restArgs };
 }
 
 // ============================================================================
@@ -547,6 +571,12 @@ export const argBuiltin: BuiltinHandler = async (
     case 'desc': {
       const registry = getOrCreateRegistry(ctx);
       registry.description = parsed.description;
+      return { code: 0 };
+    }
+
+    case 'rest': {
+      const registry = getOrCreateRegistry(ctx);
+      registry.rest = true;
       return { code: 0 };
     }
 
@@ -604,6 +634,23 @@ export const argBuiltin: BuiltinHandler = async (
 
       // Export values as environment variables
       ctx.setEnv(result.values);
+
+      // In rest mode, replace the positional parameters with the unconsumed
+      // args so a dispatcher can forward them verbatim via "$@" (e.g.
+      // `foo-$SUBCOMMAND "$@"`). Mirrors what `shift` does to $1..$#.
+      if (registry.rest) {
+        const updates: Record<string, string | null> = {};
+        for (const key of Object.keys(params)) {
+          if (/^[1-9][0-9]*$/.test(key)) updates[key] = null;
+        }
+        result.restArgs.forEach((value, idx) => {
+          updates[String(idx + 1)] = value;
+        });
+        updates['#'] = String(result.restArgs.length);
+        updates['@'] = result.restArgs.join(' ');
+        updates['*'] = result.restArgs.join(' ');
+        ctx.setParams(updates);
+      }
 
       // Clean up registry after export
       argRegistries.delete(root);

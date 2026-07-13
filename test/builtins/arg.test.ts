@@ -386,4 +386,91 @@ Deno.test('arg builtin', async (t) => {
     // Script B should NOT have Script A's registry
     assertEquals(scriptB.getEnv()['NAME'], undefined);
   });
+
+  await t.step('--rest', async (t) => {
+    // Read $1..$# back out of a context the way a subsequent command would.
+    const positionals = (ctx: ExecContext): string[] => {
+      const params = ctx.getParams();
+      const count = parseInt(params['#'] || '0', 10);
+      const out: string[] = [];
+      for (let i = 1; i <= count; i++) out.push(params[String(i)]);
+      return out;
+    };
+
+    await t.step('leaves unconsumed args in $@ after --export', async () => {
+      const ctx = new ExecContext();
+      ctx.setParams({
+        '1': 'create',
+        '2': '/people/anna',
+        '3': '--name',
+        '4': 'Anna',
+        '5': '--gender',
+        '6': 'female',
+        '#': '6',
+      });
+
+      await argBuiltin(ctx, ['<subcommand>', 'string', 'Subcommand'], mockShell, noopExecute);
+      await argBuiltin(ctx, ['--rest'], mockShell, noopExecute);
+      await argBuiltin(ctx, ['--export'], mockShell, noopExecute);
+
+      // Declared positional consumed and exported
+      assertEquals(ctx.getEnv()['SUBCOMMAND'], 'create');
+      // Everything after it is forwarded verbatim via the positionals
+      assertEquals(positionals(ctx), ['/people/anna', '--name', 'Anna', '--gender', 'female']);
+      assertEquals(ctx.getParams()['#'], '5');
+    });
+
+    await t.step('does not error on undeclared options', async () => {
+      const ctx = new ExecContext();
+      ctx.setParams({ '1': 'info', '2': '--verbose', '#': '2' });
+
+      await argBuiltin(ctx, ['<subcommand>', 'string', 'Subcommand'], mockShell, noopExecute);
+      await argBuiltin(ctx, ['--rest'], mockShell, noopExecute);
+      const result = await argBuiltin(ctx, ['--export'], mockShell, noopExecute);
+
+      assertEquals(result.code, 0);
+      assertEquals(ctx.getEnv()['SUBCOMMAND'], 'info');
+      assertEquals(positionals(ctx), ['--verbose']);
+    });
+
+    await t.step('empty rest leaves no positionals', async () => {
+      const ctx = new ExecContext();
+      ctx.setParams({ '1': 'list', '#': '1' });
+
+      await argBuiltin(ctx, ['<subcommand>', 'string', 'Subcommand'], mockShell, noopExecute);
+      await argBuiltin(ctx, ['--rest'], mockShell, noopExecute);
+      await argBuiltin(ctx, ['--export'], mockShell, noopExecute);
+
+      assertEquals(ctx.getEnv()['SUBCOMMAND'], 'list');
+      assertEquals(positionals(ctx), []);
+      assertEquals(ctx.getParams()['#'], '0');
+    });
+
+    await t.step('rewrite propagates to root across spawned contexts', async () => {
+      // Mirrors the executor: each `arg` command runs in its own spawned child
+      // of the script context, so the rewrite must land on root to be visible
+      // to the forwarding command that follows.
+      const root = new ExecContext();
+      root.setParams({ '1': 'set-parent', '2': '/people/anna', '3': 'mother', '#': '3' });
+
+      await argBuiltin(root.spawnContext(), ['<subcommand>', 'string', 'Subcommand'], mockShell, noopExecute);
+      await argBuiltin(root.spawnContext(), ['--rest'], mockShell, noopExecute);
+      await argBuiltin(root.spawnContext(), ['--export'], mockShell, noopExecute);
+
+      assertEquals(root.getEnv()['SUBCOMMAND'], 'set-parent');
+      assertEquals(positionals(root), ['/people/anna', 'mother']);
+    });
+
+    await t.step('without --rest, surplus args still error', async () => {
+      const ctx = new ExecContext();
+      ctx.setParams({ '1': 'create', '2': 'extra', '#': '2' });
+
+      await argBuiltin(ctx, ['<subcommand>', 'string', 'Subcommand'], mockShell, noopExecute);
+      const result = await argBuiltin(ctx, ['--export'], mockShell, noopExecute);
+
+      assertEquals(isExitSignal(result.code), true);
+      assertEquals(getExitCode(result.code), 1);
+      assertStringIncludes(result.stderr!, 'Unexpected argument');
+    });
+  });
 });
