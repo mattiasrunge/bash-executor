@@ -355,4 +355,98 @@ Deno.test('Case Statements', async (t) => {
     `);
     assertEquals(result.stdout, 'matched\n');
   });
+
+   await t.step('quoted parts of a pattern match literally', async () => {
+    const shell = new TestShell();
+    shell.setParams({ PATH: '/bin:/x/bin' });
+    const result = await shell.runAndCapture(`
+      case ":$PATH:" in
+        *":/x/bin:"*) echo "present" ;;
+        *) echo "absent" ;;
+      esac
+    `);
+    assertEquals(result.stdout, 'present\n');
+  });
+
+  await t.step('quoted pattern falls through when not contained', async () => {
+    const shell = new TestShell();
+    shell.setParams({ PATH: '/bin' });
+    const result = await shell.runAndCapture(`
+      case ":$PATH:" in
+        *":/x/bin:"*) echo "present" ;;
+        *) echo "absent" ;;
+      esac
+    `);
+    assertEquals(result.stdout, 'absent\n');
+  });
+
+  await t.step('variables expand inside patterns', async () => {
+    const shell = new TestShell();
+    shell.setParams({ pat: 'foo', x: 'foo' });
+    const result = await shell.runAndCapture(`
+      case $x in
+        $pat) echo "var matched" ;;
+        *) echo "no" ;;
+      esac
+    `);
+    assertEquals(result.stdout, 'var matched\n');
+  });
+
+  await t.step('unquoted variable pattern keeps globs active', async () => {
+    const shell = new TestShell();
+    shell.setParams({ pat: '*.txt', file: 'notes.txt' });
+    const result = await shell.runAndCapture(`
+      case $file in
+        $pat) echo "glob from var" ;;
+        *) echo "no" ;;
+      esac
+    `);
+    assertEquals(result.stdout, 'glob from var\n');
+  });
+
+  await t.step('double-quoted variable pattern is literal', async () => {
+    const shell = new TestShell();
+    shell.setParams({ pat: '*.txt', file: 'notes.txt' });
+    const result = await shell.runAndCapture(`
+      case $file in
+        "$pat") echo "literal star" ;;
+        *) echo "fallthrough" ;;
+      esac
+    `);
+    assertEquals(result.stdout, 'fallthrough\n');
+  });
+
+  await t.step('quoted glob characters are literal', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture(`
+      case '*' in
+        "*") echo "literal star matched" ;;
+        x) echo "no" ;;
+      esac
+    `);
+    assertEquals(result.stdout, 'literal star matched\n');
+  });
+
+  await t.step('backslash-escaped glob character is literal', async () => {
+    const shell = new TestShell();
+    shell.setParams({ x: 'a*b' });
+    const result = await shell.runAndCapture(`
+      case $x in
+        a\\*b) echo "escaped" ;;
+        *) echo "no" ;;
+      esac
+    `);
+    assertEquals(result.stdout, 'escaped\n');
+  });
+
+  await t.step('single-quoted pattern is fully literal', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture(`
+      case 'a?c' in
+        'a?c') echo "single quoted" ;;
+        *) echo "no" ;;
+      esac
+    `);
+    assertEquals(result.stdout, 'single quoted\n');
+  });
 });

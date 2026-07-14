@@ -756,13 +756,19 @@ export class AstExecutor {
     const clauseValue = clauseExpanded.values[0] || '';
 
     for (const caseItem of node.cases || []) {
-      // Check if any pattern matches
-      const matched = caseItem.pattern.some((pattern) => {
-        // Expand the pattern
-        const patternText = pattern.text;
-        // Convert glob pattern to regex
-        return this.matchGlobPattern(patternText, clauseValue);
-      });
+      // Check if any pattern matches (patterns undergo expansion and quote
+      // removal: quoted characters match literally, unquoted globs are active)
+      let matched = false;
+      for (const pattern of caseItem.pattern) {
+        const { regex, code } = await this.expandCasePattern(pattern, ctx);
+        if (code !== 0) {
+          return code;
+        }
+        if (regex.test(clauseValue)) {
+          matched = true;
+          break;
+        }
+      }
 
       if (matched) {
         if (!caseItem.body) {
@@ -773,6 +779,124 @@ export class AstExecutor {
     }
 
     return 0;
+  }
+
+  /**
+   * Resolve a case pattern word to a matcher regex.
+   *
+   * The parser leaves pattern words raw (quotes still in `text`, globs marked
+   * as PathExpansion), so this walks the raw text tracking quote state:
+   * quoted characters and backslash-escaped characters match literally, while
+   * unquoted `*`, `?` and `[...]` become glob wildcards. Parameter, command
+   * and arithmetic expansions are evaluated in place — their results are
+   * glob-active when unquoted, literal when inside double quotes (as in bash);
+   * no filename expansion or field splitting is applied.
+   */
+  protected async expandCasePattern(word: AstNodeWord, ctx: ExecContextIf): Promise<{ regex: RegExp; code: number }> {
+    const text = word.text;
+
+    const escapeRegexChar = (c: string): string => /[\\^$.*+?()[\]{}|]/.test(c) ? `\\${c}` : c;
+
+    // Glob translation for expansion results (quote chars in values are data)
+    const globToRegex = (s: string): string => {
+      let out = '';
+      for (let i = 0; i < s.length; i++) {
+        const c = s[i];
+        if (c === '*') {
+          out += '.*';
+        } else if (c === '?') {
+          out += '.';
+        } else if (c === '[') {
+          const end = s.indexOf(']', i + 1);
+          if (end !== -1) {
+            out += s.slice(i, end + 1);
+            i = end;
+          } else {
+            out += '\\[';
+          }
+        } else {
+          out += escapeRegexChar(c);
+        }
+      }
+      return out;
+    };
+
+    // Pre-evaluate non-glob expansions by their location in the raw text,
+    // each via a synthetic single-expansion word so resolveExpansions'
+    // parameter-op/command/arithmetic handling is reused as-is
+    const evaluated = new Map<number, { end: number; value: string }>();
+    for (const xp of word.expansion ?? []) {
+      if (xp.type === 'PathExpansion' || xp.resolved || !xp.loc) {
+        continue;
+      }
+      const synthetic = {
+        type: 'Word',
+        text: text.slice(xp.loc.start, xp.loc.end + 1),
+        expansion: [{ ...xp, loc: { start: 0, end: xp.loc.end - xp.loc.start } }],
+      } as AstNodeWord;
+      const { values, code } = await this.resolveExpansions(synthetic, ctx);
+      if (code !== 0) {
+        return { regex: /(?!)/, code };
+      }
+      evaluated.set(xp.loc.start, { end: xp.loc.end, value: values.join(' ') });
+    }
+
+    let regex = '^';
+    let inSingle = false;
+    let inDouble = false;
+
+    for (let i = 0; i < text.length; i++) {
+      const expansion = !inSingle ? evaluated.get(i) : undefined;
+      if (expansion) {
+        regex += inDouble ? [...expansion.value].map(escapeRegexChar).join('') : globToRegex(expansion.value);
+        i = expansion.end;
+        continue;
+      }
+
+      const c = text[i];
+
+      if (!inSingle && !inDouble && c === '\\' && i + 1 < text.length) {
+        regex += escapeRegexChar(text[++i]);
+        continue;
+      }
+      if (!inDouble && c === "'") {
+        inSingle = !inSingle;
+        continue;
+      }
+      if (!inSingle && c === '"') {
+        inDouble = !inDouble;
+        continue;
+      }
+      if (inSingle || inDouble) {
+        regex += escapeRegexChar(c);
+        continue;
+      }
+
+      if (c === '*') {
+        regex += '.*';
+      } else if (c === '?') {
+        regex += '.';
+      } else if (c === '[') {
+        const end = text.indexOf(']', i + 1);
+        if (end !== -1) {
+          regex += text.slice(i, end + 1);
+          i = end;
+        } else {
+          regex += '\\[';
+        }
+      } else {
+        regex += escapeRegexChar(c);
+      }
+    }
+    regex += '$';
+
+    try {
+      return { regex: new RegExp(regex), code: 0 };
+    } catch {
+      // invalid regex (e.g. malformed character class): fall back to exact match
+      const literal = [...text].map(escapeRegexChar).join('');
+      return { regex: new RegExp(`^${literal}$`), code: 0 };
+    }
   }
 
   /**
