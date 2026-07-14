@@ -356,7 +356,7 @@ Deno.test('Case Statements', async (t) => {
     assertEquals(result.stdout, 'matched\n');
   });
 
-   await t.step('quoted parts of a pattern match literally', async () => {
+  await t.step('quoted parts of a pattern match literally', async () => {
     const shell = new TestShell();
     shell.setParams({ PATH: '/bin:/x/bin' });
     const result = await shell.runAndCapture(`
