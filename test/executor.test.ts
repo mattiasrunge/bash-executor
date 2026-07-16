@@ -142,4 +142,22 @@ Deno.test('executeAndCapture', async (t) => {
     assertEquals(result.code, 0);
     assertEquals(result.stdout, '5\n');
   });
+
+  await t.step('captures output larger than the pipe capacity without deadlocking', async () => {
+    const shell = new TestShell();
+    // TestShell pipes hold 64KB; without a concurrent drain of the capture
+    // pipe the writer blocks forever once the output exceeds the capacity.
+    const big = 'x'.repeat(100 * 1024);
+    shell.mockCommand('bigout', async () => ({ code: 0, stdout: big }));
+
+    let timer!: ReturnType<typeof setTimeout>;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error('deadlocked on output larger than pipe capacity')), 10_000);
+    });
+    const result = await Promise.race([shell.executeAndCapture('bigout'), timeout]);
+    clearTimeout(timer);
+
+    assertEquals(result.code, 0);
+    assertEquals(result.stdout, big);
+  });
 });

@@ -147,11 +147,19 @@ export class AstExecutor {
   public async executeAndCapture(source: string, ctx: ExecContextIf): Promise<ExecSyncResult> {
     let stdoutFd: string = '';
     let stderrFd: string = '';
+    let stdoutRead: Promise<string> | undefined;
+    let stderrRead: Promise<string> | undefined;
 
     try {
       // Create temporary pipes for capturing output
       stdoutFd = await this.shell.pipeOpen();
       stderrFd = await this.shell.pipeOpen();
+
+      // Drain the pipes while the command runs — pipes have a fixed capacity,
+      // so output larger than the capacity would block the writer forever if
+      // reading only started after execute() returned.
+      stdoutRead = this.shell.pipeRead(stdoutFd);
+      stderrRead = this.shell.pipeRead(stderrFd);
 
       // Setup piped context — a subshell, so env/cwd changes (e.g. `export`) the
       // captured command makes stay local and don't leak into the calling shell.
@@ -162,13 +170,12 @@ export class AstExecutor {
       // Execute
       const code = await this.execute(source, cmdCtx);
 
-      // Send EOF so reads do not block
+      // Send EOF so the drains finish
       await this.shell.pipeClose(stdoutFd);
       await this.shell.pipeClose(stderrFd);
 
-      // Read all output
-      const stdout = await this.shell.pipeRead(stdoutFd);
-      const stderr = await this.shell.pipeRead(stderrFd);
+      const stdout = await stdoutRead;
+      const stderr = await stderrRead;
 
       return { code, stdout, stderr };
     } catch (err) {
@@ -178,6 +185,12 @@ export class AstExecutor {
         stderr: `Error: ${(err as Error).message}\n`,
       };
     } finally {
+      // Settle the drains (EOF unblocks them) before removing the pipes so
+      // no read is left dangling on the error path
+      if (stdoutFd) await this.shell.pipeClose(stdoutFd).catch(() => {});
+      if (stderrFd) await this.shell.pipeClose(stderrFd).catch(() => {});
+      await stdoutRead?.catch(() => {});
+      await stderrRead?.catch(() => {});
       // Cleanup pipes
       if (stdoutFd) await this.shell.pipeRemove(stdoutFd).catch(() => {});
       if (stderrFd) await this.shell.pipeRemove(stderrFd).catch(() => {});
