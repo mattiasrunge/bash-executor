@@ -37,6 +37,24 @@ const CONTINUE_CODE = -10 as const;
 const BREAK_CODE = -11 as const;
 
 /**
+ * Mark a detached promise as handled, and return it unchanged for awaiting.
+ *
+ * Background bridges and executions are collected into arrays that are only
+ * awaited on the success path. When the command throws, the finally block tears
+ * the pipes down and any in-flight promise is abandoned mid-await — it then
+ * rejects with nobody listening, and an unhandled rejection is fatal under
+ * Deno. A host shell reaching for a pipe that finally has just removed makes
+ * this routine rather than theoretical.
+ *
+ * Attaching a no-op catch marks the promise handled without consuming it: the
+ * reference kept in the array still rejects normally for the Promise.all.
+ */
+function handled<T>(promise: Promise<T>): Promise<T> {
+  promise.catch(() => {});
+  return promise;
+}
+
+/**
  * Options for configuring the AstExecutor.
  */
 export type AstExecutorOptions = {
@@ -526,7 +544,7 @@ export class AstExecutor {
         pipes.push(stdoutPipe);
         const stdoutAppend = ctx.getStdoutAppend();
         // Start writing to file in background (will complete when pipe is closed)
-        bridges.push(this.shell.pipeToFile(ctx, stdoutPipe, stdout, stdoutAppend));
+        bridges.push(handled(this.shell.pipeToFile(ctx, stdoutPipe, stdout, stdoutAppend)));
         ctx.redirectStdout(stdoutPipe);
       }
 
@@ -536,7 +554,7 @@ export class AstExecutor {
         stderrPipe = await this.shell.pipeOpen();
         pipes.push(stderrPipe);
         const stderrAppend = ctx.getStderrAppend();
-        bridges.push(this.shell.pipeToFile(ctx, stderrPipe, stderr, stderrAppend));
+        bridges.push(handled(this.shell.pipeToFile(ctx, stderrPipe, stderr, stderrAppend)));
         ctx.redirectStderr(stderrPipe);
       }
 
@@ -609,18 +627,20 @@ export class AstExecutor {
             pipes.push(lastStdoutPipe);
             const stdoutAppend = ctx.getStdoutAppend();
             // Start writing to file in background
-            fileBridges.push(this.shell.pipeToFile(ctx, lastStdoutPipe, stdout, stdoutAppend));
+            fileBridges.push(handled(this.shell.pipeToFile(ctx, lastStdoutPipe, stdout, stdoutAppend)));
             cmdCtx.redirectStdout(lastStdoutPipe);
             stdoutRedirected = true;
           }
         }
 
         executions.push(
-          this.executeNode(node.commands[n], cmdCtx).finally(() => {
-            if (stdoutRedirected) {
-              this.shell.pipeClose(cmdCtx.getStdout()).catch((err) => console.error('Failed to close pipe: ', err));
-            }
-          }),
+          handled(
+            this.executeNode(node.commands[n], cmdCtx).finally(() => {
+              if (stdoutRedirected) {
+                this.shell.pipeClose(cmdCtx.getStdout()).catch((err) => console.error('Failed to close pipe: ', err));
+              }
+            }),
+          ),
         );
 
         lastCtx = cmdCtx;
@@ -1281,9 +1301,10 @@ export class AstExecutor {
         }
       }
 
-      // Process escape sequences even when there are no expansions
-      // Note: Don't use unquoteWord here - quotes are already processed by the parser
-      return { values: [utils.unescape(node.text)], code };
+      // Quotes AND escapes are already processed by the parser's quote-removal
+      // phase, so node.text is final here. Re-running unescape would wrongly
+      // transform literal backslash sequences (e.g. single-quoted '\1' -> 0x01).
+      return { values: [node.text], code };
     }
 
     const rValue = new utils.ReplaceString(node.text);
