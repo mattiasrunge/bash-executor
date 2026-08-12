@@ -672,6 +672,12 @@ export class AstExecutor {
       if (isExitSignal(lastCode) || isReturnSignal(lastCode) || lastCode === CONTINUE_CODE || lastCode === BREAK_CODE) {
         return lastCode;
       }
+
+      // $? is updated after every command, not just at script level. Without this a
+      // compound body (if/while/for/{}/function) sees the *enclosing* $? — so the
+      // `cmd; STATUS=$?; if [ $STATUS -ne 0 ]` retry idiom silently reads 0 and every
+      // failure inside an if looks like a success.
+      ctx.setParams({ '?': String(lastCode) });
     }
 
     return lastCode;

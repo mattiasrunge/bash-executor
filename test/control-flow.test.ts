@@ -450,3 +450,100 @@ Deno.test('Case Statements', async (t) => {
     assertEquals(result.stdout, 'single quoted\n');
   });
 });
+
+Deno.test('$? inside compound bodies', async (t) => {
+  await t.step('if body sees the exit code of its own last command', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture(`
+      if true; then
+        false
+        echo $?
+      fi
+    `);
+    assertEquals(result.stdout, '1\n');
+  });
+
+  await t.step('else body sees the exit code of its own last command', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture(`
+      if false; then
+        echo no
+      else
+        false
+        echo $?
+      fi
+    `);
+    assertEquals(result.stdout, '1\n');
+  });
+
+  await t.step('the capture-and-retry idiom sees the failure', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture(`
+      STATUS=1
+      if true; then
+        false
+        STATUS=$?
+      fi
+      if [ $STATUS -ne 0 ]; then
+        echo "retry"
+      fi
+    `);
+    assertEquals(result.stdout, 'retry\n');
+  });
+
+  await t.step('while body sees the exit code of its own last command', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture(`
+      n=0
+      while [ $n -lt 1 ]; do
+        false
+        echo $?
+        n=1
+      done
+    `);
+    assertEquals(result.stdout, '1\n');
+  });
+
+  await t.step('for body sees the exit code of its own last command', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture(`
+      for i in 1; do
+        false
+        echo $?
+      done
+    `);
+    assertEquals(result.stdout, '1\n');
+  });
+
+  await t.step('group sees the exit code of its own last command', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture(`
+      { false; echo $?; }
+    `);
+    assertEquals(result.stdout, '1\n');
+  });
+
+  await t.step('function body sees the exit code of its own last command', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture(`
+      f() {
+        false
+        echo $?
+      }
+      f
+    `);
+    assertEquals(result.stdout, '1\n');
+  });
+
+  await t.step('a body that runs nothing leaves $? alone', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture(`
+      false
+      if [ 1 -eq 1 ]; then
+        :
+      fi
+      echo $?
+    `);
+    assertEquals(result.stdout, '0\n');
+  });
+});
