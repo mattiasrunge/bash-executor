@@ -281,6 +281,138 @@ Deno.test('For Loops', async (t) => {
     `);
     assertEquals(result.stdout, 'done\n');
   });
+
+  await t.step('word list is expanded once, before the first iteration', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture(`
+      list="a b"
+      for item in $list $list; do
+        list="changed"
+        echo $item
+      done
+    `);
+    assertEquals(result.stdout, 'a\nb\na\nb\n');
+  });
+});
+
+// A body that fails is ordinary — `for f in *; do grep x $f; done` runs to the
+// end. Aborting the loop instead turned a scan into a silent "nothing found".
+Deno.test('Loops - failing body', async (t) => {
+  await t.step('for loop runs every iteration when the body fails', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture(`
+      for i in 1 2 3; do
+        echo "i=$i"
+        false
+      done
+      echo "after=$?"
+    `);
+    assertEquals(result.stdout, 'i=1\ni=2\ni=3\nafter=1\n');
+  });
+
+  await t.step('while loop runs every iteration when the body fails', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture(`
+      n=0
+      while [ $n -lt 3 ]; do
+        n=$((n + 1))
+        false
+      done
+      echo "n=$n after=$?"
+    `);
+    assertEquals(result.stdout, 'n=3 after=1\n');
+  });
+
+  await t.step('until loop runs every iteration when the body fails', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture(`
+      n=0
+      until [ $n -ge 3 ]; do
+        n=$((n + 1))
+        false
+      done
+      echo "n=$n after=$?"
+    `);
+    assertEquals(result.stdout, 'n=3 after=1\n');
+  });
+
+  await t.step('loop status is the status of the last iteration', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture(`
+      for i in 1 2; do
+        [ $i -eq 1 ]
+      done
+      echo "after=$?"
+    `);
+    assertEquals(result.stdout, 'after=1\n');
+  });
+
+  await t.step('exit in the body still ends the script', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture(`
+      for i in 1 2 3; do
+        echo "i=$i"
+        [ $i -eq 2 ] && exit 7
+      done
+      echo "not reached"
+    `);
+    assertEquals(result.stdout, 'i=1\ni=2\n');
+    assertEquals(result.exitCode, 7);
+  });
+
+  await t.step('return in the body still leaves the function', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture(`
+      f() {
+        for i in 1 2 3; do
+          echo "i=$i"
+          [ $i -eq 2 ] && return 3
+        done
+        echo "not reached"
+      }
+      f
+      echo "after=$?"
+    `);
+    assertEquals(result.stdout, 'i=1\ni=2\nafter=3\n');
+  });
+
+  await t.step('a failing command substitution iterates over nothing, not out of the loop', async () => {
+    const shell = new TestShell();
+    shell.mockCommand('events', async (_ctx, args) => {
+      // Only "b" has no events — the other two must still be counted.
+      return args[0] === 'b' ? { code: 1, stderr: 'no such directory\n' } : { code: 0, stdout: `${args[0]}1\n${args[0]}2\n` };
+    });
+    const result = await shell.runAndCapture(`
+      total=0
+      for p in a b c; do
+        for e in $(events $p); do
+          total=$((total + 1))
+        done
+      done
+      echo "total=$total"
+    `);
+    assertEquals(result.stdout, 'total=4\n');
+  });
+
+  await t.step('a loop feeding a pipe writes every iteration', async () => {
+    const shell = new TestShell();
+    shell.mockCommand('events', async (_ctx, args) => {
+      return args[0] === 'b' ? { code: 1 } : { code: 0, stdout: `${args[0]}1\n` };
+    });
+    const result = await shell.runAndCapture(`for p in a b c; do events $p; done | wc -l`);
+    assertEquals(result.stdout, '2\n');
+  });
+
+  await t.step('break and continue are only loop control as a command name', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture(`
+      for i in break continue; do
+        echo $i
+      done
+      echo "done"
+    `);
+    assertEquals(result.stdout, 'break\ncontinue\ndone\n');
+  });
 });
 
 Deno.test('Case Statements', async (t) => {

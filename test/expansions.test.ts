@@ -65,6 +65,57 @@ Deno.test('Command Expansion', async (t) => {
     const result = await shell.runAndCapture('echo $(($(echo 5) + $(echo 3)))');
     assertEquals(result.stdout, '8\n');
   });
+
+  await t.step('a failing command still substitutes what it wrote', async () => {
+    const shell = new TestShell();
+    shell.mockCommand('partial', async () => ({ code: 1, stdout: 'one\ntwo\n' }));
+    const result = await shell.runAndCapture(`echo "[$(partial)]"`);
+    assertEquals(result.stdout, '[one\ntwo]\n');
+  });
+
+  await t.step('a failing command expansion does not abort the command around it', async () => {
+    const shell = new TestShell();
+    shell.mockCommand('fails', async () => ({ code: 1 }));
+    const result = await shell.runAndCapture(`echo "[$(fails)]"; echo "after=$?"`);
+    assertEquals(result.stdout, '[]\nafter=0\n');
+  });
+
+  await t.step('a bare assignment takes the status of its command expansion', async () => {
+    const shell = new TestShell();
+    shell.mockCommand('partial', async () => ({ code: 1, stdout: 'one\n' }));
+    const result = await shell.runAndCapture(`x=$(partial); echo "x=$x status=$?"`);
+    assertEquals(result.stdout, 'x=one status=1\n');
+  });
+
+  await t.step('exit inside a command expansion ends that subshell only', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture(`echo "[$(echo out; exit 3)]"; echo "alive=$?"`);
+    assertEquals(result.stdout, '[out]\nalive=0\n');
+  });
+
+  await t.step('a command expansion in the command name runs once', async () => {
+    const shell = new TestShell();
+    let calls = 0;
+    shell.mockCommand('namer', async () => {
+      calls++;
+      return { code: 0, stdout: 'echo\n' };
+    });
+    const result = await shell.runAndCapture('$(namer) hello');
+    assertEquals(result.stdout, 'hello\n');
+    assertEquals(calls, 1);
+  });
+
+  await t.step('case matches on a failing command expansion', async () => {
+    const shell = new TestShell();
+    shell.mockCommand('partial', async () => ({ code: 1, stdout: 'one\n' }));
+    const result = await shell.runAndCapture(`
+      case $(partial) in
+        one) echo "matched" ;;
+        *) echo "nomatch" ;;
+      esac
+    `);
+    assertEquals(result.stdout, 'matched\n');
+  });
 });
 
 Deno.test('Arithmetic Expansion', async (t) => {

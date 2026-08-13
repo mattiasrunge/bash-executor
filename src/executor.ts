@@ -258,8 +258,8 @@ export class AstExecutor {
 
   protected async applyRedirections(ctx: ExecContextIf, redirects?: AstNodeRedirect[]) {
     for (const r of (redirects || [])) {
-      const { code, values } = await this.resolveExpansions(r.file, ctx);
-      const target = code === 0 ? values[0] || r.file.text : r.file.text;
+      const { values } = await this.resolveExpansions(r.file, ctx);
+      const target = values[0] || r.file.text;
 
       if (r.op.text === '<') {
         ctx.redirectStdin(target);
@@ -360,14 +360,14 @@ export class AstExecutor {
   }
 
   protected async executeCommand(node: AstNodeCommand, parentCtx: ExecContextIf): Promise<number> {
-    // Handle exec: apply redirections to parent context, ignore args
-    if (node.name) {
-      const earlyName = await this.resolveExpansions(node.name, parentCtx);
-      if (earlyName.code === 0 && earlyName.values[0] === 'exec') {
-        const redirects = node.suffix?.filter((arg) => arg.type === 'Redirect') as AstNodeRedirect[] | undefined;
-        await this.applyRedirections(parentCtx, redirects);
-        return 0;
-      }
+    // Handle exec: apply redirections to parent context, ignore args.
+    // Only a literal `exec` counts. Expanding the name here as well as below ran
+    // every command substitution in it twice — `$(pick-a-command) arg` executed
+    // `pick-a-command` two times, side effects included.
+    if (node.name && !node.name.expansion?.length && node.name.text === 'exec') {
+      const redirects = node.suffix?.filter((arg) => arg.type === 'Redirect') as AstNodeRedirect[] | undefined;
+      await this.applyRedirections(parentCtx, redirects);
+      return 0;
     }
 
     // Create an execution context
@@ -376,13 +376,14 @@ export class AstExecutor {
     // Update context with prefix assignments
     const params: Record<string, string> = {};
 
-    for (const arg of node.prefix?.filter((arg) => arg.type === 'AssignmentWord') || []) {
-      const { values, code } = await this.resolveExpansions(arg, ctx);
+    // A bare assignment takes the status of the last command substitution in it,
+    // so `x=$(false)` sets x to that command's output and leaves $? at 1.
+    let assignStatus = 0;
 
-      if (code !== 0) {
-        // TODO: Print error to stderr?
-        return code;
-      }
+    for (const arg of node.prefix?.filter((arg) => arg.type === 'AssignmentWord') || []) {
+      const { values, status } = await this.resolveExpansions(arg, ctx);
+
+      assignStatus = status;
 
       for (const value of values) {
         const eqIdx = value.indexOf('=');
@@ -396,19 +397,14 @@ export class AstExecutor {
       ctx.setLocalParams(params);
     } else {
       ctx.setParams(params);
-      return 0;
+      return assignStatus;
     }
 
     // Create an args list
     const args: string[] = [];
 
     for (const arg of node.suffix?.filter((arg) => arg.type === 'Word') || []) {
-      const { values, code } = await this.resolveExpansions(arg, ctx);
-
-      if (code !== 0) {
-        // TODO: Print error to stderr?
-        return code;
-      }
+      const { values } = await this.resolveExpansions(arg, ctx);
 
       args.push(...values);
     }
@@ -419,13 +415,20 @@ export class AstExecutor {
     // Expand command
     const expandedName = await this.resolveExpansions(node.name, ctx);
 
-    if (expandedName.code !== 0) {
-      return expandedName.code;
-    }
-
     // TODO: We can fail for any number of things above, should we apply the bang inversion to those as well?
 
     const cmdName = expandedName.values[0]; // TODO: Can we expand to more than one value here?
+
+    // Loop control is carried out of the body as a reserved exit code. Only the
+    // command *name* means it — `echo break` is an argument that happens to read
+    // "break", and used to terminate the enclosing loop.
+    if (cmdName === 'break') {
+      return BREAK_CODE;
+    }
+
+    if (cmdName === 'continue') {
+      return CONTINUE_CODE;
+    }
     let code: number;
 
     return this.withFileBridging(ctx, async () => {
@@ -701,97 +704,93 @@ export class AstExecutor {
     return 0;
   }
 
+  /**
+   * Run one loop iteration and decide what the loop does next.
+   *
+   * A failing body does *not* end a loop — `for f in *; do grep x $f; done`
+   * keeps going past the files without a match, and the loop's own status is
+   * the status of the last iteration. Only break, continue, exit and return
+   * change the flow.
+   */
+  private async runLoopBody(body: AstNode, ctx: ExecContextIf): Promise<{ stop: boolean; code: number }> {
+    const code = await this.executeNode(body, ctx);
+
+    if (code === BREAK_CODE) {
+      return { stop: true, code: 0 };
+    }
+
+    if (code === CONTINUE_CODE) {
+      return { stop: false, code: 0 };
+    }
+
+    // Propagate exit and return signals
+    if (isExitSignal(code) || isReturnSignal(code)) {
+      return { stop: true, code };
+    }
+
+    return { stop: false, code };
+  }
+
   protected async executeWhile(node: AstNodeWhile, ctx: ExecContextIf): Promise<number> {
+    let last = 0;
+
     while (await this.executeNode(node.clause, ctx) === 0) {
-      const code = await this.executeNode(node.do, ctx);
+      const { stop, code } = await this.runLoopBody(node.do, ctx);
+      last = code;
 
-      if (code === BREAK_CODE) {
-        return 0;
-      }
-
-      if (code === CONTINUE_CODE) {
-        continue;
-      }
-
-      // Propagate exit and return signals
-      if (isExitSignal(code) || isReturnSignal(code)) {
-        return code;
-      }
-
-      if (code !== 0) {
+      if (stop) {
         return code;
       }
     }
 
-    return 0;
+    return last;
   }
 
   protected async executeUntil(node: AstNodeUntil, ctx: ExecContextIf): Promise<number> {
+    let last = 0;
+
     while (await this.executeNode(node.clause, ctx) !== 0) {
-      const code = await this.executeNode(node.do, ctx);
+      const { stop, code } = await this.runLoopBody(node.do, ctx);
+      last = code;
 
-      if (code === BREAK_CODE) {
-        return 0;
-      }
-
-      if (code === CONTINUE_CODE) {
-        continue;
-      }
-
-      // Propagate exit and return signals
-      if (isExitSignal(code) || isReturnSignal(code)) {
-        return code;
-      }
-
-      if (code !== 0) {
+      if (stop) {
         return code;
       }
     }
 
-    return 0;
+    return last;
   }
 
   protected async executeFor(node: AstNodeFor, ctx: ExecContextIf): Promise<number> {
+    // The whole word list is expanded once, before the first iteration, so the
+    // body cannot change what is still to be iterated over.
+    const values: string[] = [];
+
     for (const word of node.wordlist || []) {
       const expanded = await this.resolveExpansions(word, ctx);
 
-      if (expanded.code !== 0) {
-        return expanded.code;
-      }
+      values.push(...expanded.values);
+    }
 
-      for (const value of expanded.values) {
-        ctx.setParams({ [node.name.text]: value });
+    let last = 0;
 
-        const code = await this.executeNode(node.do, ctx);
+    for (const value of values) {
+      ctx.setParams({ [node.name.text]: value });
 
-        if (code === BREAK_CODE) {
-          return 0;
-        }
+      const { stop, code } = await this.runLoopBody(node.do, ctx);
+      last = code;
 
-        if (code === CONTINUE_CODE) {
-          continue;
-        }
-
-        // Propagate exit and return signals
-        if (isExitSignal(code) || isReturnSignal(code)) {
-          return code;
-        }
-
-        if (code !== 0) {
-          return code;
-        }
+      if (stop) {
+        return code;
       }
     }
 
-    return 0;
+    return last;
   }
 
   protected async executeCase(node: AstNodeCase, ctx: ExecContextIf): Promise<number> {
     // Expand the clause value
     const clauseExpanded = await this.resolveExpansions(node.clause, ctx);
-    if (clauseExpanded.code !== 0) {
-      return clauseExpanded.code;
-    }
     const clauseValue = clauseExpanded.values[0] || '';
 
     for (const caseItem of node.cases || []) {
@@ -799,10 +798,7 @@ export class AstExecutor {
       // removal: quoted characters match literally, unquoted globs are active)
       let matched = false;
       for (const pattern of caseItem.pattern) {
-        const { regex, code } = await this.expandCasePattern(pattern, ctx);
-        if (code !== 0) {
-          return code;
-        }
+        const regex = await this.expandCasePattern(pattern, ctx);
         if (regex.test(clauseValue)) {
           matched = true;
           break;
@@ -831,7 +827,7 @@ export class AstExecutor {
    * glob-active when unquoted, literal when inside double quotes (as in bash);
    * no filename expansion or field splitting is applied.
    */
-  protected async expandCasePattern(word: AstNodeWord, ctx: ExecContextIf): Promise<{ regex: RegExp; code: number }> {
+  protected async expandCasePattern(word: AstNodeWord, ctx: ExecContextIf): Promise<RegExp> {
     const text = word.text;
 
     const escapeRegexChar = (c: string): string => /[\\^$.*+?()[\]{}|]/.test(c) ? `\\${c}` : c;
@@ -873,10 +869,7 @@ export class AstExecutor {
         text: text.slice(xp.loc.start, xp.loc.end + 1),
         expansion: [{ ...xp, loc: { start: 0, end: xp.loc.end - xp.loc.start } }],
       } as AstNodeWord;
-      const { values, code } = await this.resolveExpansions(synthetic, ctx);
-      if (code !== 0) {
-        return { regex: /(?!)/, code };
-      }
+      const { values } = await this.resolveExpansions(synthetic, ctx);
       evaluated.set(xp.loc.start, { end: xp.loc.end, value: values.join(' ') });
     }
 
@@ -930,11 +923,11 @@ export class AstExecutor {
     regex += '$';
 
     try {
-      return { regex: new RegExp(regex), code: 0 };
+      return new RegExp(regex);
     } catch {
       // invalid regex (e.g. malformed character class): fall back to exact match
       const literal = [...text].map(escapeRegexChar).join('');
-      return { regex: new RegExp(`^${literal}$`), code: 0 };
+      return new RegExp(`^${literal}$`);
     }
   }
 
@@ -1296,24 +1289,20 @@ export class AstExecutor {
     return rValue.text;
   }
 
-  protected async resolveExpansions(node: AstNodeWord | AstNodeAssignmentWord, ctx: ExecContextIf): Promise<{ values: string[]; code: number }> {
+  protected async resolveExpansions(node: AstNodeWord | AstNodeAssignmentWord, ctx: ExecContextIf): Promise<{ values: string[]; status: number }> {
     if (!node.expansion || node.expansion.length === 0) {
-      let code = 0;
-      if (node.type === 'Word') {
-        if (node.text === 'continue') {
-          code = CONTINUE_CODE;
-        } else if (node.text === 'break') {
-          code = BREAK_CODE;
-        }
-      }
-
       // Quotes AND escapes are already processed by the parser's quote-removal
       // phase, so node.text is final here. Re-running unescape would wrongly
       // transform literal backslash sequences (e.g. single-quoted '\1' -> 0x01).
-      return { values: [node.text], code };
+      return { values: [node.text], status: 0 };
     }
 
     const rValue = new utils.ReplaceString(node.text);
+
+    // Exit status of the last command substitution in this word. It is *not* an
+    // error channel: an expansion never aborts the word it appears in, it only
+    // reports a status the caller may adopt (only a bare assignment does).
+    let status = 0;
 
     for (const xp of node.expansion) {
       if (xp.resolved) {
@@ -1341,7 +1330,7 @@ export class AstExecutor {
           const textWithoutExpansion = node.text.slice(0, xp.loc!.start) + node.text.slice(xp.loc!.end + 1);
           const stripped = textWithoutExpansion.replace(/"/g, '');
           if (stripped === '') {
-            return { values: positionalArgs, code: 0 };
+            return { values: positionalArgs, status };
           }
 
           // $@ is part of a larger string, join with space
@@ -1424,9 +1413,12 @@ export class AstExecutor {
           // Send EOF so reads do not block
           await this.shell.pipeClose(cmdCtx.getStdout());
 
-          if (code !== 0) {
-            return { values: [rValue.text], code };
-          }
+          // A failing substitution still substitutes what it wrote. Bailing out
+          // here instead made `for e in $(ls maybe-missing)` abort the enclosing
+          // command — and with it the loop around it — instead of iterating over
+          // nothing. `exit`/`return` inside `$( )` ends that subshell only, so
+          // both are reduced to a plain status as well.
+          status = isExitSignal(code) ? getExitCode(code) : isReturnSignal(code) ? getReturnCode(code) : code;
 
           const output = await this.shell.pipeRead(cmdCtx.getStdout());
 
@@ -1456,14 +1448,14 @@ export class AstExecutor {
     // POSIX: Assignment values do not undergo field splitting
     if (node.type === 'AssignmentWord') {
       const unquoted = utils.unquoteAssignmentWithProtectedRanges(value, protectedRanges);
-      return { values: [unquoted], code: 0 };
+      return { values: [unquoted], status };
     }
 
     // Use unquoteWordWithProtectedRanges to preserve quotes that came from expansions
     // (e.g., JSON content like {"key":"value"} should keep its quotes)
     // This also preserves word splitting behavior for unquoted expansions
     const unquotedResult = utils.unquoteWordWithProtectedRanges(value, protectedRanges);
-    const result = { values: unquotedResult.values, code: 0 };
+    const result = { values: unquotedResult.values, status };
 
     // Path globbing expansion must be done last
     if (hasPathExpansion && this.shell.resolvePath) {
