@@ -59,9 +59,21 @@ around it, and `IFS=` disables it. Arrays live beside the parameters, are never
 exported and can be sparse. `declare -a`, `local -a`, `declare -p`, `read -a`,
 `mapfile`/`readarray` and `BASH_REMATCH` all operate on them.
 
-Not implemented: associative arrays (`declare -A` declares an indexed one),
-`${a[@]#pattern}` applied per element (it operates on the joined value), and
-process substitution.
+Associative arrays are declared, as in bash, with `declare -A`, which is what
+makes their subscripts keys rather than arithmetic expressions:
+
+```bash
+declare -A seen
+seen[$path]=1
+for key in "${!seen[@]}"; do echo "$key ${seen[$key]}"; done
+```
+
+An operator applies to each element of `${a[@]}` and the expansion stays a list
+(`${a[@]%.jpg}`, `${a[@]^^}`, `${a[@]/x/y}`), while `${a[@]:1:2}` slices the list
+itself. Here-strings (`read -a p <<< "$line"`) and process substitution
+(`mapfile -t f < <(find .)`) both work; the latter needs the `tempFile` and
+`removeTempFile` callbacks on `ShellIf`, since only the host knows what a command
+can open.
 
 ## Contributing
 

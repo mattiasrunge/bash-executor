@@ -512,6 +512,23 @@ export class TestShell implements ShellIf {
   }
 
   /**
+   * A scratch file for process substitution, `cat <(cmd)`.
+   */
+  async tempFile(_ctx: ExecContextIf): Promise<string> {
+    const path = `/tmp/psub-${this.pipeCounter++}`;
+
+    this.files.set(path, '');
+
+    return await path;
+  }
+
+  async removeTempFile(_ctx: ExecContextIf, path: string): Promise<void> {
+    this.files.delete(path);
+
+    await undefined;
+  }
+
+  /**
    * Register a mock command for testing
    */
   mockCommand(name: string, handler: MockCommandHandler): void {

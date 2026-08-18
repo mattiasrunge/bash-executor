@@ -38,6 +38,20 @@ import type { ExecContextIf, ExecSyncResult, ShellIf } from './types.ts';
 const CONTINUE_CODE = -10 as const;
 const BREAK_CODE = -11 as const;
 
+/**
+ * Operators that apply to every element of `${a[@]}` rather than to the elements
+ * joined together, and that therefore keep the expansion a list.
+ */
+const DISTRIBUTING_OPS = new Set([
+  'stringReplace',
+  'removeSmallestSuffixPattern',
+  'removeLargestSuffixPattern',
+  'removeSmallestPrefixPattern',
+  'removeLargestPrefixPattern',
+  'caseChange',
+  'substring',
+]);
+
 /** Builtins whose arguments are assignments rather than ordinary words */
 const DECLARATION_COMMANDS = new Set(['declare', 'typeset', 'local', 'export', 'readonly']);
 
@@ -58,6 +72,18 @@ function handled<T>(promise: Promise<T>): Promise<T> {
   promise.catch(() => {});
   return promise;
 }
+
+/**
+ * The process substitutions made while expanding one command's words.
+ *
+ * `<(cmd)` runs as the word is expanded and its output goes in the file the word
+ * became; `>(cmd)` reads that file, so it can only run once the command that
+ * writes it has finished. Either way the file is removed afterwards.
+ */
+type ProcessSubstitutions = {
+  paths: string[];
+  deferred: { path: string; ast: AstNode }[];
+};
 
 /**
  * One resolved assignment word, ready to be stored.
@@ -278,13 +304,33 @@ export class AstExecutor {
     }
   }
 
-  protected async applyRedirections(ctx: ExecContextIf, redirects?: AstNodeRedirect[]) {
+  /**
+   * Apply a command's redirections to its context.
+   *
+   * @param subs - Collects the process substitutions in the redirection targets,
+   *               `cmd > >(other)`
+   * @returns The pipes opened on the command's behalf — a here-string has no
+   *          file behind it, so the caller has to remove them when the command
+   *          is done.
+   */
+  protected async applyRedirections(ctx: ExecContextIf, redirects?: AstNodeRedirect[], subs?: ProcessSubstitutions): Promise<string[]> {
+    const temporary: string[] = [];
+
     for (const r of (redirects || [])) {
-      const { values } = await this.resolveExpansions(r.file, ctx);
+      const { values } = await this.resolveExpansions(r.file, ctx, subs);
       const target = values[0] || r.file.text;
 
       if (r.op.text === '<') {
         ctx.redirectStdin(target);
+      } else if (r.op.text === '<<<') {
+        // A here-string is the word plus a newline, fed in as stdin. The write
+        // is detached: a string larger than the pipe holds only completes once
+        // the command starts reading, which it cannot do until this returns.
+        const pipe = await this.shell.pipeOpen();
+
+        temporary.push(pipe);
+        handled(this.shell.pipeWrite(pipe, `${target}\n`).then(() => this.shell.pipeClose(pipe)));
+        ctx.redirectStdin(pipe);
       } else if (r.op.text === '>') {
         if (r.numberIo?.text === '2') {
           ctx.redirectStderr(target);
@@ -351,6 +397,8 @@ export class AstExecutor {
         }
       }
     }
+
+    return temporary;
   }
 
   protected async executeScript(node: AstNodeScript, ctx: ExecContextIf): Promise<number> {
@@ -424,6 +472,9 @@ export class AstExecutor {
     // Create an args list
     const args: string[] = [];
 
+    // `cat <(cmd)` — the substituted commands and the files standing in for them
+    const subs: ProcessSubstitutions = { paths: [], deferred: [] };
+
     // These take assignments rather than words, so their arguments are not field
     // split: `declare x=$V` is one word however many blanks V holds, and
     // `local x=($V)` is an element list.
@@ -438,13 +489,13 @@ export class AstExecutor {
         continue;
       }
 
-      const { values } = await this.resolveExpansions(arg, ctx);
+      const { values } = await this.resolveExpansions(arg, ctx, subs);
 
       args.push(...values);
     }
 
     // Apply IO redirections
-    await this.applyRedirections(ctx, node.suffix?.filter((arg) => arg.type === 'Redirect'));
+    const redirectPipes = await this.applyRedirections(ctx, node.suffix?.filter((arg) => arg.type === 'Redirect'), subs);
 
     // Expand command
     const expandedName = await this.resolveExpansions(node.name, ctx);
@@ -499,7 +550,24 @@ export class AstExecutor {
       }
 
       return node.bang ? (code === 0 ? 1 : 0) : code;
-    });
+    }, redirectPipes).finally(() => this.finishProcessSubstitutions(subs, ctx));
+  }
+
+  /**
+   * Run the `>(cmd)` substitutions of a finished command and drop their files.
+   */
+  protected async finishProcessSubstitutions(subs: ProcessSubstitutions, ctx: ExecContextIf): Promise<void> {
+    for (const { path, ast } of subs.deferred) {
+      const cmdCtx = ctx.subContext();
+
+      cmdCtx.redirectStdin(path);
+
+      await this.withFileBridging(cmdCtx, () => this.executeNode(ast, cmdCtx)).catch(() => {});
+    }
+
+    for (const path of subs.paths) {
+      await this.shell.removeTempFile?.(ctx, path).catch(() => {});
+    }
   }
 
   /**
@@ -555,10 +623,12 @@ export class AstExecutor {
    * this creates bridging pipes and handles streaming data between files and pipes.
    * @param ctx - The execution context with possible file redirections
    * @param fn - The function to execute with bridged I/O
+   * @param extraPipes - Pipes the caller opened for this command (here-strings),
+   *                     removed together with the bridging ones
    * @returns The exit code from the function
    */
-  private async withFileBridging(ctx: ExecContextIf, fn: () => Promise<number>): Promise<number> {
-    const pipes: string[] = [];
+  private async withFileBridging(ctx: ExecContextIf, fn: () => Promise<number>, extraPipes: string[] = []): Promise<number> {
+    const pipes: string[] = [...extraPipes];
     const bridges: Promise<void>[] = [];
     let stdoutPipe: string | null = null;
     let stderrPipe: string | null = null;
@@ -698,26 +768,35 @@ export class AstExecutor {
 
   protected async executeCompondList(node: AstNodeCompoundList, parentCtx: ExecContextIf): Promise<number> {
     const ctx = parentCtx.spawnContext();
-    await this.applyRedirections(ctx, node.redirections);
+    const subs: ProcessSubstitutions = { paths: [], deferred: [] };
+    const redirectPipes = await this.applyRedirections(ctx, node.redirections, subs);
 
     let lastCode = 0;
 
-    for (const command of node.commands) {
-      lastCode = await this.executeNode(command, ctx);
+    try {
+      for (const command of node.commands) {
+        lastCode = await this.executeNode(command, ctx);
 
-      // Propagate exit, return, break, and continue signals immediately
-      if (isExitSignal(lastCode) || isReturnSignal(lastCode) || lastCode === CONTINUE_CODE || lastCode === BREAK_CODE) {
-        return lastCode;
+        // Propagate exit, return, break, and continue signals immediately
+        if (isExitSignal(lastCode) || isReturnSignal(lastCode) || lastCode === CONTINUE_CODE || lastCode === BREAK_CODE) {
+          return lastCode;
+        }
+
+        // $? is updated after every command, not just at script level. Without this a
+        // compound body (if/while/for/{}/function) sees the *enclosing* $? — so the
+        // `cmd; STATUS=$?; if [ $STATUS -ne 0 ]` retry idiom silently reads 0 and every
+        // failure inside an if looks like a success.
+        ctx.setParams({ '?': String(lastCode) });
       }
 
-      // $? is updated after every command, not just at script level. Without this a
-      // compound body (if/while/for/{}/function) sees the *enclosing* $? — so the
-      // `cmd; STATUS=$?; if [ $STATUS -ne 0 ]` retry idiom silently reads 0 and every
-      // failure inside an if looks like a success.
-      ctx.setParams({ '?': String(lastCode) });
-    }
+      return lastCode;
+    } finally {
+      await this.finishProcessSubstitutions(subs, ctx);
 
-    return lastCode;
+      for (const pipe of redirectPipes) {
+        await this.shell.pipeRemove(pipe).catch(() => {});
+      }
+    }
   }
 
   protected async registerFunction(node: AstNodeFunction, parentCtx: ExecContextIf): Promise<number> {
@@ -728,14 +807,47 @@ export class AstExecutor {
     return 0;
   }
 
-  protected async executeIf(node: AstNodeIf, ctx: ExecContextIf): Promise<number> {
-    if (await this.executeNode(node.clause, ctx) === 0) {
-      return await this.executeNode(node.then, ctx);
-    } else if (node.else) {
-      return await this.executeNode(node.else, ctx);
+  /**
+   * Run a compound command with its own redirections applied.
+   *
+   * `while read l; do …; done < file` redirects the whole loop, not the command
+   * inside it, so stdin has to be in place for every iteration and the pipes
+   * only go away once the loop is done.
+   */
+  private async withCompoundRedirections<T extends { redirections?: AstNodeRedirect[] }>(
+    node: T,
+    parentCtx: ExecContextIf,
+    fn: (ctx: ExecContextIf) => Promise<number>,
+  ): Promise<number> {
+    if (!node.redirections || node.redirections.length === 0) {
+      return fn(parentCtx);
     }
 
-    return 0;
+    const ctx = parentCtx.spawnContext();
+    const subs: ProcessSubstitutions = { paths: [], deferred: [] };
+    const redirectPipes = await this.applyRedirections(ctx, node.redirections, subs);
+
+    try {
+      return await this.withFileBridging(ctx, () => fn(ctx), redirectPipes);
+    } finally {
+      await this.finishProcessSubstitutions(subs, ctx);
+
+      for (const pipe of redirectPipes) {
+        await this.shell.pipeRemove(pipe).catch(() => {});
+      }
+    }
+  }
+
+  protected async executeIf(node: AstNodeIf, parentCtx: ExecContextIf): Promise<number> {
+    return this.withCompoundRedirections(node, parentCtx, async (ctx) => {
+      if (await this.executeNode(node.clause, ctx) === 0) {
+        return await this.executeNode(node.then, ctx);
+      } else if (node.else) {
+        return await this.executeNode(node.else, ctx);
+      }
+
+      return 0;
+    });
   }
 
   /**
@@ -765,89 +877,97 @@ export class AstExecutor {
     return { stop: false, code };
   }
 
-  protected async executeWhile(node: AstNodeWhile, ctx: ExecContextIf): Promise<number> {
-    let last = 0;
+  protected async executeWhile(node: AstNodeWhile, parentCtx: ExecContextIf): Promise<number> {
+    return this.withCompoundRedirections(node, parentCtx, async (ctx) => {
+      let last = 0;
 
-    while (await this.executeNode(node.clause, ctx) === 0) {
-      const { stop, code } = await this.runLoopBody(node.do, ctx);
-      last = code;
+      while (await this.executeNode(node.clause, ctx) === 0) {
+        const { stop, code } = await this.runLoopBody(node.do, ctx);
+        last = code;
 
-      if (stop) {
-        return code;
-      }
-    }
-
-    return last;
-  }
-
-  protected async executeUntil(node: AstNodeUntil, ctx: ExecContextIf): Promise<number> {
-    let last = 0;
-
-    while (await this.executeNode(node.clause, ctx) !== 0) {
-      const { stop, code } = await this.runLoopBody(node.do, ctx);
-      last = code;
-
-      if (stop) {
-        return code;
-      }
-    }
-
-    return last;
-  }
-
-  protected async executeFor(node: AstNodeFor, ctx: ExecContextIf): Promise<number> {
-    // The whole word list is expanded once, before the first iteration, so the
-    // body cannot change what is still to be iterated over.
-    const values: string[] = [];
-
-    for (const word of node.wordlist || []) {
-      const expanded = await this.resolveExpansions(word, ctx);
-
-      values.push(...expanded.values);
-    }
-
-    let last = 0;
-
-    for (const value of values) {
-      ctx.setParams({ [node.name.text]: value });
-
-      const { stop, code } = await this.runLoopBody(node.do, ctx);
-      last = code;
-
-      if (stop) {
-        return code;
-      }
-    }
-
-    return last;
-  }
-
-  protected async executeCase(node: AstNodeCase, ctx: ExecContextIf): Promise<number> {
-    // Expand the clause value
-    const clauseExpanded = await this.resolveExpansions(node.clause, ctx);
-    const clauseValue = clauseExpanded.values[0] || '';
-
-    for (const caseItem of node.cases || []) {
-      // Check if any pattern matches (patterns undergo expansion and quote
-      // removal: quoted characters match literally, unquoted globs are active)
-      let matched = false;
-      for (const pattern of caseItem.pattern) {
-        const regex = await this.expandCasePattern(pattern, ctx);
-        if (regex.test(clauseValue)) {
-          matched = true;
-          break;
+        if (stop) {
+          return code;
         }
       }
 
-      if (matched) {
-        if (!caseItem.body) {
-          return 0;
-        }
-        return await this.executeNode(caseItem.body, ctx);
-      }
-    }
+      return last;
+    });
+  }
 
-    return 0;
+  protected async executeUntil(node: AstNodeUntil, parentCtx: ExecContextIf): Promise<number> {
+    return this.withCompoundRedirections(node, parentCtx, async (ctx) => {
+      let last = 0;
+
+      while (await this.executeNode(node.clause, ctx) !== 0) {
+        const { stop, code } = await this.runLoopBody(node.do, ctx);
+        last = code;
+
+        if (stop) {
+          return code;
+        }
+      }
+
+      return last;
+    });
+  }
+
+  protected async executeFor(node: AstNodeFor, parentCtx: ExecContextIf): Promise<number> {
+    return this.withCompoundRedirections(node, parentCtx, async (ctx) => {
+      // The whole word list is expanded once, before the first iteration, so the
+      // body cannot change what is still to be iterated over.
+      const values: string[] = [];
+
+      for (const word of node.wordlist || []) {
+        const expanded = await this.resolveExpansions(word, ctx);
+
+        values.push(...expanded.values);
+      }
+
+      let last = 0;
+
+      for (const value of values) {
+        ctx.setParams({ [node.name.text]: value });
+
+        const { stop, code } = await this.runLoopBody(node.do, ctx);
+        last = code;
+
+        if (stop) {
+          return code;
+        }
+      }
+
+      return last;
+    });
+  }
+
+  protected async executeCase(node: AstNodeCase, parentCtx: ExecContextIf): Promise<number> {
+    return this.withCompoundRedirections(node, parentCtx, async (ctx) => {
+      // Expand the clause value
+      const clauseExpanded = await this.resolveExpansions(node.clause, ctx);
+      const clauseValue = clauseExpanded.values[0] || '';
+
+      for (const caseItem of node.cases || []) {
+        // Check if any pattern matches (patterns undergo expansion and quote
+        // removal: quoted characters match literally, unquoted globs are active)
+        let matched = false;
+        for (const pattern of caseItem.pattern) {
+          const regex = await this.expandCasePattern(pattern, ctx);
+          if (regex.test(clauseValue)) {
+            matched = true;
+            break;
+          }
+        }
+
+        if (matched) {
+          if (!caseItem.body) {
+            return 0;
+          }
+          return await this.executeNode(caseItem.body, ctx);
+        }
+      }
+
+      return 0;
+    });
   }
 
   /**
@@ -1424,6 +1544,15 @@ export class AstExecutor {
   }
 
   /**
+   * Split an element written as `[key]=value`, or return null for a plain one.
+   */
+  protected keyedElement(element: string): { key: string; value: string } | null {
+    const match = element.match(/^\[([^\]]*)\]=(.*)$/s);
+
+    return match ? { key: match[1], value: match[2] } : null;
+  }
+
+  /**
    * Store what resolveAssignment() worked out.
    *
    * @param local - True for a prefix assignment, which only the command it
@@ -1433,14 +1562,44 @@ export class AstExecutor {
     const { name, subscript, append, values, list } = assignment;
 
     if (list) {
-      const existing = append ? ctx.getArray(name) ?? [] : [];
-      const combined = existing.concat(values);
+      // `a=([k]=v …)` on an associative array, and `a=([2]=x)` on an indexed one
+      if (ctx.getAssoc(name)) {
+        const entries = append ? { ...ctx.getAssoc(name) } : {};
+
+        for (const element of values) {
+          const keyed = this.keyedElement(element);
+
+          if (keyed) {
+            entries[keyed.key] = keyed.value;
+          }
+        }
+
+        if (local) {
+          ctx.setLocalAssoc(name, entries);
+        } else {
+          ctx.setAssoc(name, entries);
+        }
+
+        return;
+      }
+
+      const existing = append ? (ctx.getArray(name) ?? []).slice() : [];
+
+      for (const element of values) {
+        const keyed = this.keyedElement(element);
+
+        if (keyed) {
+          existing[await this.resolveIndex(keyed.key, existing.length, ctx)] = keyed.value;
+        } else {
+          existing.push(element);
+        }
+      }
 
       if (local) {
-        ctx.setLocalArray(name, combined);
+        ctx.setLocalArray(name, existing);
         ctx.setLocalParams({ [name]: null });
       } else {
-        ctx.setArray(name, combined);
+        ctx.setArray(name, existing);
         ctx.setParams({ [name]: null });
       }
 
@@ -1449,11 +1608,37 @@ export class AstExecutor {
 
     const value = values[0] ?? '';
 
+    if (subscript !== undefined && ctx.getAssoc(name)) {
+      const assoc = ctx.getAssoc(name)!;
+      const key = await this.expandSubscript(subscript, ctx);
+      const element = append ? (assoc[key] ?? '') + value : value;
+
+      if (local) {
+        ctx.setLocalAssoc(name, { ...assoc, [key]: element });
+      } else {
+        ctx.setAssocElement(name, key, element);
+      }
+
+      return;
+    }
+
     if (subscript !== undefined) {
       const array = ctx.getArray(name);
       const index = await this.resolveIndex(subscript, array?.length ?? 0, ctx);
+      const element = append ? (array?.[index] ?? '') + value : value;
 
-      ctx.setArrayElement(name, index, append ? (array?.[index] ?? '') + value : value);
+      if (local) {
+        // A prefix assignment is scoped to the command it precedes, so the array
+        // is copied rather than written through to wherever it lives
+        const copy = (array ?? []).slice();
+
+        copy[index] = element;
+        ctx.setLocalArray(name, copy);
+
+        return;
+      }
+
+      ctx.setArrayElement(name, index, element);
 
       return;
     }
@@ -1509,10 +1694,82 @@ export class AstExecutor {
   }
 
   /**
+   * Run one process substitution and return the path standing in for it.
+   *
+   * The shell decides what that path is; without the callback there is no way to
+   * hand a command something it can open, so `<(…)` is an error rather than a
+   * path that will not work.
+   */
+  protected async substituteProcess(
+    xp: { direction?: 'in' | 'out'; commandAST?: AstNode; command?: string },
+    ctx: ExecContextIf,
+    subs?: ProcessSubstitutions,
+  ): Promise<string> {
+    if (!this.shell.tempFile) {
+      throw new Error(`process substitution is not supported by this shell: ${xp.direction === 'out' ? '>' : '<'}(${xp.command ?? ''})`);
+    }
+
+    const path = await this.shell.tempFile(ctx);
+
+    subs?.paths.push(path);
+
+    if (xp.direction === 'out') {
+      // The command reads what the word's own command writes, so it runs after it
+      subs?.deferred.push({ path, ast: xp.commandAST! });
+
+      return path;
+    }
+
+    // A subshell: what it writes goes to the file, and nothing it sets leaks out
+    const cmdCtx = ctx.subContext();
+
+    cmdCtx.redirectStdout(path);
+
+    await this.withFileBridging(cmdCtx, () => this.executeNode(xp.commandAST!, cmdCtx));
+
+    return path;
+  }
+
+  /**
+   * Expand a subscript used as a key, `${m[$k]}`.
+   *
+   * An index goes through the arithmetic evaluator, which resolves `$k` on its
+   * own; a key does not, so the expansions in it are resolved here. Quote
+   * removal without field splitting, since a key is one word however many blanks
+   * it holds.
+   */
+  protected async expandSubscript(subscript: string, ctx: ExecContextIf): Promise<string> {
+    if (!subscript.includes('$') && !subscript.includes('`')) {
+      return subscript;
+    }
+
+    try {
+      const ast = await parse(subscript, { mode: 'word-expansion' });
+      const word = (ast.commands[0] as AstNodeCommand).name;
+
+      if (!word) {
+        return subscript;
+      }
+
+      const { values } = await this.resolveExpansions({ ...word, type: 'AssignmentWord' } as AstNodeAssignmentWord, ctx);
+
+      return values[0] ?? '';
+    } catch {
+      return subscript;
+    }
+  }
+
+  /**
    * The elements of an array, holes skipped. A scalar counts as a single
    * element, which is what makes `${x[@]}` work on an ordinary variable.
    */
   protected arrayElements(name: string, ctx: ExecContextIf, params: Record<string, string>): string[] {
+    const assoc = ctx.getAssoc(name);
+
+    if (assoc) {
+      return Object.values(assoc);
+    }
+
     const array = ctx.getArray(name);
 
     if (array) {
@@ -1540,6 +1797,13 @@ export class AstExecutor {
       return this.arrayElements(name, ctx, params).join(separator);
     }
 
+    const assoc = ctx.getAssoc(name);
+
+    if (assoc) {
+      // On an associative array the subscript is a key, not an expression
+      return assoc[await this.expandSubscript(subscript, ctx)] ?? '';
+    }
+
     const array = ctx.getArray(name);
     const index = await this.resolveIndex(subscript, array?.length ?? 1, ctx);
 
@@ -1558,17 +1822,90 @@ export class AstExecutor {
     const { name, subscript } = this.splitSubscript(parameter);
 
     if (subscript === undefined) {
-      return params[name] !== undefined || ctx.getArray(name) !== undefined;
+      return params[name] !== undefined || ctx.getArray(name) !== undefined || ctx.getAssoc(name) !== undefined;
     }
 
     if (subscript === '@' || subscript === '*') {
       return this.arrayElements(name, ctx, params).length > 0;
     }
 
+    const assoc = ctx.getAssoc(name);
+
+    if (assoc) {
+      return assoc[await this.expandSubscript(subscript, ctx)] !== undefined;
+    }
+
     const array = ctx.getArray(name);
     const index = await this.resolveIndex(subscript, array?.length ?? 1, ctx);
 
     return array ? array[index] !== undefined : index === 0 && params[name] !== undefined;
+  }
+
+  /**
+   * Apply an operator that transforms a value, or return null when the operator
+   * is not one of those (the `${x-word}` family needs to know whether the
+   * parameter is set, and `${#x}` is about the parameter, not its value).
+   *
+   * These are the operators that distribute over `${a[@]}`: bash applies them to
+   * each element in turn and the expansion is the resulting list.
+   */
+  protected async applyValueOperator(xp: Record<string, unknown>, value: string, ctx: ExecContextIf): Promise<string | null> {
+    switch (xp.op) {
+      case 'stringReplace': {
+        // ${var/pattern/string}
+        const pattern = String(xp.substitute ?? '');
+        const replacement = String(xp.replace ?? '');
+
+        if (xp.globally) {
+          return value.split(pattern).join(replacement);
+        }
+
+        const idx = value.indexOf(pattern);
+
+        return idx === -1 ? value : value.slice(0, idx) + replacement + value.slice(idx + pattern.length);
+      }
+
+      case 'removeSmallestSuffixPattern':
+        return this.removeSuffix(value, await this.resolveWordValue(xp.word, ctx), false);
+
+      case 'removeLargestSuffixPattern':
+        return this.removeSuffix(value, await this.resolveWordValue(xp.word, ctx), true);
+
+      case 'removeSmallestPrefixPattern':
+        return this.removePrefix(value, await this.resolveWordValue(xp.word, ctx), false);
+
+      case 'removeLargestPrefixPattern':
+        return this.removePrefix(value, await this.resolveWordValue(xp.word, ctx), true);
+
+      case 'caseChange':
+        return this.changeCase(value, String(xp.pattern ?? '?'), xp.case === 'upper', Boolean(xp.globally));
+
+      case 'substring': {
+        // ${var:offset:length}
+        const offset = Number(xp.offset) || 0;
+        const length = xp.length != null ? Number(xp.length) : undefined;
+
+        return length != null ? value.slice(offset, offset + length) : value.slice(offset);
+      }
+
+      default:
+        return null;
+    }
+  }
+
+  /**
+   * `${v^pattern}` / `${v,,pattern}` — convert the characters matching pattern.
+   * Without the doubled operator only the first character is considered.
+   */
+  protected changeCase(value: string, pattern: string, upper: boolean, globally: boolean): string {
+    const matches = new RegExp(`^${this.globToRegexStr(pattern)}$`);
+    const convert = (char: string) => upper ? char.toUpperCase() : char.toLowerCase();
+
+    if (!globally) {
+      return value.length > 0 && matches.test(value[0]) ? convert(value[0]) + value.slice(1) : value;
+    }
+
+    return [...value].map((char) => matches.test(char) ? convert(char) : char).join('');
   }
 
   /**
@@ -1602,13 +1939,15 @@ export class AstExecutor {
   ): { values: string[]; join: 'field' | 'ifs' } | null {
     // ${!a[@]} — the indices that are set, not the values
     if (xp.op === 'arrayIndices') {
-      const array = ctx.getArray(String(xp.parameter));
-      const keys = array ? Object.keys(array) : params[String(xp.parameter)] !== undefined ? ['0'] : [];
+      const name = String(xp.parameter);
+      const assoc = ctx.getAssoc(name);
+      const array = ctx.getArray(name);
+      const keys = assoc ? Object.keys(assoc) : array ? Object.keys(array) : params[name] !== undefined ? ['0'] : [];
 
       return { values: keys, join: xp.expandWords ? 'field' : 'ifs' };
     }
 
-    if (xp.op) {
+    if (xp.op && !DISTRIBUTING_OPS.has(xp.op)) {
       return null;
     }
 
@@ -1640,6 +1979,7 @@ export class AstExecutor {
   protected async substituteExpansions(
     node: AstNodeWord | AstNodeAssignmentWord,
     ctx: ExecContextIf,
+    subs?: ProcessSubstitutions,
   ): Promise<{ text: string; protectedRanges: ProtectedRange[]; status: number; emptyList: boolean }> {
     const rValue = new utils.ReplaceString(node.text);
 
@@ -1671,6 +2011,24 @@ export class AstExecutor {
         if (list) {
           const separator = list.join === 'field' ? utils.FIELD_MARKER : (this.getIfs(ctx)[0] ?? '');
 
+          // An operator on a list applies to each element in turn, except
+          // ${a[@]:x:y}, which slices the list itself
+          if (xp.op === 'substring') {
+            const xpAny = xp as Record<string, unknown>;
+            const length = xpAny.length != null ? Number(xpAny.length) : undefined;
+
+            // `${a[@]:1}` counts from the first element, `${@:1}` from the first
+            // positional parameter — offset 0 there is $0, which is not in the list
+            const positional = xp.parameter === '@' || xp.parameter === '*';
+            const offset = Math.max(0, (Number(xpAny.offset) || 0) - (positional ? 1 : 0));
+
+            list.values = length != null ? list.values.slice(offset, offset + length) : list.values.slice(offset);
+          } else if (xp.op) {
+            const xpAny = xp as Record<string, unknown>;
+
+            list.values = await Promise.all(list.values.map(async (value) => await this.applyValueOperator(xpAny, value, ctx) ?? value));
+          }
+
           // An empty list in a word of its own expands to no word at all, not to
           // one empty word: `f "$@"` with no arguments passes nothing.
           if (list.values.length === 0 && list.join === 'field') {
@@ -1688,19 +2046,10 @@ export class AstExecutor {
 
           let resolved: string;
 
-          if (xpAny.op === 'stringReplace') {
-            const pattern = String(xpAny.substitute ?? '');
-            const replacement = String(xpAny.replace ?? '');
-            if (xpAny.globally) {
-              resolved = paramValue.split(pattern).join(replacement);
-            } else {
-              const idx = paramValue.indexOf(pattern);
-              if (idx === -1) {
-                resolved = paramValue;
-              } else {
-                resolved = paramValue.slice(0, idx) + replacement + paramValue.slice(idx + pattern.length);
-              }
-            }
+          const transformed = await this.applyValueOperator(xpAny, paramValue, ctx);
+
+          if (transformed !== null) {
+            resolved = transformed;
           } else if (xpAny.op === 'useDefaultValue') {
             // ${var:-word} — use word if var is unset or empty
             resolved = paramValue || await this.resolveWordValue(xpAny.word, ctx);
@@ -1718,27 +2067,6 @@ export class AstExecutor {
             const { name, subscript } = this.splitSubscript(xp.parameter!);
 
             resolved = subscript === '@' || subscript === '*' ? String(this.arrayElements(name, ctx, params).length) : String(paramValue.length);
-          } else if (xpAny.op === 'removeSmallestSuffixPattern') {
-            // ${var%pattern}
-            const pattern = await this.resolveWordValue(xpAny.word, ctx);
-            resolved = this.removeSuffix(paramValue, pattern, false);
-          } else if (xpAny.op === 'removeLargestSuffixPattern') {
-            // ${var%%pattern}
-            const pattern = await this.resolveWordValue(xpAny.word, ctx);
-            resolved = this.removeSuffix(paramValue, pattern, true);
-          } else if (xpAny.op === 'removeSmallestPrefixPattern') {
-            // ${var#pattern}
-            const pattern = await this.resolveWordValue(xpAny.word, ctx);
-            resolved = this.removePrefix(paramValue, pattern, false);
-          } else if (xpAny.op === 'removeLargestPrefixPattern') {
-            // ${var##pattern}
-            const pattern = await this.resolveWordValue(xpAny.word, ctx);
-            resolved = this.removePrefix(paramValue, pattern, true);
-          } else if (xpAny.op === 'substring') {
-            // ${var:offset:length}
-            const offset = Number(xpAny.offset) || 0;
-            const len = xpAny.length != null ? Number(xpAny.length) : undefined;
-            resolved = len != null ? paramValue.slice(offset, offset + len) : paramValue.slice(offset);
           } else {
             resolved = paramValue;
           }
@@ -1787,13 +2115,21 @@ export class AstExecutor {
           xp.loc!.end + 1,
           String(result),
         );
+      } else if (xp.type === 'ProcessSubstitution') {
+        const path = await this.substituteProcess(xp, ctx, subs);
+
+        rValue.replace(xp.loc!.start, xp.loc!.end + 1, path);
       }
     }
 
     return { text: rValue.text, protectedRanges: rValue.protectedRanges, status, emptyList };
   }
 
-  protected async resolveExpansions(node: AstNodeWord | AstNodeAssignmentWord, ctx: ExecContextIf): Promise<{ values: string[]; status: number }> {
+  protected async resolveExpansions(
+    node: AstNodeWord | AstNodeAssignmentWord,
+    ctx: ExecContextIf,
+    subs?: ProcessSubstitutions,
+  ): Promise<{ values: string[]; status: number }> {
     if (!node.expansion || node.expansion.length === 0) {
       // Quotes AND escapes are already processed by the parser's quote-removal
       // phase, so node.text is final here. Re-running unescape would wrongly
@@ -1801,7 +2137,7 @@ export class AstExecutor {
       return { values: [node.text], status: 0 };
     }
 
-    const { text: value, protectedRanges, status, emptyList } = await this.substituteExpansions(node, ctx);
+    const { text: value, protectedRanges, status, emptyList } = await this.substituteExpansions(node, ctx, subs);
 
     if (emptyList) {
       return { values: [], status };

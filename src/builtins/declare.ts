@@ -18,6 +18,15 @@ function printArray(name: string, values: string[]): string {
 }
 
 /**
+ * Render an associative array: `declare -A a=([k]="v")`.
+ */
+function printAssoc(name: string, values: Record<string, string>): string {
+  const elements = Object.entries(values).map(([key, value]) => `[${key}]="${value}"`);
+
+  return `declare -A ${name}=(${elements.join(' ')})\n`;
+}
+
+/**
  * Parse a variable assignment from an argument.
  *
  * @param arg - The argument to parse (e.g., "foo=bar" or "foo")
@@ -55,8 +64,8 @@ function isValidName(name: string): boolean {
  * -r    Make variables readonly
  * -x    Export variables to the environment
  * -i    Treat variables as integers
- * -a    Declare array variables (basic support)
- * -A    Declare associative array variables (basic support)
+ * -a    Declare indexed array variables
+ * -A    Declare associative array variables
  * -f    Display function definitions (limited support)
  * -F    Display function names only (limited support)
  * +r/+x/+i  Remove attributes (where applicable)
@@ -79,6 +88,7 @@ export const declareBuiltin: BuiltinHandler = async (
   let setExport = false;
   let setInteger = false;
   let setArray = false;
+  let setAssoc = false;
   let unsetReadonly = false;
   let unsetExport = false;
   let showFunctions = false;
@@ -107,8 +117,10 @@ export const declareBuiltin: BuiltinHandler = async (
             setInteger = !remove;
             break;
           case 'a':
-          case 'A':
             setArray = !remove;
+            break;
+          case 'A':
+            setAssoc = !remove;
             break;
           case 'f':
             showFunctions = true;
@@ -161,6 +173,10 @@ export const declareBuiltin: BuiltinHandler = async (
         output += printArray(name, values);
       }
 
+      for (const [name, values] of Object.entries(ctx.getAssocs())) {
+        output += printAssoc(name, values);
+      }
+
       return { code: 0, stdout: output };
     }
 
@@ -173,6 +189,16 @@ export const declareBuiltin: BuiltinHandler = async (
   let output = '';
 
   for (const arg of varArgs) {
+    // An associative array has to exist before an element list can be read as
+    // keys, so the declaration is made first
+    if (setAssoc) {
+      const assocName = parseAssignment(arg).name;
+
+      if (isValidName(assocName) && !ctx.getAssoc(assocName)) {
+        ctx.setAssoc(assocName, {});
+      }
+    }
+
     // `declare -a x=(1 2)` — the element list survives quote removal as one word
     if (assignArrayArg(ctx, arg, false)) {
       continue;
@@ -186,14 +212,25 @@ export const declareBuiltin: BuiltinHandler = async (
       continue;
     }
 
-    // -a with no value declares an empty array, keeping any array already there
+    // -a/-A with no value declares an empty array, keeping any already there
     if (setArray && value === undefined && !printMode) {
       ctx.setArray(name, ctx.getArray(name) ?? []);
       continue;
     }
 
+    if (setAssoc && value === undefined && !printMode) {
+      continue;
+    }
+
     // Print mode: show variable declaration
     if (printMode && value === undefined) {
+      const assoc = ctx.getAssoc(name);
+
+      if (assoc) {
+        output += printAssoc(name, assoc);
+        continue;
+      }
+
       const array = ctx.getArray(name);
 
       if (array) {

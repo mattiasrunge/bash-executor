@@ -3,12 +3,12 @@ import type { ExecContextIf } from '../types.ts';
 import type { BuiltinHandler } from './types.ts';
 
 /**
- * Split `a[1]` into the array name and the index it names.
+ * Split `a[1]` or `a[key]` into the array name and the subscript it names.
  */
-const subscripted = (name: string): { name: string; index: number } | null => {
-  const match = name.match(/^([a-zA-Z_][a-zA-Z0-9_]*)\[(-?\d+)\]$/);
+const subscripted = (name: string): { name: string; subscript: string } | null => {
+  const match = name.match(/^([a-zA-Z_][a-zA-Z0-9_]*)\[(.*)\]$/s);
 
-  return match ? { name: match[1], index: Number(match[2]) } : null;
+  return match ? { name: match[1], subscript: match[2] } : null;
 };
 
 /**
@@ -21,8 +21,31 @@ export const assignArrayArg = (ctx: ExecContextIf, arg: string, local: boolean):
     return false;
   }
 
-  const existing = parts.append ? ctx.getArray(parts.name) ?? [] : [];
   const elements = parts.value === '' ? [] : parts.value.split(utils.ARRAY_ELEMENT_SEPARATOR);
+
+  // An associative array takes `[key]=value` elements; the name has to have been
+  // declared -A already, which is what tells the two kinds apart
+  if (ctx.getAssoc(parts.name)) {
+    const entries = parts.append ? { ...ctx.getAssoc(parts.name) } : {};
+
+    for (const element of elements) {
+      const keyed = element.match(/^\[([^\]]*)\]=(.*)$/s);
+
+      if (keyed) {
+        entries[keyed[1]] = keyed[2];
+      }
+    }
+
+    if (local) {
+      ctx.setLocalAssoc(parts.name, entries);
+    } else {
+      ctx.setAssoc(parts.name, entries);
+    }
+
+    return true;
+  }
+
+  const existing = parts.append ? ctx.getArray(parts.name) ?? [] : [];
   const values = existing.concat(elements);
 
   if (local) {
@@ -142,17 +165,24 @@ export const unsetBuiltin: BuiltinHandler = async (ctx, args) => {
     const element = subscripted(name);
 
     if (element) {
+      if (ctx.getAssoc(element.name)) {
+        ctx.unsetAssocElement(element.name, element.subscript);
+        continue;
+      }
+
       const array = ctx.getArray(element.name);
-      const index = element.index < 0 ? (array?.length ?? 0) + element.index : element.index;
+      const parsed = Number.parseInt(element.subscript, 10) || 0;
+      const index = parsed < 0 ? (array?.length ?? 0) + parsed : parsed;
 
       ctx.unsetArrayElement(element.name, index);
       continue;
     }
 
-    // Unset env, params and any array
+    // Unset env, params and either kind of array
     ctx.setEnv({ [name]: null });
     ctx.setParams({ [name]: null });
     ctx.unsetArray(name);
+    ctx.unsetAssoc(name);
   }
 
   return { code: 0 };
@@ -175,10 +205,24 @@ export const localBuiltin: BuiltinHandler = async (cmdCtx, args) => {
   const ctx = cmdCtx.getParent() ?? cmdCtx;
 
   let array = false;
+  let assoc = false;
 
   for (const arg of args) {
-    if (arg === '-a' || arg === '-A') {
+    if (assoc && !arg.startsWith('-')) {
+      const assocName = arg.indexOf('=') === -1 ? arg : arg.slice(0, arg.indexOf('='));
+
+      if (!ctx.getAssoc(assocName)) {
+        ctx.setLocalAssoc(assocName, {});
+      }
+    }
+
+    if (arg === '-a') {
       array = true;
+      continue;
+    }
+
+    if (arg === '-A') {
+      assoc = true;
       continue;
     }
 
@@ -190,6 +234,10 @@ export const localBuiltin: BuiltinHandler = async (cmdCtx, args) => {
 
     if (array && eqIdx === -1) {
       ctx.setLocalArray(arg, ctx.getArray(arg) ?? []);
+      continue;
+    }
+
+    if (assoc && eqIdx === -1) {
       continue;
     }
 

@@ -13,6 +13,7 @@ export class ExecContext implements ExecContextIf {
   private env: Record<string, string> = {};
   private params: Record<string, string> = {};
   private arrays: Record<string, string[]> = {};
+  private assocs: Record<string, Record<string, string>> = {};
   private fns: Record<string, FunctionDef> = {};
   private alias: Record<string, string> = {};
   private readonlyVars = new Set<string>();
@@ -51,6 +52,10 @@ export class ExecContext implements ExecContextIf {
     // slice() so the subshell cannot mutate the caller's array, and so holes stay holes
     for (const [name, values] of Object.entries(this.getArrays())) {
       ctx.setArray(name, values.slice());
+    }
+
+    for (const [name, values] of Object.entries(this.getAssocs())) {
+      ctx.setAssoc(name, { ...values });
     }
 
     ctx.redirectStdin(this.getStdin());
@@ -228,6 +233,69 @@ export class ExecContext implements ExecContextIf {
     if (owner) {
       delete owner.arrays[name][index];
     }
+  }
+
+  getAssoc(name: string): Record<string, string> | undefined {
+    if (this.assocs[name]) {
+      return this.assocs[name];
+    }
+
+    return this.parent?.getAssoc(name);
+  }
+
+  getAssocs(): Record<string, Record<string, string>> {
+    if (this.parent) {
+      return {
+        ...this.parent.getAssocs(),
+        ...this.assocs,
+      };
+    }
+
+    return this.assocs;
+  }
+
+  setAssoc(name: string, values: Record<string, string>): void {
+    if (this.parent) {
+      this.parent.setAssoc(name, values);
+      return;
+    }
+
+    this.setLocalAssoc(name, values);
+  }
+
+  setLocalAssoc(name: string, values: Record<string, string>): void {
+    this.assocs[name] = values;
+  }
+
+  setAssocElement(name: string, key: string, value: string): void {
+    const owner = this.ownerOfAssoc(name) ?? this.root();
+
+    if (!owner.assocs[name]) {
+      owner.assocs[name] = {};
+    }
+
+    owner.assocs[name][key] = value;
+  }
+
+  unsetAssoc(name: string): void {
+    delete this.assocs[name];
+    this.parent?.unsetAssoc(name);
+  }
+
+  unsetAssocElement(name: string, key: string): void {
+    const owner = this.ownerOfAssoc(name);
+
+    if (owner) {
+      delete owner.assocs[name][key];
+    }
+  }
+
+  private ownerOfAssoc(name: string): ExecContext | undefined {
+    if (this.assocs[name]) {
+      return this;
+    }
+
+    return this.parent?.ownerOfAssoc(name);
   }
 
   private ownerOfArray(name: string): ExecContext | undefined {

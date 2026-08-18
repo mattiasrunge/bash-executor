@@ -197,3 +197,57 @@ Deno.test('Input FD Duplication', async (t) => {
     assertEquals(result.stdout, 'hello world\n');
   });
 });
+
+Deno.test('Here-strings', async (t) => {
+  await t.step('<<< feeds the word to stdin', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('read x <<< "a b"; echo "[$x]"');
+    assertEquals(result.exitCode, 0);
+    assertEquals(result.stdout, '[a b]\n');
+  });
+
+  await t.step('the word is expanded first', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('V="p q"; read -a a <<< "$V"; echo "${#a[@]}"');
+    assertEquals(result.stdout, '2\n');
+  });
+
+  await t.step('it works with read -a and with mapfile', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('mapfile -t L <<< "$(printf "a b\\nc d\\n")"; echo "${#L[@]} [${L[1]}]"');
+    assertEquals(result.stdout, '2 [c d]\n');
+  });
+
+  await t.step('an IFS prefix applies to the read it precedes', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('IFS=: read a b <<< "x:y"; echo "$a-$b"');
+    assertEquals(result.stdout, 'x-y\n');
+  });
+});
+
+Deno.test('Redirections on compound commands', async (t) => {
+  await t.step('a while loop reads its stdin from a file', async () => {
+    const shell = new TestShell();
+    shell.setFile('/tmp/lines', 'p\nq\n');
+    const result = await shell.runAndCapture('while read l; do echo "[$l]"; done < /tmp/lines');
+    assertEquals(result.stdout, '[p]\n[q]\n');
+  });
+
+  await t.step('a while loop reads a here-string', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('while read l; do echo "[$l]"; done <<< "$(printf "1\\n2\\n")"');
+    assertEquals(result.stdout, '[1]\n[2]\n');
+  });
+
+  await t.step('an if command redirects too', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('if read l; then echo "got=$l"; fi <<< "hello"');
+    assertEquals(result.stdout, 'got=hello\n');
+  });
+
+  await t.step('a group keeps the same stdin across its commands', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('{ read a; read b; echo "$a-$b"; } <<< "$(printf "x\\ny\\n")"');
+    assertEquals(result.stdout, 'x-y\n');
+  });
+});

@@ -188,6 +188,26 @@ export interface ShellIf {
   pipeReadLine?: (fd: string, delimiter?: string) => Promise<string | null>;
 
   /**
+   * Creates a scratch file and returns its path, for process substitution.
+   *
+   * `cat <(cmd)` has to hand the reading command something it can open. A shell
+   * without this callback rejects `<(…)` rather than passing on a path that does
+   * not work.
+   *
+   * @param ctx - The execution context.
+   * @returns The path of a new, empty file.
+   */
+  tempFile?: (ctx: ExecContextIf) => Promise<string>;
+
+  /**
+   * Removes a file made by tempFile.
+   *
+   * @param ctx - The execution context.
+   * @param path - The path to remove.
+   */
+  removeTempFile?: (ctx: ExecContextIf, path: string) => Promise<void>;
+
+  /**
    * A callback to resolve path globbing. If specified, the parser calls it whenever it needs to resolve path globbing. It should return the expanded path. If the option is not specified, the parser won't try to resolve any path globbing.
    *
    * @param ctx - The execution context.
@@ -349,6 +369,56 @@ export interface ExecContextIf {
    * @param {number} index - The index to remove.
    */
   unsetArrayElement: (name: string, index: number) => void;
+
+  /**
+   * Gets an associative array, or undefined when the name is not one.
+   * A name is associative because it was declared with `declare -A`, which is
+   * what makes its subscripts keys rather than arithmetic expressions.
+   * @param {string} name - The variable name.
+   * @returns {Record<string, string> | undefined} The keys and values.
+   */
+  getAssoc: (name: string) => Record<string, string> | undefined;
+
+  /**
+   * Gets all associative arrays, including those of parent contexts.
+   * @returns {Record<string, Record<string, string>>} All associative arrays.
+   */
+  getAssocs: () => Record<string, Record<string, string>>;
+
+  /**
+   * Sets an associative array in the shell context.
+   * @param {string} name - The variable name.
+   * @param {Record<string, string>} values - The keys and values.
+   */
+  setAssoc: (name: string, values: Record<string, string>) => void;
+
+  /**
+   * Sets an associative array in this context only.
+   * @param {string} name - The variable name.
+   * @param {Record<string, string>} values - The keys and values.
+   */
+  setLocalAssoc: (name: string, values: Record<string, string>) => void;
+
+  /**
+   * Sets one key, creating the array if needed.
+   * @param {string} name - The variable name.
+   * @param {string} key - The key to assign.
+   * @param {string} value - The value.
+   */
+  setAssocElement: (name: string, key: string, value: string) => void;
+
+  /**
+   * Removes an associative array.
+   * @param {string} name - The variable name.
+   */
+  unsetAssoc: (name: string) => void;
+
+  /**
+   * Removes one key.
+   * @param {string} name - The variable name.
+   * @param {string} key - The key to remove.
+   */
+  unsetAssocElement: (name: string, key: string) => void;
 
   /**
    * Sets a function in the execution context.

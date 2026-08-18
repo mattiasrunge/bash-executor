@@ -238,3 +238,97 @@ Deno.test('Arrays and subshells', async (t) => {
     assertEquals(result.stdout, 'y\n');
   });
 });
+
+Deno.test('Associative arrays', async (t) => {
+  await t.step('declare -A makes the subscripts keys', async () => {
+    const result = await run('declare -A m; m[one]=1; m[two]=2; echo "${m[one]} ${m[two]} ${#m[@]}"');
+    assertEquals(result.stdout, '1 2 2\n');
+  });
+
+  await t.step('a key can hold blanks', async () => {
+    const result = await run('declare -A m; m["two words"]=v; echo "[${m[two words]}]"');
+    assertEquals(result.stdout, '[v]\n');
+  });
+
+  await t.step('a key can come from a variable', async () => {
+    const result = await run('declare -A m; m[x]=1; k=x; echo "${m[$k]}"');
+    assertEquals(result.stdout, '1\n');
+  });
+
+  await t.step('${!m[@]} is the keys and ${m[@]} the values', async () => {
+    const result = await run('declare -A m; m[a]=1; m[b]=2; echo "${!m[@]} / ${m[@]}"');
+    assertEquals(result.stdout, 'a b / 1 2\n');
+  });
+
+  await t.step('a literal takes [key]=value elements', async () => {
+    const result = await run('declare -A m=([k]=v [j]="w x"); echo "${m[k]}/${m[j]}/${#m[@]}"');
+    assertEquals(result.stdout, 'v/w x/2\n');
+  });
+
+  await t.step('unset removes one key', async () => {
+    const result = await run('declare -A m; m[a]=1; m[b]=2; unset "m[a]"; echo "${!m[@]} ${#m[@]}"');
+    assertEquals(result.stdout, 'b 1\n');
+  });
+
+  await t.step('declare -p prints it as an associative array', async () => {
+    const result = await run('declare -A m; m[a]=1; declare -p m');
+    assertEquals(result.stdout, 'declare -A m=([a]="1")\n');
+  });
+
+  await t.step('local -A keeps it inside the function', async () => {
+    const result = await run('f() { local -A m; m[k]=v; echo "${m[k]}"; }; f; echo "outside=${#m[@]}"');
+    assertEquals(result.stdout, 'v\noutside=0\n');
+  });
+
+  await t.step('a missing key is unset, so the default applies', async () => {
+    const result = await run('declare -A m; echo "${m[nope]:-fallback}"');
+    assertEquals(result.stdout, 'fallback\n');
+  });
+
+  await t.step('an indexed array takes [index]=value elements too', async () => {
+    const result = await run('a=([2]=x [0]=y); echo "${!a[@]} / ${a[2]}"');
+    assertEquals(result.stdout, '0 2 / x\n');
+  });
+});
+
+Deno.test('Operators over a whole array', async (t) => {
+  await t.step('a suffix is stripped from each element', async () => {
+    const result = await run('a=(one.jpg "two three.jpg"); for e in "${a[@]%.jpg}"; do echo "[$e]"; done');
+    assertEquals(result.stdout, '[one]\n[two three]\n');
+  });
+
+  await t.step('a prefix and a replacement distribute too', async () => {
+    const result = await run('a=(x/1 x/2); echo "${a[@]#x/}"; b=(ab cd); echo "${b[@]/b/B}"');
+    assertEquals(result.stdout, '1 2\naB cd\n');
+  });
+
+  await t.step('case conversion distributes', async () => {
+    const result = await run('a=(abc def); echo "${a[@]^^}"; echo "${a[0]^}"');
+    assertEquals(result.stdout, 'ABC DEF\nAbc\n');
+  });
+
+  await t.step('a slice takes elements, not characters', async () => {
+    const result = await run('a=(1 2 3 4); echo "${a[@]:1:2}"; echo "${a[@]:2}"');
+    assertEquals(result.stdout, '2 3\n3 4\n');
+  });
+
+  await t.step('the positional parameters work the same way', async () => {
+    const result = await run('set -- a.x b.x; echo "${@%.x}"; echo "${@:2}"');
+    assertEquals(result.stdout, 'a b\nb.x\n');
+  });
+
+  await t.step('${#a[@]} is still the count', async () => {
+    const result = await run('a=(one.jpg two.jpg); echo "${#a[@]}"');
+    assertEquals(result.stdout, '2\n');
+  });
+});
+
+Deno.test('Prefix element assignment', async (t) => {
+  await t.step('is scoped to the command, like any prefix assignment', async () => {
+    const shell = new TestShell();
+    shell.mockCommand('show', async (ctx) => ({ code: 0, stdout: `inside=${(ctx.getArray('a') ?? []).join(' ')}\n` }));
+
+    const result = await shell.runAndCapture('a=(1 2); a[0]=x show; echo "after=${a[@]}"');
+    assertEquals(result.stdout, 'inside=x 2\nafter=1 2\n');
+  });
+});
