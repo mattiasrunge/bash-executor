@@ -1,4 +1,40 @@
+import { utils } from '@ein/bash-parser';
+import type { ExecContextIf } from '../types.ts';
 import type { BuiltinHandler } from './types.ts';
+
+/**
+ * Split `a[1]` into the array name and the index it names.
+ */
+const subscripted = (name: string): { name: string; index: number } | null => {
+  const match = name.match(/^([a-zA-Z_][a-zA-Z0-9_]*)\[(-?\d+)\]$/);
+
+  return match ? { name: match[1], index: Number(match[2]) } : null;
+};
+
+/**
+ * Store an array literal argument, `x=(a b)` as passed to local/declare.
+ */
+export const assignArrayArg = (ctx: ExecContextIf, arg: string, local: boolean): boolean => {
+  const parts = utils.parseAssignmentWord(arg);
+
+  if (!parts?.list) {
+    return false;
+  }
+
+  const existing = parts.append ? ctx.getArray(parts.name) ?? [] : [];
+  const elements = parts.value === '' ? [] : parts.value.split(utils.ARRAY_ELEMENT_SEPARATOR);
+  const values = existing.concat(elements);
+
+  if (local) {
+    ctx.setLocalArray(parts.name, values);
+    ctx.setLocalParams({ [parts.name]: null });
+  } else {
+    ctx.setArray(parts.name, values);
+    ctx.setParams({ [parts.name]: null });
+  }
+
+  return true;
+};
 
 /**
  * The export builtin - set environment variables.
@@ -99,11 +135,24 @@ export const unsetBuiltin: BuiltinHandler = async (ctx, args) => {
   for (const name of names) {
     if (unsetFunctions) {
       ctx.unsetFunction(name);
-    } else {
-      // Unset both env and params
-      ctx.setEnv({ [name]: null });
-      ctx.setParams({ [name]: null });
+      continue;
     }
+
+    // `unset a[1]` removes one element and leaves a hole, `unset a` the whole array
+    const element = subscripted(name);
+
+    if (element) {
+      const array = ctx.getArray(element.name);
+      const index = element.index < 0 ? (array?.length ?? 0) + element.index : element.index;
+
+      ctx.unsetArrayElement(element.name, index);
+      continue;
+    }
+
+    // Unset env, params and any array
+    ctx.setEnv({ [name]: null });
+    ctx.setParams({ [name]: null });
+    ctx.unsetArray(name);
   }
 
   return { code: 0 };
@@ -118,9 +167,31 @@ export const unsetBuiltin: BuiltinHandler = async (ctx, args) => {
  * function, the variable's value and export status are restored when
  * the function returns.
  */
-export const localBuiltin: BuiltinHandler = async (ctx, args) => {
+export const localBuiltin: BuiltinHandler = async (cmdCtx, args) => {
+  // Every command runs in a context of its own, which is dropped as soon as it
+  // returns — a local set there would be gone before the next command in the
+  // function body ran. The enclosing context is the function's, which is the
+  // scope `local` is about.
+  const ctx = cmdCtx.getParent() ?? cmdCtx;
+
+  let array = false;
+
   for (const arg of args) {
+    if (arg === '-a' || arg === '-A') {
+      array = true;
+      continue;
+    }
+
+    if (assignArrayArg(ctx, arg, true)) {
+      continue;
+    }
+
     const eqIdx = arg.indexOf('=');
+
+    if (array && eqIdx === -1) {
+      ctx.setLocalArray(arg, ctx.getArray(arg) ?? []);
+      continue;
+    }
 
     if (eqIdx > 0) {
       // name=value form

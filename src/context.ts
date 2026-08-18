@@ -12,6 +12,7 @@ export class ExecContext implements ExecContextIf {
   private io: IO;
   private env: Record<string, string> = {};
   private params: Record<string, string> = {};
+  private arrays: Record<string, string[]> = {};
   private fns: Record<string, FunctionDef> = {};
   private alias: Record<string, string> = {};
   private readonlyVars = new Set<string>();
@@ -46,6 +47,12 @@ export class ExecContext implements ExecContextIf {
     ctx.setCwd(this.getCwd());
     ctx.setEnv(this.getEnv());
     ctx.setParams(this.getParams());
+
+    // slice() so the subshell cannot mutate the caller's array, and so holes stay holes
+    for (const [name, values] of Object.entries(this.getArrays())) {
+      ctx.setArray(name, values.slice());
+    }
+
     ctx.redirectStdin(this.getStdin());
     ctx.redirectStdout(this.getStdout());
     ctx.redirectStderr(this.getStderr());
@@ -163,6 +170,76 @@ export class ExecContext implements ExecContextIf {
     }
 
     return this.params;
+  }
+
+  getArray(name: string): string[] | undefined {
+    if (this.arrays[name]) {
+      return this.arrays[name];
+    }
+
+    return this.parent?.getArray(name);
+  }
+
+  getArrays(): Record<string, string[]> {
+    if (this.parent) {
+      return {
+        ...this.parent.getArrays(),
+        ...this.arrays,
+      };
+    }
+
+    return this.arrays;
+  }
+
+  setArray(name: string, values: string[]): void {
+    if (this.parent) {
+      this.parent.setArray(name, values);
+      return;
+    }
+
+    this.setLocalArray(name, values);
+  }
+
+  setLocalArray(name: string, values: string[]): void {
+    this.arrays[name] = values;
+  }
+
+  setArrayElement(name: string, index: number, value: string): void {
+    // The element goes where the array already is, so `a[0]=x` updates the array
+    // it can see instead of shadowing it. A new array lands in the shell context,
+    // the same place a plain assignment goes.
+    const owner = this.ownerOfArray(name) ?? this.root();
+
+    if (!owner.arrays[name]) {
+      owner.arrays[name] = [];
+    }
+
+    owner.arrays[name][index] = value;
+  }
+
+  unsetArray(name: string): void {
+    delete this.arrays[name];
+    this.parent?.unsetArray(name);
+  }
+
+  unsetArrayElement(name: string, index: number): void {
+    const owner = this.ownerOfArray(name);
+
+    if (owner) {
+      delete owner.arrays[name][index];
+    }
+  }
+
+  private ownerOfArray(name: string): ExecContext | undefined {
+    if (this.arrays[name]) {
+      return this;
+    }
+
+    return this.parent?.ownerOfArray(name);
+  }
+
+  private root(): ExecContext {
+    return this.parent ? this.parent.root() : this;
   }
 
   setFunction(

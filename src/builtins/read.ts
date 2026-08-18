@@ -4,6 +4,7 @@
  * Reads a line from standard input and assigns words to variables.
  */
 
+import { utils } from '@ein/bash-parser';
 import type { ExecContextIf, ShellIf } from '../types.ts';
 import type { BuiltinHandler, BuiltinResult } from './types.ts';
 
@@ -17,6 +18,7 @@ function parseOptions(args: string[]): {
   silent: boolean;
   nChars: number | null;
   fd: string | null;
+  arrayName: string | null;
   varNames: string[];
 } {
   const options = {
@@ -26,6 +28,7 @@ function parseOptions(args: string[]): {
     silent: false,
     nChars: null as number | null,
     fd: null as string | null,
+    arrayName: null as string | null,
     varNames: [] as string[],
   };
 
@@ -51,6 +54,9 @@ function parseOptions(args: string[]): {
     } else if (arg === '-u' && i + 1 < args.length) {
       // Read from file descriptor
       options.fd = args[++i];
+    } else if (arg === '-a' && i + 1 < args.length) {
+      // Assign the words to an array instead of to separate variables
+      options.arrayName = args[++i];
     } else if (!arg.startsWith('-')) {
       // Variable names start here
       options.varNames = args.slice(i);
@@ -61,49 +67,11 @@ function parseOptions(args: string[]): {
   }
 
   // Default variable name is REPLY
-  if (options.varNames.length === 0) {
+  if (options.varNames.length === 0 && !options.arrayName) {
     options.varNames = ['REPLY'];
   }
 
   return options;
-}
-
-/**
- * Split a line into words respecting IFS.
- *
- * @param line - The line to split
- * @param ifs - The Internal Field Separator (defaults to space, tab, newline)
- * @returns Array of words
- */
-function splitByIFS(line: string, ifs: string = ' \t\n'): string[] {
-  if (ifs === '') {
-    // Empty IFS: no splitting
-    return [line];
-  }
-
-  const words: string[] = [];
-  let current = '';
-  let inWord = false;
-
-  for (const char of line) {
-    if (ifs.includes(char)) {
-      if (inWord) {
-        words.push(current);
-        current = '';
-        inWord = false;
-      }
-      // Skip consecutive IFS characters
-    } else {
-      current += char;
-      inWord = true;
-    }
-  }
-
-  if (current) {
-    words.push(current);
-  }
-
-  return words;
 }
 
 /**
@@ -210,11 +178,19 @@ export const readBuiltin: BuiltinHandler = async (
     input = processEscapes(input);
   }
 
-  // Get IFS from environment
-  const ifs = ctx.getEnv()['IFS'] ?? ' \t\n';
+  // `IFS= read -r line` is a prefix assignment, so params come first — and an
+  // IFS that is set but empty means "do not split", not "use the default"
+  const ifs = ctx.getParams()['IFS'] ?? ctx.getEnv()['IFS'] ?? utils.DEFAULT_IFS;
 
   // Split by IFS
-  const words = splitByIFS(input, ifs);
+  const words = utils.splitByIfs(input, ifs);
+
+  // -a: the words become the elements of an array
+  if (options.arrayName) {
+    ctx.setArray(options.arrayName, words);
+
+    return { code: 0 };
+  }
 
   // Assign to variables
   const varNames = options.varNames;

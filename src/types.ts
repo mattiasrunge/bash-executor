@@ -302,6 +302,55 @@ export interface ExecContextIf {
   ) => Record<string, string>;
 
   /**
+   * Gets an indexed array, or undefined when the name is not an array.
+   * Arrays live beside the params, are never exported, and can be sparse.
+   * @param {string} name - The variable name.
+   * @returns {string[] | undefined} The array values.
+   */
+  getArray: (name: string) => string[] | undefined;
+
+  /**
+   * Gets all arrays, including those of parent contexts.
+   * @returns {Record<string, string[]>} All arrays.
+   */
+  getArrays: () => Record<string, string[]>;
+
+  /**
+   * Sets an array in the shell context.
+   * @param {string} name - The variable name.
+   * @param {string[]} values - The array values.
+   */
+  setArray: (name: string, values: string[]) => void;
+
+  /**
+   * Sets an array in this context only, for prefix assignments and `local`.
+   * @param {string} name - The variable name.
+   * @param {string[]} values - The array values.
+   */
+  setLocalArray: (name: string, values: string[]) => void;
+
+  /**
+   * Sets one element, creating the array if needed.
+   * @param {string} name - The variable name.
+   * @param {number} index - The index to assign.
+   * @param {string} value - The value.
+   */
+  setArrayElement: (name: string, index: number, value: string) => void;
+
+  /**
+   * Removes an array.
+   * @param {string} name - The variable name.
+   */
+  unsetArray: (name: string) => void;
+
+  /**
+   * Removes one element, leaving a hole.
+   * @param {string} name - The variable name.
+   * @param {number} index - The index to remove.
+   */
+  unsetArrayElement: (name: string, index: number) => void;
+
+  /**
    * Sets a function in the execution context.
    * @param {string} name - The name of the function.
    * @param {AstNodeCompoundList} body - The body of the function.

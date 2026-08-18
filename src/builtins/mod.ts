@@ -32,6 +32,7 @@ export {
 } from './exit.ts';
 export { createBuiltinBuiltin, createCommandBuiltin, createTypeBuiltin } from './introspection.ts';
 export { letBuiltin } from './let.ts';
+export { mapfileBuiltin } from './mapfile.ts';
 export { printfBuiltin } from './printf.ts';
 export { pwdBuiltin } from './pwd.ts';
 export { readBuiltin } from './read.ts';
@@ -53,6 +54,7 @@ import { evalBuiltin } from './eval.ts';
 import { exitBuiltin, returnBuiltin } from './exit.ts';
 import { createBuiltinBuiltin, createCommandBuiltin, createTypeBuiltin } from './introspection.ts';
 import { letBuiltin } from './let.ts';
+import { mapfileBuiltin } from './mapfile.ts';
 import { printfBuiltin } from './printf.ts';
 import { pwdBuiltin } from './pwd.ts';
 import { readBuiltin } from './read.ts';
@@ -115,6 +117,8 @@ export function createBuiltinRegistry(): BuiltinRegistry {
 
   // Phase 3: Input
   registry.set('read', readBuiltin);
+  registry.set('mapfile', mapfileBuiltin);
+  registry.set('readarray', mapfileBuiltin);
 
   // Phase 4: Variable attributes
   registry.set('declare', declareBuiltin);

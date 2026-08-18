@@ -140,14 +140,17 @@ Deno.test('local builtin', async (t) => {
     assertEquals(ctx.getParams()['BAZ'], 'qux');
   });
 
-  await t.step('local variable shadows parent in child context', async () => {
+  await t.step('local assigns in the enclosing scope, not in the command context', async () => {
     const parent = new ExecContext();
     parent.setParams({ FOO: 'parent' });
 
     const child = parent.spawnContext();
     await localBuiltin(child, ['FOO=child'], mockShell, noopExecute);
 
+    // The context a builtin runs in is dropped as soon as the command returns,
+    // so a local written there would be gone before the next command in the
+    // function body ran. The enclosing context is the function's scope.
     assertEquals(child.getParams()['FOO'], 'child');
-    assertEquals(parent.getParams()['FOO'], 'parent');
+    assertEquals(parent.getParams()['FOO'], 'child');
   });
 });

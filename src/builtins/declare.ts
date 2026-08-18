@@ -6,6 +6,16 @@
 
 import type { ExecContextIf, ShellIf } from '../types.ts';
 import type { BuiltinHandler, BuiltinResult } from './types.ts';
+import { assignArrayArg } from './variables.ts';
+
+/**
+ * Render an array the way `declare -p` does: `declare -a a=([0]="x" [1]="y")`.
+ */
+function printArray(name: string, values: string[]): string {
+  const elements = Object.entries(values).map(([index, value]) => `[${index}]="${value}"`);
+
+  return `declare -a ${name}=(${elements.join(' ')})\n`;
+}
 
 /**
  * Parse a variable assignment from an argument.
@@ -68,6 +78,7 @@ export const declareBuiltin: BuiltinHandler = async (
   let setReadonly = false;
   let setExport = false;
   let setInteger = false;
+  let setArray = false;
   let unsetReadonly = false;
   let unsetExport = false;
   let showFunctions = false;
@@ -97,7 +108,7 @@ export const declareBuiltin: BuiltinHandler = async (
             break;
           case 'a':
           case 'A':
-            // Array support - just acknowledge, limited implementation
+            setArray = !remove;
             break;
           case 'f':
             showFunctions = true;
@@ -146,6 +157,10 @@ export const declareBuiltin: BuiltinHandler = async (
         output += `declare ${attrs} ${name}="${value}"\n`;
       }
 
+      for (const [name, values] of Object.entries(ctx.getArrays())) {
+        output += printArray(name, values);
+      }
+
       return { code: 0, stdout: output };
     }
 
@@ -158,6 +173,11 @@ export const declareBuiltin: BuiltinHandler = async (
   let output = '';
 
   for (const arg of varArgs) {
+    // `declare -a x=(1 2)` — the element list survives quote removal as one word
+    if (assignArrayArg(ctx, arg, false)) {
+      continue;
+    }
+
     const { name, value } = parseAssignment(arg);
 
     if (!isValidName(name)) {
@@ -166,8 +186,21 @@ export const declareBuiltin: BuiltinHandler = async (
       continue;
     }
 
+    // -a with no value declares an empty array, keeping any array already there
+    if (setArray && value === undefined && !printMode) {
+      ctx.setArray(name, ctx.getArray(name) ?? []);
+      continue;
+    }
+
     // Print mode: show variable declaration
     if (printMode && value === undefined) {
+      const array = ctx.getArray(name);
+
+      if (array) {
+        output += printArray(name, array);
+        continue;
+      }
+
       const env = ctx.getEnv();
       const params = ctx.getParams();
       const currentValue = env[name] ?? params[name];
