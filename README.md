@@ -101,9 +101,11 @@ stage or in a command substitution — and the exemption covers what those call,
 functions included.
 
 `noclobber` needs the `testPath` callback on `ShellIf` to know whether a file is
-there; without one it cannot refuse. `monitor`, `notify` and `ignoreeof` are
-recorded and left to the host: they are about job control and interactive input,
-which the executor does not own.
+there; without one it cannot refuse.
+
+`monitor`, `notify` and `ignoreeof` are recorded for the host to read off the
+context and act on — job control, background-job reports and what Ctrl-D does at
+a prompt are the host shell's, not the executor's.
 
 ## Contributing
 
