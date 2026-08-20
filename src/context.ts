@@ -21,6 +21,8 @@ export class ExecContext implements ExecContextIf {
   private dirStack: string[] = [];
   private fds: Record<string, string> = {};
   private options: Record<string, boolean> = { ...DEFAULT_SHELL_OPTIONS };
+  // undefined means "whatever the shell above says"; set explicitly, it decides
+  private errexitSuppressed?: boolean;
 
   constructor(parent?: ExecContext) {
     if (parent) {
@@ -36,6 +38,11 @@ export class ExecContext implements ExecContextIf {
         stdout: '1',
         stderr: '2',
       };
+
+      // `$#` is 0 in a shell nobody passed arguments to, not the empty string a
+      // never-assigned parameter gives. Only the shell itself carries it: a
+      // spawned context with its own would shadow whatever `set --` wrote.
+      this.params['#'] = '0';
     }
   }
 
@@ -89,6 +96,9 @@ export class ExecContext implements ExecContextIf {
 
     // A subshell inherits the shell's options and cannot write them back
     ctx.options = { ...this.getShellOptions() };
+
+    // `if ( false; echo here ); then` — the exemption covers the subshell too
+    ctx.errexitSuppressed = this.getErrexitSuppressed();
 
     return ctx;
   }
@@ -168,6 +178,14 @@ export class ExecContext implements ExecContextIf {
     }
 
     this.options[name] = value;
+  }
+
+  getErrexitSuppressed(): boolean {
+    return this.errexitSuppressed ?? this.parent?.getErrexitSuppressed() ?? false;
+  }
+
+  setErrexitSuppressed(value: boolean): void {
+    this.errexitSuppressed = value;
   }
 
   getParams(): Record<string, string> {

@@ -157,3 +157,40 @@ export class UnsupportedArithmeticNodeError extends BashExecutorError {
     this.arithmeticNodeType = nodeType;
   }
 }
+
+/**
+ * Error thrown when `set -u` meets a parameter that is not set, and when
+ * `${x:?message}` is asked to complain.
+ *
+ * It carries no location because it is not a defect in the script the way the
+ * others here are — it is a shell diagnostic, and the shell prints it and takes
+ * the status. `executeScript` catches it, which is also what scopes it to a
+ * command substitution: that parses to a Script of its own, so `$(echo $NOPE)`
+ * dies and the shell around it carries on, as in bash.
+ */
+export class UnboundVariableError extends BashExecutorError {
+  readonly parameter: string;
+
+  constructor(parameter: string, message = 'unbound variable') {
+    super(`${parameter}: ${message}`, { code: 'E_UNBOUND_VARIABLE' });
+    this.name = 'UnboundVariableError';
+    this.parameter = parameter;
+  }
+}
+
+/**
+ * Error thrown when `set -C` refuses to let `>` truncate a file that is there.
+ *
+ * Like `UnboundVariableError` this is a diagnostic rather than a defect: the
+ * command it belongs to fails with status 1 and the shell carries on, so it is
+ * caught where redirections are applied.
+ */
+export class NoClobberError extends BashExecutorError {
+  readonly path: string;
+
+  constructor(path: string) {
+    super(`${path}: cannot overwrite existing file`, { code: 'E_NO_CLOBBER' });
+    this.name = 'NoClobberError';
+    this.path = path;
+  }
+}

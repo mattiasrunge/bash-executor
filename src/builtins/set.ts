@@ -108,6 +108,24 @@ export const setBuiltin: BuiltinHandler = async (
       const flags = arg.slice(1);
 
       for (const flag of flags) {
+        // `set -eo pipefail` — an `o` inside a flag group still takes the option
+        // name that follows, so -e is set and then pipefail by name
+        if (flag === 'o') {
+          i++;
+
+          const optName = args[i];
+
+          if (!optName || !(optName in DEFAULT_SHELL_OPTIONS)) {
+            return {
+              code: 1,
+              stderr: `set: ${optName ?? ''}: invalid option name\n`,
+            };
+          }
+
+          ctx.setShellOption(optName, enable);
+          continue;
+        }
+
         if (flag in SHELL_OPTION_FLAG_MAP) {
           ctx.setShellOption(SHELL_OPTION_FLAG_MAP[flag], enable);
         } else {

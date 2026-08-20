@@ -29,11 +29,17 @@ import {
   type ProtectedRange,
   utils,
 } from '@ein/bash-parser';
-import { getExitCode, getReturnCode, isExitSignal, isReturnSignal } from './builtins/exit.ts';
+import { getExitCode, getReturnCode, isExitSignal, isReturnSignal, makeExitSignal } from './builtins/exit.ts';
 import type { BuiltinRegistry } from './builtins/types.ts';
 import type { ErrorPosition } from './errors.ts';
-import { UnknownNodeTypeError, UnsupportedArithmeticNodeError, UnsupportedOperatorError } from './errors.ts';
+import { NoClobberError, UnboundVariableError, UnknownNodeTypeError, UnsupportedArithmeticNodeError, UnsupportedOperatorError } from './errors.ts';
 import type { ExecContextIf, ExecSyncResult, ShellIf } from './types.ts';
+
+// The special parameters, which are set even when nothing has assigned to them
+const ALWAYS_SET_PARAMS = new Set(['?', '#', '$', '!', '0', '-', '_', '@', '*']);
+
+// What bash exits with when an expansion fails in a non-interactive shell
+const UNBOUND_VARIABLE_CODE = 127 as const;
 
 const CONTINUE_CODE = -10 as const;
 const BREAK_CODE = -11 as const;
@@ -180,6 +186,11 @@ export class AstExecutor {
    * @returns {Promise<number>} - The exit code of the executed script.
    */
   public async execute(source: string, ctx: ExecContextIf): Promise<number> {
+    // Saved rather than cleared: `eval`/`source` run through here too, and
+    // dropping the source on the way out left the script around them with none —
+    // no snippet in an error, and nothing for `set -v` to echo
+    const previous = this.currentSource;
+
     this.currentSource = source;
     try {
       // Resolvers given here will be evaluated at parse time.
@@ -200,7 +211,7 @@ export class AstExecutor {
       }
       throw err;
     } finally {
-      this.currentSource = undefined;
+      this.currentSource = previous;
     }
   }
 
@@ -331,7 +342,12 @@ export class AstExecutor {
         temporary.push(pipe);
         handled(this.shell.pipeWrite(pipe, `${target}\n`).then(() => this.shell.pipeClose(pipe)));
         ctx.redirectStdin(pipe);
-      } else if (r.op.text === '>') {
+      } else if (r.op.text === '>' || r.op.text === '>|') {
+        // `set -C` refuses to truncate a file that exists; `>|` says do it anyway
+        if (r.op.text === '>') {
+          await this.assertClobberable(ctx, target);
+        }
+
         if (r.numberIo?.text === '2') {
           ctx.redirectStderr(target);
         } else {
@@ -401,10 +417,59 @@ export class AstExecutor {
     return temporary;
   }
 
+  /**
+   * `set -C`: `>` must not truncate a file that is already there.
+   *
+   * Whether it is there is the host's to answer, through the optional `testPath`
+   * callback — a shell that does not provide one cannot refuse, and the redirect
+   * goes through rather than failing on a question nobody could answer.
+   */
+  protected async assertClobberable(ctx: ExecContextIf, target: string): Promise<void> {
+    if (!ctx.getShellOption('noclobber') || !this.shell.testPath) {
+      return;
+    }
+
+    if (await this.shell.testPath(ctx, target, 'EXISTS').catch(() => false)) {
+      throw new NoClobberError(target);
+    }
+  }
+
   protected async executeScript(node: AstNodeScript, ctx: ExecContextIf): Promise<number> {
+    try {
+      return await this.runScriptCommands(node, ctx);
+    } catch (err) {
+      // An unset parameter under `set -u` ends this shell, and a command
+      // substitution is a shell of its own — it parses to its own Script, so
+      // catching here is what lets `$(echo "$NOPE")` die while the shell around
+      // it carries on, which is what bash does.
+      if (!(err instanceof UnboundVariableError)) {
+        throw err;
+      }
+
+      await this.shell.pipeWrite(ctx.getStderr(), `${err.message}\n`).catch(() => {});
+
+      // Measured: bash leaves 127 behind for an expansion error, but under
+      // `set -e` the shell goes out through errexit with the command's own 1
+      const code = ctx.getShellOption('errexit') ? 1 : UNBOUND_VARIABLE_CODE;
+
+      ctx.setParams({ '?': String(code) });
+
+      return code;
+    }
+  }
+
+  private async runScriptCommands(node: AstNodeScript, ctx: ExecContextIf): Promise<number> {
     let lastCode = 0;
 
     for (const command of node.commands) {
+      await this.echoSource(command, ctx);
+
+      // `set -n` reads the rest without running it. There is no turning it back
+      // off from inside the script — bash cannot either, for the same reason.
+      if (ctx.getShellOption('noexec')) {
+        return lastCode;
+      }
+
       lastCode = await this.executeNode(command, ctx);
 
       // Handle exit signal - stop script execution and return the exit code
@@ -430,6 +495,16 @@ export class AstExecutor {
   }
 
   protected async executeCommand(node: AstNodeCommand, parentCtx: ExecContextIf): Promise<number> {
+    try {
+      return await this.runCommand(node, parentCtx);
+    } catch (err) {
+      // `set -C` refusing a redirection fails this command and nothing else —
+      // the shell carries on, and errexit gets its say like any other failure
+      return await this.noClobberStatus(err, parentCtx);
+    }
+  }
+
+  private async runCommand(node: AstNodeCommand, parentCtx: ExecContextIf): Promise<number> {
     // Handle exec: apply redirections to parent context, ignore args.
     // Only a literal `exec` counts. Expanding the name here as well as below ran
     // every command substitution in it twice — `$(pick-a-command) arg` executed
@@ -442,6 +517,11 @@ export class AstExecutor {
 
     // Create an execution context
     const ctx = parentCtx.spawnContext();
+
+    // `! cmd` is exempt from errexit, and so is anything cmd calls
+    if (node.bang) {
+      ctx.setErrexitSuppressed(true);
+    }
 
     // A bare assignment takes the status of the last command substitution in it,
     // so `x=$(false)` sets x to that command's output and leaves $? at 1.
@@ -462,11 +542,12 @@ export class AstExecutor {
 
     // Bare assignments (no command) persist in shell, prefix assignments are scoped to the command
     for (const assignment of assignments) {
+      await this.trace(parentCtx, this.traceAssignment(assignment));
       await this.applyAssignment(assignment, ctx, Boolean(node?.name));
     }
 
     if (!node?.name) {
-      return assignStatus;
+      return this.applyErrexit(assignStatus, ctx);
     }
 
     // Create an args list
@@ -503,6 +584,8 @@ export class AstExecutor {
     // TODO: We can fail for any number of things above, should we apply the bang inversion to those as well?
 
     const cmdName = expandedName.values[0]; // TODO: Can we expand to more than one value here?
+
+    await this.trace(parentCtx, [cmdName, ...(args || [])].map((word) => this.quoteForTrace(word)).join(' '));
 
     // Loop control is carried out of the body as a reserved exit code. Only the
     // command *name* means it — `echo break` is an argument that happens to read
@@ -556,7 +639,7 @@ export class AstExecutor {
         ctx.setArray('PIPESTATUS', [String(code)]);
       }
 
-      return node.bang ? (code === 0 ? 1 : 0) : code;
+      return this.applyErrexit(node.bang ? (code === 0 ? 1 : 0) : code, ctx);
     }, redirectPipes).finally(() => this.finishProcessSubstitutions(subs, ctx));
   }
 
@@ -590,6 +673,12 @@ export class AstExecutor {
     args: string[],
   ): Promise<number> {
     const fnCtx = fn.ctx.spawnContext();
+
+    // Where a function was *defined* says nothing about errexit; where it is
+    // called says everything. `if f; then` has to exempt what f runs, and a
+    // function that happened to be defined inside an `if` clause must not be
+    // exempt for ever after — so the call site's answer is set either way.
+    fnCtx.setErrexitSuppressed(ctx.getErrexitSuppressed());
 
     // Inherit I/O from caller context
     fnCtx.redirectStdin(ctx.getStdin());
@@ -629,7 +718,7 @@ export class AstExecutor {
       parentCtx.setArray('PIPESTATUS', [String(code)]);
     }
 
-    return code;
+    return this.applyErrexit(code, parentCtx);
   }
 
   /**
@@ -714,6 +803,11 @@ export class AstExecutor {
         // Each pipeline stage is a subshell — isolate env/cwd so a stage can't leak
         // into the parent (or race the other concurrently-running stages).
         const cmdCtx = ctx.subContext();
+
+        // A stage failing is the pipeline's business, not the shell's: errexit
+        // looks at what finishPipeline makes of them all
+        cmdCtx.setErrexitSuppressed(true);
+
         const isFirstCommand = n === 0;
         const isLastCommand = n === node.commands.length - 1;
 
@@ -823,18 +917,142 @@ export class AstExecutor {
       code = failed ?? 0;
     }
 
-    return node.bang ? (code === 0 ? 1 : 0) : code;
+    return this.applyErrexit(node.bang ? (code === 0 ? 1 : 0) : code, ctx);
+  }
+
+  /**
+   * Apply `errexit` to a command's status.
+   *
+   * `set -e` is decided per command, where the command runs — never on an
+   * assembled status further up. `false && echo t` fails and does not end the
+   * shell because nothing after the final `&&` ever ran, and the same status
+   * reaching `executeScript` says nothing about which command produced it. So
+   * every place that runs one thing and gets a status back asks this, and a
+   * context that is exempt (an `if` clause, `!`, the left of `&&`, a pipeline
+   * stage) answers for everything it called, functions included.
+   */
+  protected applyErrexit(code: number, ctx: ExecContextIf): number {
+    if (code === 0 || isExitSignal(code) || isReturnSignal(code) || code === BREAK_CODE || code === CONTINUE_CODE) {
+      return code;
+    }
+
+    if (!ctx.getShellOption('errexit') || ctx.getErrexitSuppressed()) {
+      return code;
+    }
+
+    return makeExitSignal(code);
+  }
+
+  /**
+   * `set -x`: write what is about to run to the shell's stderr.
+   *
+   * The trace goes to the stderr the *shell* has, not the one the command is
+   * about to be given — `echo hi 2>/dev/null` still traces in bash, while
+   * `exec 2>/dev/null` silences it, and passing the pre-redirection context here
+   * is what reproduces that. A target that is a file rather than a pipe is
+   * skipped rather than made to work: the trace is a diagnostic, not output.
+   */
+  protected async trace(ctx: ExecContextIf, line: string): Promise<void> {
+    if (!ctx.getShellOption('xtrace')) {
+      return;
+    }
+
+    const params = ctx.getParams();
+    const ps4 = params.PS4 ?? ctx.getEnv().PS4 ?? '+ ';
+
+    await this.shell.pipeWrite(ctx.getStderr(), `${ps4}${line}\n`).catch(() => {});
+  }
+
+  /**
+   * `set -v`: echo the source of what is about to run to stderr.
+   *
+   * bash prints input lines as its parser reads them, which a parse-then-execute
+   * model cannot reproduce — by the time anything runs here the whole script has
+   * been read. So this prints each command's own source instead, which is the
+   * same text in the same order, just at a different moment. A node without a
+   * location (nothing to quote) prints nothing.
+   */
+  protected async echoSource(node: AstNode, ctx: ExecContextIf): Promise<void> {
+    if (!ctx.getShellOption('verbose') || !this.currentSource) {
+      return;
+    }
+
+    const { start, end } = (node.loc ?? {}) as { start?: { char?: number }; end?: { char?: number } };
+
+    if (start?.char === undefined || end?.char === undefined) {
+      return;
+    }
+
+    await this.shell.pipeWrite(ctx.getStderr(), `${this.currentSource.slice(start.char, end.char + 1)}\n`).catch(() => {});
+  }
+
+  /**
+   * Quote a word the way bash quotes it in a trace: only when it needs it.
+   */
+  protected quoteForTrace(value: string): string {
+    return /^[A-Za-z0-9_@%+=:,./-]+$/.test(value) ? value : `'${value.replaceAll("'", "'\\''")}'`;
+  }
+
+  /**
+   * The `name=value` a trace shows for an assignment, array literals included.
+   */
+  protected traceAssignment(assignment: Assignment): string {
+    const { name, subscript, append, values, list } = assignment;
+    const target = subscript === undefined ? name : `${name}[${subscript}]`;
+    const operator = append ? '+=' : '=';
+    const value = list ? `(${values.map((v) => this.quoteForTrace(v)).join(' ')})` : this.quoteForTrace(values[0] ?? '');
+
+    return `${target}${operator}${value}`;
+  }
+
+  /**
+   * The status a command takes when `set -C` refused one of its redirections:
+   * 1, with the reason on stderr, and the shell carries on. Rethrows anything
+   * else.
+   */
+  protected async noClobberStatus(err: unknown, ctx: ExecContextIf): Promise<number> {
+    if (!(err instanceof NoClobberError)) {
+      throw err;
+    }
+
+    await this.shell.pipeWrite(ctx.getStderr(), `${err.message}\n`).catch(() => {});
+
+    return this.applyErrexit(1, ctx);
+  }
+
+  /**
+   * A child context that `errexit` does not end the shell from — for the parts
+   * of a command bash exempts.
+   */
+  protected exemptContext(ctx: ExecContextIf): ExecContextIf {
+    const exempt = ctx.spawnContext();
+
+    exempt.setErrexitSuppressed(true);
+
+    return exempt;
   }
 
   protected async executeCompondList(node: AstNodeCompoundList, parentCtx: ExecContextIf): Promise<number> {
     const ctx = parentCtx.spawnContext();
     const subs: ProcessSubstitutions = { paths: [], deferred: [] };
-    const redirectPipes = await this.applyRedirections(ctx, node.redirections, subs);
+    let redirectPipes: string[];
+
+    try {
+      redirectPipes = await this.applyRedirections(ctx, node.redirections, subs);
+    } catch (err) {
+      return await this.noClobberStatus(err, parentCtx);
+    }
 
     let lastCode = 0;
 
     try {
       for (const command of node.commands) {
+        await this.echoSource(command, ctx);
+
+        if (ctx.getShellOption('noexec')) {
+          return lastCode;
+        }
+
         lastCode = await this.executeNode(command, ctx);
 
         // Propagate exit, return, break, and continue signals immediately
@@ -885,7 +1103,13 @@ export class AstExecutor {
 
     const ctx = parentCtx.spawnContext();
     const subs: ProcessSubstitutions = { paths: [], deferred: [] };
-    const redirectPipes = await this.applyRedirections(ctx, node.redirections, subs);
+    let redirectPipes: string[];
+
+    try {
+      redirectPipes = await this.applyRedirections(ctx, node.redirections, subs);
+    } catch (err) {
+      return await this.noClobberStatus(err, parentCtx);
+    }
 
     try {
       return await this.withFileBridging(ctx, () => fn(ctx), redirectPipes);
@@ -900,7 +1124,7 @@ export class AstExecutor {
 
   protected async executeIf(node: AstNodeIf, parentCtx: ExecContextIf): Promise<number> {
     return this.withCompoundRedirections(node, parentCtx, async (ctx) => {
-      if (await this.executeNode(node.clause, ctx) === 0) {
+      if (await this.executeNode(node.clause, this.exemptContext(ctx)) === 0) {
         return await this.executeNode(node.then, ctx);
       } else if (node.else) {
         return await this.executeNode(node.else, ctx);
@@ -941,7 +1165,7 @@ export class AstExecutor {
     return this.withCompoundRedirections(node, parentCtx, async (ctx) => {
       let last = 0;
 
-      while (await this.executeNode(node.clause, ctx) === 0) {
+      while (await this.executeNode(node.clause, this.exemptContext(ctx)) === 0) {
         const { stop, code } = await this.runLoopBody(node.do, ctx);
         last = code;
 
@@ -958,7 +1182,7 @@ export class AstExecutor {
     return this.withCompoundRedirections(node, parentCtx, async (ctx) => {
       let last = 0;
 
-      while (await this.executeNode(node.clause, ctx) !== 0) {
+      while (await this.executeNode(node.clause, this.exemptContext(ctx)) !== 0) {
         const { stop, code } = await this.runLoopBody(node.do, ctx);
         last = code;
 
@@ -983,9 +1207,14 @@ export class AstExecutor {
         values.push(...expanded.values);
       }
 
+      const traceLine = `for ${node.name.text} in ${values.map((v) => this.quoteForTrace(v)).join(' ')}`;
+
       let last = 0;
 
       for (const value of values) {
+        // bash repeats the `for` line once per iteration, not once per loop
+        await this.trace(ctx, traceLine);
+
         ctx.setParams({ [node.name.text]: value });
 
         const { stop, code } = await this.runLoopBody(node.do, ctx);
@@ -1199,7 +1428,9 @@ export class AstExecutor {
   }
 
   protected async executeLogicalExpression(node: AstNodeLogicalExpression, ctx: ExecContextIf): Promise<number> {
-    const left = await this.executeNode(node.left, ctx);
+    // Only the command following the final && or || is subject to errexit, so
+    // the left side is exempt however deep it goes; the right side runs as-is
+    const left = await this.executeNode(node.left, this.exemptContext(ctx));
 
     if (node.op === 'and') {
       if (left !== 0) {
@@ -1219,7 +1450,7 @@ export class AstExecutor {
   protected async executeArithmeticCommand(node: AstNodeArithmeticCommand, ctx: ExecContextIf): Promise<number> {
     const result = await this.evaluateArithmetic(node.arithmeticAST, ctx);
     // In bash, (( expr )) returns 0 (success) if expr is non-zero, 1 (failure) if expr is zero
-    return result !== 0 ? 0 : 1;
+    return this.applyErrexit(result !== 0 ? 0 : 1, ctx);
   }
 
   /**
@@ -1228,7 +1459,7 @@ export class AstExecutor {
    */
   protected async executeConditionalCommand(node: AstNodeConditionalCommand, ctx: ExecContextIf): Promise<number> {
     const result = await this.evaluateConditionalExpression(node.conditionAST, ctx);
-    return result ? 0 : 1;
+    return this.applyErrexit(result ? 0 : 1, ctx);
   }
 
   /**
@@ -1449,6 +1680,7 @@ export class AstExecutor {
         // leak (e.g. `$(export X=1)` must not set X in the calling shell).
         const cmdCtx = ctx.subContext();
         cmdCtx.setLocalEnv({ TERM: '0' });
+        cmdCtx.setErrexitSuppressed(true);
         cmdCtx.redirectStdout(await this.shell.pipeOpen());
 
         try {
@@ -1716,6 +1948,9 @@ export class AstExecutor {
 
     if (local) {
       ctx.setLocalParams({ [name]: previous + value });
+    } else if (ctx.getShellOption('allexport')) {
+      // `set -a` makes a plain assignment an exported one, so a child sees it
+      ctx.setEnv({ [name]: previous + value });
     } else {
       ctx.setParams({ [name]: previous + value });
     }
@@ -1783,6 +2018,7 @@ export class AstExecutor {
     // A subshell: what it writes goes to the file, and nothing it sets leaks out
     const cmdCtx = ctx.subContext();
 
+    cmdCtx.setErrexitSuppressed(true);
     cmdCtx.redirectStdout(path);
 
     await this.withFileBridging(cmdCtx, () => this.executeNode(xp.commandAST!, cmdCtx));
@@ -1899,6 +2135,29 @@ export class AstExecutor {
     const index = await this.resolveIndex(subscript, array?.length ?? 1, ctx);
 
     return array ? array[index] !== undefined : index === 0 && params[name] !== undefined;
+  }
+
+  /**
+   * `set -u`: expanding a parameter that was never set is an error rather than
+   * an empty string.
+   *
+   * Only for the plain expansions — the whole point of `${x:-d}` and friends is
+   * to ask about a parameter that may not be there, and bash leaves `$@`, `$*`
+   * and `${a[@]}` alone as well (those never reach here). The special parameters
+   * are always set, whether or not this executor has got round to writing one.
+   */
+  protected assertParameterSet(parameter: string | number, isSet: boolean, ctx: ExecContextIf): void {
+    if (isSet || !ctx.getShellOption('nounset')) {
+      return;
+    }
+
+    const name = String(parameter);
+
+    if (ALWAYS_SET_PARAMS.has(name)) {
+      return;
+    }
+
+    throw new UnboundVariableError(name);
   }
 
   /**
@@ -2122,12 +2381,29 @@ export class AstExecutor {
           } else if (xpAny.op === 'useAlternativeValueIfUnset') {
             // ${var+word} — use word if var is set
             resolved = isSet ? await this.resolveWordValue(xpAny.word, ctx) : '';
+          } else if (xpAny.op === 'indicateErrorIfUnset' || xpAny.op === 'indicateErrorIfNull') {
+            // ${var?word} / ${var:?word} — complain and leave, with word as the
+            // message. This is the same diagnostic `set -u` raises, so it takes
+            // the same route out.
+            const missing = xpAny.op === 'indicateErrorIfNull' ? !paramValue : !isSet;
+
+            if (missing) {
+              const message = await this.resolveWordValue(xpAny.word, ctx);
+
+              throw new UnboundVariableError(String(xp.parameter), message || 'parameter null or not set');
+            }
+
+            resolved = paramValue;
           } else if (xpAny.op === 'stringLength') {
             // ${#var}, and ${#a[@]} for the number of elements
             const { name, subscript } = this.splitSubscript(xp.parameter!);
 
+            this.assertParameterSet(xp.parameter!, isSet, ctx);
+
             resolved = subscript === '@' || subscript === '*' ? String(this.arrayElements(name, ctx, params).length) : String(paramValue.length);
           } else {
+            this.assertParameterSet(xp.parameter!, isSet, ctx);
+
             resolved = paramValue;
           }
 
@@ -2142,6 +2418,9 @@ export class AstExecutor {
         // leak (e.g. `$(export X=1)` must not set X in the calling shell).
         const cmdCtx = ctx.subContext();
         cmdCtx.setLocalEnv({ TERM: '0' });
+        // A substitution is its own shell: bash runs `$(false; echo hi)` to the
+        // end under `set -e` and hands back what it printed
+        cmdCtx.setErrexitSuppressed(true);
         cmdCtx.redirectStdout(await this.shell.pipeOpen());
 
         try {
@@ -2217,8 +2496,9 @@ export class AstExecutor {
     const unquotedResult = utils.unquoteWordWithProtectedRanges(value, protectedRanges, this.getIfs(ctx));
     const result = { values: unquotedResult.values, status };
 
-    // Path globbing expansion must be done last
-    if (hasPathExpansion && this.shell.resolvePath) {
+    // Path globbing expansion must be done last, and `set -f` turns it off — the
+    // pattern is then just a word, which is also what an unmatched one becomes
+    if (hasPathExpansion && this.shell.resolvePath && !ctx.getShellOption('noglob')) {
       const newValues: string[] = [];
 
       for (const path of result.values) {
@@ -2451,6 +2731,9 @@ export class AstExecutor {
         // leak (e.g. `$(export X=1)` must not set X in the calling shell).
         const cmdCtx = ctx.subContext();
         cmdCtx.setLocalEnv({ TERM: '0' });
+        // A substitution is its own shell: bash runs `$(false; echo hi)` to the
+        // end under `set -e` and hands back what it printed
+        cmdCtx.setErrexitSuppressed(true);
         cmdCtx.redirectStdout(await this.shell.pipeOpen());
 
         try {

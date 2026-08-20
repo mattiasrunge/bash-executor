@@ -7,6 +7,7 @@ Execute bash AST nodes given by bash-parser.
 - [Installation](#installation)
 - [Usage](#usage)
 - [Arrays and field splitting](#arrays-and-field-splitting)
+- [Shell options](#shell-options)
 - [Contributing](#contributing)
 - [License](#license)
 - [Contact](#contact)
@@ -74,6 +75,35 @@ itself. Here-strings (`read -a p <<< "$line"`) and process substitution
 (`mapfile -t f < <(find .)`) both work; the latter needs the `tempFile` and
 `removeTempFile` callbacks on `ShellIf`, since only the host knows what a command
 can open.
+
+## Shell options
+
+`set` options are per-shell state on the execution context, not process-wide, so
+a host running many shells in one process keeps them apart. A subshell inherits
+them as a copy; a function writes through to the shell it was called from.
+
+| Option             | What it does                                                             |
+| ------------------ | ------------------------------------------------------------------------ |
+| `-e` / `errexit`   | A failing command ends the shell, with bash's exemptions                 |
+| `-u` / `nounset`   | Expanding an unset parameter is an error, status 127                     |
+| `-x` / `xtrace`    | Write each command to the shell's stderr as it runs, prefixed with `PS4` |
+| `-v` / `verbose`   | Echo each command's source before running it                             |
+| `-f` / `noglob`    | No pathname expansion                                                    |
+| `-a` / `allexport` | A plain assignment goes to the environment                               |
+| `-C` / `noclobber` | `>` will not truncate an existing file; `>                               |
+| `-n` / `noexec`    | Read the rest without running it                                         |
+| `pipefail`         | A pipeline takes the rightmost non-zero status                           |
+| `PIPESTATUS`       | (not an option) the array of the last pipeline's stage statuses          |
+
+`errexit` is decided per command, where it runs, so a failure is exempt in an
+`if`/`while`/`until` clause, under `!`, on the left of `&&`/`||`, in a pipeline
+stage or in a command substitution — and the exemption covers what those call,
+functions included.
+
+`noclobber` needs the `testPath` callback on `ShellIf` to know whether a file is
+there; without one it cannot refuse. `monitor`, `notify` and `ignoreeof` are
+recorded and left to the host: they are about job control and interactive input,
+which the executor does not own.
 
 ## Contributing
 

@@ -382,6 +382,21 @@ export interface ExecContextIf {
   setShellOption: (name: string, value: boolean) => void;
 
   /**
+   * Whether `errexit` is suppressed for what runs in this context.
+   * Bash exempts a command from `set -e` by where it sits — the clause of an
+   * `if`, anything under `!`, the left of `&&`/`||`, a pipeline stage — and the
+   * exemption covers whatever that command calls, functions included.
+   * @returns {boolean} True when a failure here must not end the shell.
+   */
+  getErrexitSuppressed: () => boolean;
+
+  /**
+   * Suppresses (or restores) `errexit` for this context and its children.
+   * @param {boolean} value - True to exempt.
+   */
+  setErrexitSuppressed: (value: boolean) => void;
+
+  /**
    * Gets an indexed array, or undefined when the name is not an array.
    * Arrays live beside the params, are never exported, and can be sparse.
    * @param {string} name - The variable name.

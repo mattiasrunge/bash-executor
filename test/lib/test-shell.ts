@@ -512,6 +512,13 @@ export class TestShell implements ShellIf {
   }
 
   /**
+   * Only EXISTS is answered, which is all `set -C` asks about.
+   */
+  async testPath(_ctx: ExecContextIf, path: string, op: string): Promise<boolean> {
+    return await (op === 'EXISTS' ? this.files.has(path) : false);
+  }
+
+  /**
    * A scratch file for process substitution, `cat <(cmd)`.
    */
   async tempFile(_ctx: ExecContextIf): Promise<string> {
