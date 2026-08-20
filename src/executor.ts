@@ -549,6 +549,13 @@ export class AstExecutor {
         }
       }
 
+      // A one-command pipeline is unwrapped by the parser and never reaches
+      // executePipeline, so a plain command records its own PIPESTATUS here. It
+      // holds the raw status: bash gives `! false` a PIPESTATUS of (1) and a $? of 0.
+      if (!isExitSignal(code) && !isReturnSignal(code)) {
+        ctx.setArray('PIPESTATUS', [String(code)]);
+      }
+
       return node.bang ? (code === 0 ? 1 : 0) : code;
     }, redirectPipes).finally(() => this.finishProcessSubstitutions(subs, ctx));
   }
@@ -612,9 +619,17 @@ export class AstExecutor {
   protected async executeSubshell(node: AstNodeSubshell, parentCtx: ExecContextIf): Promise<number> {
     // `( … )` is a subshell: env/cwd changes inside must not escape to the parent.
     const ctx = parentCtx.subContext();
-    return this.withFileBridging(ctx, () => {
+    const code = await this.withFileBridging(ctx, () => {
       return this.executeNode(node.list, ctx);
     });
+
+    // To the caller the subshell is one command, so it leaves one status behind —
+    // the array its own pipelines built lives and dies with the subshell's context.
+    if (!isExitSignal(code) && !isReturnSignal(code)) {
+      parentCtx.setArray('PIPESTATUS', [String(code)]);
+    }
+
+    return code;
   }
 
   /**
@@ -758,12 +773,57 @@ export class AstExecutor {
       // Wait for file bridges to complete
       await Promise.all(fileBridges);
 
-      return codes[codes.length - 1];
+      return this.finishPipeline(node, codes, ctx);
     } finally {
       for (const pipe of pipes) {
         this.shell.pipeRemove(pipe).catch((err) => console.error('Failed to remove pipe: ', err));
       }
     }
+  }
+
+  /**
+   * Turn the stage codes of a finished pipeline into `PIPESTATUS` and the
+   * pipeline's own exit status.
+   *
+   * Without `pipefail` the status is the last stage's, with it the rightmost
+   * non-zero one — and `!` inverts whatever comes out. An exit or return signal
+   * from the last stage is control flow rather than a status, so it propagates
+   * untouched; one from an earlier stage stays swallowed, because in bash that
+   * stage is a subshell of its own and its `exit` never reaches the caller.
+   */
+  protected finishPipeline(node: AstNodePipeline, codes: number[], ctx: ExecContextIf): number {
+    // `break`/`continue` are not statuses at all, and in bash a stage is a subshell
+    // the loop control cannot reach out of — so they count as 0 rather than as a
+    // failure pipefail would pick up.
+    const statuses = codes.map((code) => {
+      if (isExitSignal(code)) {
+        return getExitCode(code);
+      }
+
+      if (isReturnSignal(code)) {
+        return getReturnCode(code);
+      }
+
+      return code === BREAK_CODE || code === CONTINUE_CODE ? 0 : code;
+    });
+
+    ctx.setArray('PIPESTATUS', statuses.map((status) => String(status)));
+
+    const lastCode = codes[codes.length - 1];
+
+    if (isExitSignal(lastCode) || isReturnSignal(lastCode) || lastCode === BREAK_CODE || lastCode === CONTINUE_CODE) {
+      return lastCode;
+    }
+
+    let code = statuses[statuses.length - 1];
+
+    if (ctx.getShellOption('pipefail')) {
+      const failed = statuses.findLast((status) => status !== 0);
+
+      code = failed ?? 0;
+    }
+
+    return node.bang ? (code === 0 ? 1 : 0) : code;
   }
 
   protected async executeCompondList(node: AstNodeCompoundList, parentCtx: ExecContextIf): Promise<number> {

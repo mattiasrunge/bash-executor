@@ -1,5 +1,5 @@
 import type { AstNodeCompoundList } from '@ein/bash-parser';
-import type { ExecContextIf, FunctionDef, IO } from './types.ts';
+import { DEFAULT_SHELL_OPTIONS, type ExecContextIf, type FunctionDef, type IO } from './types.ts';
 
 // TODO: We need to define when cwd or params should go to parent or not...
 
@@ -20,6 +20,7 @@ export class ExecContext implements ExecContextIf {
   private integerVars = new Set<string>();
   private dirStack: string[] = [];
   private fds: Record<string, string> = {};
+  private options: Record<string, boolean> = { ...DEFAULT_SHELL_OPTIONS };
 
   constructor(parent?: ExecContext) {
     if (parent) {
@@ -86,6 +87,9 @@ export class ExecContext implements ExecContextIf {
     // Copy arbitrary file descriptors
     ctx.fds = { ...this.fds };
 
+    // A subshell inherits the shell's options and cannot write them back
+    ctx.options = { ...this.getShellOptions() };
+
     return ctx;
   }
 
@@ -139,6 +143,31 @@ export class ExecContext implements ExecContextIf {
     }
 
     return this.env;
+  }
+
+  getShellOption(name: string): boolean {
+    if (this.parent) {
+      return this.parent.getShellOption(name);
+    }
+
+    return this.options[name] ?? false;
+  }
+
+  getShellOptions(): Record<string, boolean> {
+    if (this.parent) {
+      return this.parent.getShellOptions();
+    }
+
+    return { ...this.options };
+  }
+
+  setShellOption(name: string, value: boolean): void {
+    if (this.parent) {
+      this.parent.setShellOption(name, value);
+      return;
+    }
+
+    this.options[name] = value;
   }
 
   getParams(): Record<string, string> {

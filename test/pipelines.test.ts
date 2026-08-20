@@ -133,3 +133,121 @@ Deno.test('Complex Pipelines', async (t) => {
     assertEquals(result.stdout, 'test\nfound\n');
   });
 });
+
+Deno.test('Pipefail', async (t) => {
+  await t.step('off by default: only the last stage counts', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('false | true; echo "code=$?"');
+    assertEquals(result.stdout, 'code=0\n');
+  });
+
+  await t.step('on: a failing stage fails the pipeline', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('set -o pipefail; false | true; echo "code=$?"');
+    assertEquals(result.stdout, 'code=1\n');
+  });
+
+  await t.step('on: the rightmost non-zero status wins', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('three() { return 3; }; four() { return 4; }; set -o pipefail; three | four | true; echo "code=$?"');
+    assertEquals(result.stdout, 'code=4\n');
+  });
+
+  await t.step('on: all stages succeeding is still success', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('set -o pipefail; echo hi | cat | cat; echo "code=$?"');
+    assertEquals(result.stdout, 'hi\ncode=0\n');
+  });
+
+  await t.step('+o turns it back off', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('set -o pipefail; set +o pipefail; false | true; echo "code=$?"');
+    assertEquals(result.stdout, 'code=0\n');
+  });
+
+  await t.step('set in a function it applies to the whole shell', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('f() { set -o pipefail; }; f; false | true; echo "code=$?"');
+    assertEquals(result.stdout, 'code=1\n');
+  });
+
+  await t.step('set in a subshell it does not leak out', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('( set -o pipefail; false | true; echo "in=$?" ); false | true; echo "out=$?"');
+    assertEquals(result.stdout, 'in=1\nout=0\n');
+  });
+
+  await t.step('two shells do not share the option', async () => {
+    const one = new TestShell();
+    const two = new TestShell();
+    await one.runAndCapture('set -o pipefail');
+    const result = await two.runAndCapture('false | true; echo "code=$?"');
+    assertEquals(result.stdout, 'code=0\n');
+  });
+});
+
+Deno.test('Pipeline negation', async (t) => {
+  await t.step('! inverts a failing pipeline', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('! echo hi | grep zz; echo "code=$?"');
+    assertEquals(result.stdout, 'code=0\n');
+  });
+
+  await t.step('! inverts a succeeding pipeline', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('! echo hi | grep hi; echo "code=$?"');
+    assertEquals(result.stdout, 'hi\ncode=1\n');
+  });
+
+  await t.step('! applies after pipefail', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('set -o pipefail; ! false | true; echo "code=$?"');
+    assertEquals(result.stdout, 'code=0\n');
+  });
+});
+
+Deno.test('PIPESTATUS', async (t) => {
+  await t.step('holds every stage of the last pipeline', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('echo hi | grep zz | cat; echo "ps=${PIPESTATUS[@]}"');
+    assertEquals(result.stdout, 'ps=0 1 0\n');
+  });
+
+  await t.step('is indexable and countable', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('echo hi | grep hi; echo "first=${PIPESTATUS[0]} count=${#PIPESTATUS[@]}"');
+    assertEquals(result.stdout, 'hi\nfirst=0 count=2\n');
+  });
+
+  await t.step('a plain command sets it to one element', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('false; echo "ps=${PIPESTATUS[@]}"');
+    assertEquals(result.stdout, 'ps=1\n');
+  });
+
+  await t.step('the next command replaces it', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('echo a | false; true; echo "ps=${PIPESTATUS[@]}"');
+    assertEquals(result.stdout, 'ps=0\n');
+  });
+
+  await t.step('holds the raw status, before ! inverts it', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('! echo hi | grep zz; echo "code=$? ps=${PIPESTATUS[@]}"');
+    assertEquals(result.stdout, 'code=0 ps=0 1\n');
+  });
+
+  await t.step('a subshell leaves one status, not its own pipeline', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('echo a | true; ( echo b | false ); echo "ps=${PIPESTATUS[@]}"');
+    assertEquals(result.stdout, 'ps=1\n');
+  });
+});
+
+Deno.test('Pipeline loop control', async (t) => {
+  await t.step('break in a stage does not fail the pipeline under pipefail', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('set -o pipefail; for i in 1 2; do break | true; echo "$i"; done');
+    assertEquals(result.stdout, '1\n2\n');
+  });
+});

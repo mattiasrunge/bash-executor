@@ -37,7 +37,7 @@ export { printfBuiltin } from './printf.ts';
 export { pwdBuiltin } from './pwd.ts';
 export { readBuiltin } from './read.ts';
 export { readonlyBuiltin } from './readonly.ts';
-export { getShellOption, resetShellOptions, setBuiltin, setShellOption } from './set.ts';
+export { setBuiltin } from './set.ts';
 export { shiftBuiltin } from './shift.ts';
 export { dotBuiltin, sourceBuiltin } from './source.ts';
 export { bracketBuiltin, testBuiltin } from './test.ts';

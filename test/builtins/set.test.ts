@@ -1,5 +1,5 @@
 import { assertEquals, assertStringIncludes } from '@std/assert';
-import { getShellOption, resetShellOptions, setBuiltin } from '../../src/builtins/set.ts';
+import { setBuiltin } from '../../src/builtins/set.ts';
 import { ExecContext } from '../../src/context.ts';
 import type { ShellIf } from '../../src/types.ts';
 
@@ -21,7 +21,6 @@ const mockShell: ShellIf = {
 
 // Setup function
 function setup(): ExecContext {
-  resetShellOptions();
   return new ExecContext();
 }
 
@@ -72,101 +71,130 @@ Deno.test('set builtin', async (t) => {
 
   await t.step('enables options with -', async (t) => {
     await t.step('-e enables errexit', async () => {
-      setup();
-      const ctx = new ExecContext();
+      const ctx = setup();
       const result = await setBuiltin(ctx, ['-e'], mockShell, noopExecute);
       assertEquals(result.code, 0);
-      assertEquals(getShellOption('errexit'), true);
+      assertEquals(ctx.getShellOption('errexit'), true);
     });
 
     await t.step('-x enables xtrace', async () => {
-      setup();
-      const ctx = new ExecContext();
+      const ctx = setup();
       const result = await setBuiltin(ctx, ['-x'], mockShell, noopExecute);
       assertEquals(result.code, 0);
-      assertEquals(getShellOption('xtrace'), true);
+      assertEquals(ctx.getShellOption('xtrace'), true);
     });
 
     await t.step('-u enables nounset', async () => {
-      setup();
-      const ctx = new ExecContext();
+      const ctx = setup();
       const result = await setBuiltin(ctx, ['-u'], mockShell, noopExecute);
       assertEquals(result.code, 0);
-      assertEquals(getShellOption('nounset'), true);
+      assertEquals(ctx.getShellOption('nounset'), true);
     });
 
     await t.step('multiple flags -eu', async () => {
-      setup();
-      const ctx = new ExecContext();
+      const ctx = setup();
       const result = await setBuiltin(ctx, ['-eu'], mockShell, noopExecute);
       assertEquals(result.code, 0);
-      assertEquals(getShellOption('errexit'), true);
-      assertEquals(getShellOption('nounset'), true);
+      assertEquals(ctx.getShellOption('errexit'), true);
+      assertEquals(ctx.getShellOption('nounset'), true);
     });
   });
 
   await t.step('disables options with +', async (t) => {
     await t.step('+e disables errexit', async () => {
-      setup();
-      const ctx = new ExecContext();
+      const ctx = setup();
       await setBuiltin(ctx, ['-e'], mockShell, noopExecute);
-      assertEquals(getShellOption('errexit'), true);
+      assertEquals(ctx.getShellOption('errexit'), true);
 
       await setBuiltin(ctx, ['+e'], mockShell, noopExecute);
-      assertEquals(getShellOption('errexit'), false);
+      assertEquals(ctx.getShellOption('errexit'), false);
     });
   });
 
   await t.step('-o sets option by name', async () => {
-    setup();
-    const ctx = new ExecContext();
+    const ctx = setup();
     const result = await setBuiltin(ctx, ['-o', 'errexit'], mockShell, noopExecute);
     assertEquals(result.code, 0);
-    assertEquals(getShellOption('errexit'), true);
+    assertEquals(ctx.getShellOption('errexit'), true);
   });
 
   await t.step('+o unsets option by name', async () => {
-    setup();
-    const ctx = new ExecContext();
+    const ctx = setup();
     await setBuiltin(ctx, ['-o', 'errexit'], mockShell, noopExecute);
     const result = await setBuiltin(ctx, ['+o', 'errexit'], mockShell, noopExecute);
     assertEquals(result.code, 0);
-    assertEquals(getShellOption('errexit'), false);
+    assertEquals(ctx.getShellOption('errexit'), false);
   });
 
   await t.step('-o without name shows options', async () => {
-    setup();
-    const ctx = new ExecContext();
+    const ctx = setup();
     const result = await setBuiltin(ctx, ['-o'], mockShell, noopExecute);
     assertEquals(result.code, 0);
     assertStringIncludes(result.stdout || '', 'errexit');
   });
 
   await t.step('invalid option returns error', async () => {
-    setup();
-    const ctx = new ExecContext();
+    const ctx = setup();
     const result = await setBuiltin(ctx, ['-o', 'invalid_option'], mockShell, noopExecute);
     assertEquals(result.code, 1);
     assertStringIncludes(result.stderr || '', 'invalid option name');
   });
 
   await t.step('invalid short option returns error', async () => {
-    setup();
-    const ctx = new ExecContext();
+    const ctx = setup();
     const result = await setBuiltin(ctx, ['-z'], mockShell, noopExecute);
     assertEquals(result.code, 1);
     assertStringIncludes(result.stderr || '', 'invalid option');
   });
 
   await t.step('- alone turns off xtrace and verbose', async () => {
-    setup();
-    const ctx = new ExecContext();
+    const ctx = setup();
     await setBuiltin(ctx, ['-xv'], mockShell, noopExecute);
-    assertEquals(getShellOption('xtrace'), true);
-    assertEquals(getShellOption('verbose'), true);
+    assertEquals(ctx.getShellOption('xtrace'), true);
+    assertEquals(ctx.getShellOption('verbose'), true);
 
     await setBuiltin(ctx, ['-'], mockShell, noopExecute);
-    assertEquals(getShellOption('xtrace'), false);
-    assertEquals(getShellOption('verbose'), false);
+    assertEquals(ctx.getShellOption('xtrace'), false);
+    assertEquals(ctx.getShellOption('verbose'), false);
+  });
+
+  await t.step('options are per shell, not global', async () => {
+    const one = setup();
+    const two = setup();
+
+    await setBuiltin(one, ['-o', 'pipefail'], mockShell, noopExecute);
+
+    assertEquals(one.getShellOption('pipefail'), true);
+    assertEquals(two.getShellOption('pipefail'), false);
+  });
+
+  await t.step('a subshell inherits an option but cannot write it back', async () => {
+    const ctx = setup();
+    await setBuiltin(ctx, ['-o', 'pipefail'], mockShell, noopExecute);
+
+    const sub = ctx.subContext();
+    assertEquals(sub.getShellOption('pipefail'), true);
+
+    await setBuiltin(sub, ['+o', 'pipefail'], mockShell, noopExecute);
+    assertEquals(sub.getShellOption('pipefail'), false);
+    assertEquals(ctx.getShellOption('pipefail'), true);
+  });
+
+  await t.step('a spawned context writes through to the shell', async () => {
+    const ctx = setup();
+    const inner = ctx.spawnContext();
+
+    await setBuiltin(inner, ['-o', 'pipefail'], mockShell, noopExecute);
+    assertEquals(ctx.getShellOption('pipefail'), true);
+  });
+
+  await t.step('pipefail is listed by -o', async () => {
+    const ctx = setup();
+    const result = await setBuiltin(ctx, ['-o'], mockShell, noopExecute);
+    assertStringIncludes(result.stdout || '', '+o pipefail');
+
+    await setBuiltin(ctx, ['-o', 'pipefail'], mockShell, noopExecute);
+    const after = await setBuiltin(ctx, ['-o'], mockShell, noopExecute);
+    assertStringIncludes(after.stdout || '', '-o pipefail');
   });
 });

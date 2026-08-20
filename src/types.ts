@@ -50,6 +50,44 @@ export type ExecSyncResult = {
   code: number;
 };
 
+/**
+ * The shell options `set` knows, and their default values. Options are per-shell
+ * state and live on the context, not in a module global — MURRiX runs every
+ * session's shell in one process, so a global would let one session's
+ * `set -o pipefail` change another session's pipeline exit codes.
+ */
+export const DEFAULT_SHELL_OPTIONS: Record<string, boolean> = {
+  errexit: false, // -e: Exit on error
+  nounset: false, // -u: Error on unset variables
+  xtrace: false, // -x: Print commands before execution
+  verbose: false, // -v: Print input lines
+  noclobber: false, // -C: Prevent > from overwriting files
+  noglob: false, // -f: Disable pathname expansion
+  allexport: false, // -a: Export all variables
+  notify: false, // -b: Notify of job termination immediately
+  ignoreeof: false, // Require 'exit' to leave shell
+  monitor: false, // -m: Job control
+  noexec: false, // -n: Don't execute commands
+  pipefail: false, // A pipeline fails if any stage fails, not just the last
+};
+
+/**
+ * Short `set` flags mapped to the option they name. `pipefail` has no short
+ * flag, in bash either.
+ */
+export const SHELL_OPTION_FLAG_MAP: Record<string, string> = {
+  e: 'errexit',
+  u: 'nounset',
+  x: 'xtrace',
+  v: 'verbose',
+  C: 'noclobber',
+  f: 'noglob',
+  a: 'allexport',
+  b: 'notify',
+  m: 'monitor',
+  n: 'noexec',
+};
+
 export const PATH_TEST_OPERATOR_MAP: Record<string, string> = {
   '-e': 'EXISTS',
   '-f': 'REGULAR_FILE',
@@ -320,6 +358,28 @@ export interface ExecContextIf {
   setLocalParams: (
     values: Record<string, string | null>,
   ) => Record<string, string>;
+
+  /**
+   * Gets a shell option's value, as set by `set -o <name>`.
+   * Options are per-shell: a spawned context reads the shell's, a subshell gets
+   * a copy it cannot write back through.
+   * @param {string} name - The option name.
+   * @returns {boolean} The option value, false when the option is unknown.
+   */
+  getShellOption: (name: string) => boolean;
+
+  /**
+   * Gets every shell option and its value.
+   * @returns {Record<string, boolean>} The options.
+   */
+  getShellOptions: () => Record<string, boolean>;
+
+  /**
+   * Sets a shell option on the shell this context belongs to.
+   * @param {string} name - The option name.
+   * @param {boolean} value - The option value.
+   */
+  setShellOption: (name: string, value: boolean) => void;
 
   /**
    * Gets an indexed array, or undefined when the name is not an array.

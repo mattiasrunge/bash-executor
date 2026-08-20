@@ -4,38 +4,8 @@
  * Sets or unsets shell options and positional parameters.
  */
 
-import type { ExecContextIf, ShellIf } from '../types.ts';
+import { DEFAULT_SHELL_OPTIONS, type ExecContextIf, SHELL_OPTION_FLAG_MAP, type ShellIf } from '../types.ts';
 import type { BuiltinHandler, BuiltinResult } from './types.ts';
-
-// Shell options (shared state - in a real shell this would be per-shell)
-const shellOptions: Record<string, boolean> = {
-  errexit: false, // -e: Exit on error
-  nounset: false, // -u: Error on unset variables
-  xtrace: false, // -x: Print commands before execution
-  verbose: false, // -v: Print input lines
-  noclobber: false, // -C: Prevent > from overwriting files
-  noglob: false, // -f: Disable pathname expansion
-  allexport: false, // -a: Export all variables
-  notify: false, // -b: Notify of job termination immediately
-  ignoreeof: false, // Require 'exit' to leave shell
-  monitor: false, // -m: Job control
-  noexec: false, // -n: Don't execute commands
-  pipefail: false, // Fail pipeline if any command fails
-};
-
-// Map short options to long names
-const optionMap: Record<string, string> = {
-  e: 'errexit',
-  u: 'nounset',
-  x: 'xtrace',
-  v: 'verbose',
-  C: 'noclobber',
-  f: 'noglob',
-  a: 'allexport',
-  b: 'notify',
-  m: 'monitor',
-  n: 'noexec',
-};
 
 /**
  * The set builtin command.
@@ -100,8 +70,8 @@ export const setBuiltin: BuiltinHandler = async (
 
     // - with no other characters: turn off -x and -v
     if (arg === '-') {
-      shellOptions.xtrace = false;
-      shellOptions.verbose = false;
+      ctx.setShellOption('xtrace', false);
+      ctx.setShellOption('verbose', false);
       i++;
       continue;
     }
@@ -113,23 +83,21 @@ export const setBuiltin: BuiltinHandler = async (
       if (i >= args.length) {
         // Display all options
         let output = '';
-        for (const [name, value] of Object.entries(shellOptions)) {
+        for (const [name, value] of Object.entries(ctx.getShellOptions())) {
           output += `set ${value ? '-o' : '+o'} ${name}\n`;
         }
         return { code: 0, stdout: output };
       }
 
       const optName = args[i];
-      if (optName in shellOptions) {
-        shellOptions[optName] = enable;
-      } else if (optName === 'pipefail') {
-        shellOptions.pipefail = enable;
-      } else {
+      if (!(optName in DEFAULT_SHELL_OPTIONS)) {
         return {
           code: 1,
           stderr: `set: ${optName}: invalid option name\n`,
         };
       }
+
+      ctx.setShellOption(optName, enable);
       i++;
       continue;
     }
@@ -140,8 +108,8 @@ export const setBuiltin: BuiltinHandler = async (
       const flags = arg.slice(1);
 
       for (const flag of flags) {
-        if (flag in optionMap) {
-          shellOptions[optionMap[flag]] = enable;
+        if (flag in SHELL_OPTION_FLAG_MAP) {
+          ctx.setShellOption(SHELL_OPTION_FLAG_MAP[flag], enable);
         } else {
           return {
             code: 1,
@@ -185,34 +153,3 @@ export const setBuiltin: BuiltinHandler = async (
 
   return { code: 0 };
 };
-
-/**
- * Get the current value of a shell option.
- *
- * @param name - The option name
- * @returns The option value, or undefined if not found
- */
-export function getShellOption(name: string): boolean | undefined {
-  return shellOptions[name];
-}
-
-/**
- * Set a shell option.
- *
- * @param name - The option name
- * @param value - The option value
- */
-export function setShellOption(name: string, value: boolean): void {
-  if (name in shellOptions) {
-    shellOptions[name] = value;
-  }
-}
-
-/**
- * Reset all shell options to defaults (useful for testing).
- */
-export function resetShellOptions(): void {
-  for (const key of Object.keys(shellOptions)) {
-    shellOptions[key] = false;
-  }
-}
