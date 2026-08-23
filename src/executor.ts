@@ -1285,10 +1285,10 @@ export class AstExecutor {
         } else if (c === '?') {
           out += '.';
         } else if (c === '[') {
-          const end = s.indexOf(']', i + 1);
-          if (end !== -1) {
-            out += s.slice(i, end + 1);
-            i = end;
+          const bracket = this.translateBracketExpression(s, i);
+          if (bracket) {
+            out += bracket.source;
+            i = bracket.end;
           } else {
             out += '\\[';
           }
@@ -1352,10 +1352,10 @@ export class AstExecutor {
       } else if (c === '?') {
         regex += '.';
       } else if (c === '[') {
-        const end = text.indexOf(']', i + 1);
-        if (end !== -1) {
-          regex += text.slice(i, end + 1);
-          i = end;
+        const bracket = this.translateBracketExpression(text, i);
+        if (bracket) {
+          regex += bracket.source;
+          i = bracket.end;
         } else {
           regex += '\\[';
         }
@@ -1375,6 +1375,50 @@ export class AstExecutor {
   }
 
   /**
+   * Translate a shell bracket expression to a JavaScript character class.
+   *
+   * `pattern[open]` must be the `[`. Returns the emitted regex source and the index of
+   * the closing `]`, or `undefined` when the bracket is unterminated — the caller then
+   * treats the `[` as a literal, which is what bash does.
+   *
+   * The reason this exists rather than copying `[...]` through verbatim: shell and
+   * JavaScript spell negation differently. POSIX globs negate with `[!...]`, JS regex only
+   * understands `[^...]`, so a copied `[!0-9]` becomes "a `!` or a digit" — the exact
+   * inverse of what was written, silently. `[^...]` happened to work because bash accepts
+   * that spelling too, which is what kept the bug hidden.
+   *
+   * Also handled here: a `]` immediately after the `[` (or after the negation) is a literal
+   * `]` and does not close the expression, so the naive `indexOf(']')` search terminated
+   * `[]]` at the wrong place and produced an empty, invalid class.
+   */
+  protected translateBracketExpression(pattern: string, open: number): { source: string; end: number } | undefined {
+    let i = open + 1;
+    let out = '[';
+
+    if (pattern[i] === '!' || pattern[i] === '^') {
+      out += '^';
+      i++;
+    }
+
+    // A leading `]` is data, not the terminator.
+    if (pattern[i] === ']') {
+      out += '\\]';
+      i++;
+    }
+
+    for (; i < pattern.length; i++) {
+      const c = pattern[i];
+      if (c === ']') {
+        return { source: out + ']', end: i };
+      }
+      // `\` and `[` are the two characters that change meaning inside a JS class.
+      out += c === '\\' || c === '[' ? `\\${c}` : c;
+    }
+
+    return undefined;
+  }
+
+  /**
    * Matches a glob pattern against a value.
    * Supports *, ?, and character classes.
    */
@@ -1391,11 +1435,10 @@ export class AstExecutor {
           regex += '.';
           break;
         case '[': {
-          // Find the closing bracket
-          const end = pattern.indexOf(']', i + 1);
-          if (end !== -1) {
-            regex += pattern.slice(i, end + 1);
-            i = end;
+          const bracket = this.translateBracketExpression(pattern, i);
+          if (bracket) {
+            regex += bracket.source;
+            i = bracket.end;
           } else {
             regex += '\\[';
           }

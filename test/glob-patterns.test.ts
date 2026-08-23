@@ -159,6 +159,76 @@ Deno.test('Case Statement Glob Patterns - Character Classes', async (t) => {
     assertEquals(result.stdout, 'matched\n');
   });
 
+  /**
+   * `[!...]` is the POSIX spelling of a negated class and the one scripts actually use;
+   * `[^...]` is bash's alias for it. The bracket used to be copied straight into a JS
+   * regex, where `!` is an ordinary character — so `[!0-9]` meant "a `!` or a digit" and
+   * matched the exact set it was written to exclude. Found in the wild: a guard rejecting
+   * non-numeric ffprobe output accepted `N/A` and rejected `64000`.
+   */
+  await t.step('[!...] negates, and is not a literal !', async () => {
+    const shell = new TestShell();
+    shell.setParams({ x: '5' });
+    const result = await shell.runAndCapture(`
+      case $x in
+        [!0-9]) echo "matched" ;;
+        *) echo "no match" ;;
+      esac
+    `);
+    assertEquals(result.stdout, 'no match\n');
+  });
+
+  await t.step('[!...] matches a character outside the set', async () => {
+    const shell = new TestShell();
+    shell.setParams({ x: 'a' });
+    const result = await shell.runAndCapture(`
+      case $x in
+        [!0-9]) echo "matched" ;;
+        *) echo "no match" ;;
+      esac
+    `);
+    assertEquals(result.stdout, 'matched\n');
+  });
+
+  await t.step('[^...] negates the same way', async () => {
+    const shell = new TestShell();
+    shell.setParams({ x: '5' });
+    const result = await shell.runAndCapture(`
+      case $x in
+        [^0-9]) echo "matched" ;;
+        *) echo "no match" ;;
+      esac
+    `);
+    assertEquals(result.stdout, 'no match\n');
+  });
+
+  /** The numeric guard this was found by: "is every character a digit?" */
+  await t.step('*[!0-9]* rejects a number and accepts anything else', async () => {
+    const shell = new TestShell();
+    for (const [value, expected] of [['64000', 'numeric'], ['N/A', 'not numeric'], ['64000,', 'not numeric'], ['', 'numeric']]) {
+      shell.setParams({ x: value });
+      const result = await shell.runAndCapture(`
+        case "$x" in
+          *[!0-9]*) echo "not numeric" ;;
+          *) echo "numeric" ;;
+        esac
+      `);
+      assertEquals(result.stdout, `${expected}\n`, `for [${value}]`);
+    }
+  });
+
+  await t.step('a leading ] is data, not the terminator', async () => {
+    const shell = new TestShell();
+    shell.setParams({ x: ']' });
+    const result = await shell.runAndCapture(`
+      case $x in
+        []]) echo "matched" ;;
+        *) echo "no match" ;;
+      esac
+    `);
+    assertEquals(result.stdout, 'matched\n');
+  });
+
   await t.step('character class with other patterns', async () => {
     const shell = new TestShell();
     shell.setParams({ x: 'file1.txt' });
