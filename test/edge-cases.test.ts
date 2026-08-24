@@ -92,6 +92,20 @@ Deno.test('Subshell isolation', async (t) => {
     assertEquals(result.stdout, 'done\n');
     assertEquals(shell.getEnv().PATH, '/bin');
   });
+
+  await t.step('executeAndCapture is not a terminal', async () => {
+    // Regression for the MURRiX generate-derivatives bug: capturing redirects stdout to a
+    // pipe, so the captured command must see TERM=0 exactly as a pipeline stage or `$( )`
+    // does. It did not, so a command that colours or syntax-highlights for a human wrote
+    // ANSI escapes into the captured string and the caller parsed them as data.
+    const shell = new TestShell();
+    shell.setEnv({ TERM: '1' });
+    const result = await shell.executeAndCapture('echo "[$TERM]"');
+    assertEquals(result.code, 0);
+    assertEquals(result.stdout, '[0]\n');
+    // ...and the interactive shell it was captured from is still a terminal.
+    assertEquals(shell.getEnv().TERM, '1');
+  });
 });
 
 Deno.test('Deeply Nested Structures', async (t) => {

@@ -241,6 +241,11 @@ export class AstExecutor {
       // Setup piped context — a subshell, so env/cwd changes (e.g. `export`) the
       // captured command makes stay local and don't leak into the calling shell.
       const cmdCtx = ctx.subContext();
+      // Capturing is not a terminal: stdout is a pipe here exactly as it is for a
+      // pipeline stage or `$( )`, both of which already set this. Without it a
+      // command that decorates for a human (colour, syntax highlighting, column
+      // layout) does so into the captured string, and the caller parses the escapes.
+      cmdCtx.setLocalEnv({ TERM: '0' });
       cmdCtx.redirectStdout(stdoutFd);
       cmdCtx.redirectStderr(stderrFd);
 
