@@ -160,4 +160,23 @@ Deno.test('executeAndCapture', async (t) => {
     assertEquals(result.code, 0);
     assertEquals(result.stdout, big);
   });
+
+  await t.step('an abort signal stops a shell loop', async () => {
+    const shell = new TestShell();
+    shell.mockCommand('tick', async () => {
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      return { code: 0 };
+    });
+    const controller = new AbortController();
+    const reason = new Error('capture deadline reached');
+    const timer = setTimeout(() => controller.abort(reason), 25);
+
+    const result = await shell.executeAndCapture('while tick; do true; done', {
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+
+    assertEquals(result.code, 1);
+    assertEquals(result.stderr, `Error: ${reason.message}\n`);
+  });
 });

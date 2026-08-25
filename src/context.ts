@@ -21,6 +21,7 @@ export class ExecContext implements ExecContextIf {
   private dirStack: string[] = [];
   private fds: Record<string, string> = {};
   private options: Record<string, boolean> = { ...DEFAULT_SHELL_OPTIONS };
+  private abortSignal?: AbortSignal;
   // undefined means "whatever the shell above says"; set explicitly, it decides
   private errexitSuppressed?: boolean;
 
@@ -99,8 +100,17 @@ export class ExecContext implements ExecContextIf {
 
     // `if ( false; echo here ); then` — the exemption covers the subshell too
     ctx.errexitSuppressed = this.getErrexitSuppressed();
+    ctx.abortSignal = this.getAbortSignal();
 
     return ctx;
+  }
+
+  getAbortSignal(): AbortSignal | undefined {
+    return this.abortSignal ?? this.parent?.getAbortSignal();
+  }
+
+  setAbortSignal(signal: AbortSignal | undefined): void {
+    this.abortSignal = signal;
   }
 
   getCwd(): string {

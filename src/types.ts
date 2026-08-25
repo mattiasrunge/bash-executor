@@ -50,6 +50,20 @@ export type ExecSyncResult = {
   code: number;
 };
 
+/** Shared byte budget for concurrent stdout/stderr capture drains. */
+export type CaptureBudgetIf = {
+  consume(bytes: number): void;
+};
+
+/** Options a host shell may honor while draining a pipe. */
+export type PipeReadOptions = {
+  signal?: AbortSignal;
+  captureBudget?: CaptureBudgetIf;
+};
+
+/** Guardrails for a captured execution. */
+export type ExecuteAndCaptureOptions = PipeReadOptions;
+
 /**
  * The shell options `set` knows, and their default values. Options are per-shell
  * state and live on the context, not in a module global — MURRiX runs every
@@ -161,7 +175,7 @@ export interface ShellIf {
    * @param {string} name - The name of the pipe.
    * @returns {Promise<string>} The content read from the pipe.
    */
-  pipeRead: (name: string) => Promise<string>;
+  pipeRead: (name: string, opts?: PipeReadOptions) => Promise<string>;
 
   /**
    * Write to a pipe.
@@ -301,6 +315,12 @@ export interface ExecContextIf {
    * @returns {ExecContextIf} The new execution context.
    */
   subContext(): ExecContextIf;
+
+  /** Gets the cancellation signal inherited by work in this context. */
+  getAbortSignal(): AbortSignal | undefined;
+
+  /** Sets the cancellation signal for work in this context and its children. */
+  setAbortSignal(signal: AbortSignal | undefined): void;
 
   /**
    * Gets the current working directory.

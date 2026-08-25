@@ -1,4 +1,13 @@
-import { AstExecutor, createBuiltinRegistry, type ExecCommandOptions, ExecContext, type ExecContextIf, type ExecSyncResult, type ShellIf } from '../../mod.ts';
+import {
+  AstExecutor,
+  createBuiltinRegistry,
+  type ExecCommandOptions,
+  ExecContext,
+  type ExecContextIf,
+  type ExecSyncResult,
+  type ExecuteAndCaptureOptions,
+  type ShellIf,
+} from '../../mod.ts';
 
 /**
  * PipeBuffer - Async pipe with proper backpressure and EOF signaling
@@ -437,8 +446,8 @@ export class TestShell implements ShellIf {
   /**
    * Run a script using executeAndCapture (captures via pipes)
    */
-  async executeAndCapture(script: string): Promise<ExecSyncResult> {
-    return this.executor.executeAndCapture(script, this.ctx);
+  async executeAndCapture(script: string, opts?: ExecuteAndCaptureOptions): Promise<ExecSyncResult> {
+    return this.executor.executeAndCapture(script, this.ctx, opts);
   }
 
   /**

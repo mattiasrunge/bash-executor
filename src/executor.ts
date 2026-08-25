@@ -33,7 +33,7 @@ import { getExitCode, getReturnCode, isExitSignal, isReturnSignal, makeExitSigna
 import type { BuiltinRegistry } from './builtins/types.ts';
 import type { ErrorPosition } from './errors.ts';
 import { NoClobberError, UnboundVariableError, UnknownNodeTypeError, UnsupportedArithmeticNodeError, UnsupportedOperatorError } from './errors.ts';
-import type { ExecContextIf, ExecSyncResult, ShellIf } from './types.ts';
+import type { ExecContextIf, ExecSyncResult, ExecuteAndCaptureOptions, ShellIf } from './types.ts';
 
 // The special parameters, which are set even when nothing has assigned to them
 const ALWAYS_SET_PARAMS = new Set(['?', '#', '$', '!', '0', '-', '_', '@', '*']);
@@ -221,7 +221,11 @@ export class AstExecutor {
    * @param {ExecContextIf} ctx - The execution context.
    * @returns {Promise<ExecSyncResult>} - The result including exit code, stdout, and stderr.
    */
-  public async executeAndCapture(source: string, ctx: ExecContextIf): Promise<ExecSyncResult> {
+  public async executeAndCapture(
+    source: string,
+    ctx: ExecContextIf,
+    opts: ExecuteAndCaptureOptions = {},
+  ): Promise<ExecSyncResult> {
     let stdoutFd: string = '';
     let stderrFd: string = '';
     let stdoutRead: Promise<string> | undefined;
@@ -235,12 +239,13 @@ export class AstExecutor {
       // Drain the pipes while the command runs — pipes have a fixed capacity,
       // so output larger than the capacity would block the writer forever if
       // reading only started after execute() returned.
-      stdoutRead = this.shell.pipeRead(stdoutFd);
-      stderrRead = this.shell.pipeRead(stderrFd);
+      stdoutRead = handled(this.shell.pipeRead(stdoutFd, opts));
+      stderrRead = handled(this.shell.pipeRead(stderrFd, opts));
 
       // Setup piped context — a subshell, so env/cwd changes (e.g. `export`) the
       // captured command makes stay local and don't leak into the calling shell.
       const cmdCtx = ctx.subContext();
+      cmdCtx.setAbortSignal(opts.signal);
       // Capturing is not a terminal: stdout is a pipe here exactly as it is for a
       // pipeline stage or `$( )`, both of which already set this. Without it a
       // command that decorates for a human (colour, syntax highlighting, column
@@ -286,6 +291,11 @@ export class AstExecutor {
    * @returns {Promise<number>} - The exit code of the executed node.
    */
   public async executeNode(node: AstNode, ctx: ExecContextIf): Promise<number> {
+    const signal = ctx.getAbortSignal();
+    if (signal?.aborted) {
+      throw signal.reason ?? new Error('execution aborted');
+    }
+
     switch (node.type) {
       case 'Script':
         return this.executeScript(node as AstNodeScript, ctx);
