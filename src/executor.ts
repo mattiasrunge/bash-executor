@@ -296,6 +296,15 @@ export class AstExecutor {
       throw signal.reason ?? new Error('execution aborted');
     }
 
+    // `&` on anything but a single command. A single command reaches the shell
+    // through `execute`, which takes an `async` option; a list, a group, a
+    // subshell or a loop has no such call, and used to run in the foreground
+    // instead — silently, with no job to bring back or disown. That is what made
+    // a multi-step sweep impossible to detach from the session that started it.
+    if (node.async && node.type !== 'Command' && this.shell.executeBackground) {
+      return this.executeInBackground(node, ctx);
+    }
+
     switch (node.type) {
       case 'Script':
         return this.executeScript(node as AstNodeScript, ctx);
@@ -328,6 +337,46 @@ export class AstExecutor {
       default:
         throw new UnknownNodeTypeError(node.type, this.getSourceLocation(node), this.currentSource);
     }
+  }
+
+  /**
+   * Hand a node to the shell to run in the background. The copy clears `async`
+   * so that re-entering does the work rather than backgrounding it again.
+   */
+  private executeInBackground(node: AstNode, ctx: ExecContextIf): Promise<number> {
+    const foreground = { ...node, async: false };
+
+    const run = async (bgCtx: ExecContextIf): Promise<number> => {
+      const code = await this.executeNode(foreground, bgCtx);
+
+      // A background job is a script in its own right, so an `exit` inside it —
+      // or an errexit trip, which is spelled the same way — ends the job and
+      // becomes its status. Left encoded, it surfaces as a nonsense exit code
+      // like -1001 in whatever records the job's result. This is the same
+      // resolution `executeScript` does at the top of a script.
+      return isExitSignal(code) ? getExitCode(code) : isReturnSignal(code) ? getReturnCode(code) : code;
+    };
+
+    return this.shell.executeBackground!(ctx, run, this.nodeSource(node));
+  }
+
+  /** Whether a name runs in this process — a builtin or a shell function — rather than as a command of its own. */
+  private isInProcessCommand(name: string, ctx: ExecContextIf): boolean {
+    return Boolean(this.builtins?.get(name) || ctx.getFunction(name));
+  }
+
+  /**
+   * A node's own source text, for the job table to show. Falls back to the node
+   * type when the parse carried no location.
+   */
+  private nodeSource(node: AstNode): string {
+    const { start, end } = (node.loc ?? {}) as { start?: { char?: number }; end?: { char?: number } };
+
+    if (!this.currentSource || start?.char === undefined || end?.char === undefined) {
+      return node.type;
+    }
+
+    return this.currentSource.slice(start.char, end.char + 1).trim();
   }
 
   /**
@@ -528,6 +577,18 @@ export class AstExecutor {
       const redirects = node.suffix?.filter((arg) => arg.type === 'Redirect') as AstNodeRedirect[] | undefined;
       await this.applyRedirections(parentCtx, redirects);
       return 0;
+    }
+
+    // `&` on a builtin or a function. Only the external branch below hands
+    // `async` to the shell; a builtin and a function run in this process and
+    // ignored it, so `source sweep.sh &` ran in the foreground and left no job
+    // behind to disown. Caught here, before any expansion, so the work is done
+    // once and in the background context. A name that has to be expanded before
+    // we know what it is (`$cmd &`) still takes the old path, for the same
+    // reason `exec` above only matches a literal: expanding it twice would run
+    // its command substitutions twice.
+    if (node.async && this.shell.executeBackground && node.name && !node.name.expansion?.length && this.isInProcessCommand(node.name.text, parentCtx)) {
+      return this.executeInBackground(node, parentCtx);
     }
 
     // Create an execution context

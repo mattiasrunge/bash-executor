@@ -151,6 +151,30 @@ export interface ShellIf {
   ) => Promise<number>;
 
   /**
+   * Runs a piece of the parse tree in the background, for the `&` cases that
+   * `execute` cannot reach: a list, a group, a subshell, a loop, a builtin or a
+   * function. Only the shell can give such a command a process of its own — a
+   * pid, private output, a place in the job table — so the executor hands over
+   * a thunk to run instead of a name and arguments.
+   *
+   * `run` is called with the context the job should use; it re-enters the
+   * executor on the same node with the `&` cleared. `command` is the node's own
+   * source text, for the job table to show.
+   *
+   * Optional: where a shell does not implement it, such a command runs in the
+   * foreground, which is what every shell did before.
+   * @param {ExecContextIf} ctx - The execution context the command was reached from.
+   * @param {Function} run - Runs the command, in the context it is given.
+   * @param {string} command - The command's source text.
+   * @returns {Promise<number>} The exit code of starting it (not of the job).
+   */
+  executeBackground?: (
+    ctx: ExecContextIf,
+    run: (ctx: ExecContextIf) => Promise<number>,
+    command: string,
+  ) => Promise<number>;
+
+  /**
    * Opens a pipe.
    * @returns {Promise<string>} The name of the pipe.
    */
