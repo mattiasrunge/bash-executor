@@ -867,6 +867,44 @@ export class AstExecutor {
     }
   }
 
+  /**
+   * Run a `$( )` and hand back what it printed.
+   *
+   * The substitution runs in a subshell — env/cwd are isolated so
+   * `$(export X=1)` cannot set X in the calling shell — and as its own shell:
+   * bash runs `$(false; echo hi)` to the end under `set -e` and hands back what
+   * it printed.
+   *
+   * The pipe is drained *while* the command runs, not after it. A pipe has a
+   * fixed capacity, and a writer that fills it blocks until someone reads;
+   * reading only once the command had returned meant the command never
+   * returned, so any substitution larger than the capacity — a `find` over a
+   * corpus, say — hung the shell for good.
+   */
+  private async substitute(commandAST: AstNode, ctx: ExecContextIf): Promise<{ code: number; output: string }> {
+    const cmdCtx = ctx.subContext();
+    cmdCtx.setLocalEnv({ TERM: '0' });
+    cmdCtx.setErrexitSuppressed(true);
+    const pipe = await this.shell.pipeOpen();
+    cmdCtx.redirectStdout(pipe);
+
+    const read = handled(this.shell.pipeRead(pipe));
+
+    try {
+      const code = await this.executeNode(commandAST, cmdCtx);
+
+      // EOF, so the drain finishes
+      await this.shell.pipeClose(pipe);
+
+      return { code, output: await read };
+    } finally {
+      // Settle the drain before removing the pipe, on the error path too
+      await this.shell.pipeClose(pipe).catch(() => {});
+      await read.catch(() => {});
+      await this.shell.pipeRemove(pipe).catch((err) => console.error('Failed to remove pipe from command substitution: ', err));
+    }
+  }
+
   protected async executePipeline(node: AstNodePipeline, ctx: ExecContextIf): Promise<number> {
     const pipes: string[] = [];
     const executions: Promise<number>[] = [];
@@ -1794,22 +1832,8 @@ export class AstExecutor {
           params[xp.parameter!] || '',
         );
       } else if (xp.type === 'CommandExpansion') {
-        // Handle command substitution
-        // Command substitution runs in a subshell — isolate env/cwd so it can't
-        // leak (e.g. `$(export X=1)` must not set X in the calling shell).
-        const cmdCtx = ctx.subContext();
-        cmdCtx.setLocalEnv({ TERM: '0' });
-        cmdCtx.setErrexitSuppressed(true);
-        cmdCtx.redirectStdout(await this.shell.pipeOpen());
-
-        try {
-          await this.executeNode(xp.commandAST, cmdCtx);
-          await this.shell.pipeClose(cmdCtx.getStdout());
-          const output = await this.shell.pipeRead(cmdCtx.getStdout());
-          rValue.replace(xp.loc!.start, xp.loc!.end + 1, output.trimEnd());
-        } finally {
-          this.shell.pipeRemove(cmdCtx.getStdout()).catch(() => {});
-        }
+        const { output } = await this.substitute(xp.commandAST, ctx);
+        rValue.replace(xp.loc!.start, xp.loc!.end + 1, output.trimEnd());
       } else if (xp.type === 'ArithmeticExpansion') {
         const result = await this.evaluateArithmetic(xp.arithmeticAST, ctx);
         rValue.replace(xp.loc!.start, xp.loc!.end + 1, String(result));
@@ -2533,38 +2557,20 @@ export class AstExecutor {
           );
         }
       } else if (xp.type === 'CommandExpansion') {
-        // Command substitution runs in a subshell — isolate env/cwd so it can't
-        // leak (e.g. `$(export X=1)` must not set X in the calling shell).
-        const cmdCtx = ctx.subContext();
-        cmdCtx.setLocalEnv({ TERM: '0' });
-        // A substitution is its own shell: bash runs `$(false; echo hi)` to the
-        // end under `set -e` and hands back what it printed
-        cmdCtx.setErrexitSuppressed(true);
-        cmdCtx.redirectStdout(await this.shell.pipeOpen());
+        const { code, output } = await this.substitute(xp.commandAST, ctx);
 
-        try {
-          const code = await this.executeNode(xp.commandAST, cmdCtx);
+        // A failing substitution still substitutes what it wrote. Bailing out
+        // here instead made `for e in $(ls maybe-missing)` abort the enclosing
+        // command — and with it the loop around it — instead of iterating over
+        // nothing. `exit`/`return` inside `$( )` ends that subshell only, so
+        // both are reduced to a plain status as well.
+        status = isExitSignal(code) ? getExitCode(code) : isReturnSignal(code) ? getReturnCode(code) : code;
 
-          // Send EOF so reads do not block
-          await this.shell.pipeClose(cmdCtx.getStdout());
-
-          // A failing substitution still substitutes what it wrote. Bailing out
-          // here instead made `for e in $(ls maybe-missing)` abort the enclosing
-          // command — and with it the loop around it — instead of iterating over
-          // nothing. `exit`/`return` inside `$( )` ends that subshell only, so
-          // both are reduced to a plain status as well.
-          status = isExitSignal(code) ? getExitCode(code) : isReturnSignal(code) ? getReturnCode(code) : code;
-
-          const output = await this.shell.pipeRead(cmdCtx.getStdout());
-
-          rValue.replace(
-            xp.loc!.start,
-            xp.loc!.end + 1,
-            output.replace(/\n+$/, ''), // Strip trailing newlines for command expansion (POSIX)
-          );
-        } finally {
-          this.shell.pipeRemove(cmdCtx.getStdout()).catch((err) => console.error('Failed to remove pipe from command expansion: ', err));
-        }
+        rValue.replace(
+          xp.loc!.start,
+          xp.loc!.end + 1,
+          output.replace(/\n+$/, ''), // Strip trailing newlines for command expansion (POSIX)
+        );
       } else if (xp.type === 'ArithmeticExpansion') {
         const result = await this.evaluateArithmetic(xp.arithmeticAST, ctx);
 
@@ -2846,24 +2852,9 @@ export class AstExecutor {
         if (!cmdNode.commandAST) {
           return 0;
         }
-        // Command substitution runs in a subshell — isolate env/cwd so it can't
-        // leak (e.g. `$(export X=1)` must not set X in the calling shell).
-        const cmdCtx = ctx.subContext();
-        cmdCtx.setLocalEnv({ TERM: '0' });
-        // A substitution is its own shell: bash runs `$(false; echo hi)` to the
-        // end under `set -e` and hands back what it printed
-        cmdCtx.setErrexitSuppressed(true);
-        cmdCtx.redirectStdout(await this.shell.pipeOpen());
-
-        try {
-          await this.executeNode(cmdNode.commandAST, cmdCtx);
-          await this.shell.pipeClose(cmdCtx.getStdout());
-          const output = await this.shell.pipeRead(cmdCtx.getStdout());
-          const trimmed = output.trim();
-          return trimmed === '' ? 0 : Number.parseInt(trimmed, 10) || 0;
-        } finally {
-          this.shell.pipeRemove(cmdCtx.getStdout()).catch((err) => console.error('Failed to remove pipe from command substitution: ', err));
-        }
+        const { output } = await this.substitute(cmdNode.commandAST, ctx);
+        const trimmed = output.trim();
+        return trimmed === '' ? 0 : Number.parseInt(trimmed, 10) || 0;
       }
 
       default:

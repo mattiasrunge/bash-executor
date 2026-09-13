@@ -23,6 +23,23 @@ Deno.test('Command Expansion', async (t) => {
     assertEquals(result.exitCode, 0);
   });
 
+  await t.step('command substitution larger than the pipe capacity', async () => {
+    // A pipe holds 64 KiB and a writer that fills it blocks until someone
+    // reads. Reading only after the command returned meant a substitution of
+    // this size never returned at all.
+    const shell = new TestShell();
+    const line = 'x'.repeat(99) + '\n';
+    const lines = 2000; // 200 000 bytes
+    shell.mockCommand('big', async () => ({ code: 0, stdout: line.repeat(lines) }));
+
+    const result = await Promise.race([
+      shell.runAndCapture('X=$(big); echo ${#X}'),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('substitution deadlocked')), 5000)),
+    ]);
+
+    assertEquals(result.stdout, `${line.length * lines - 1}\n`);
+  });
+
   await t.step('command substitution with long JSON output containing equals signs', async () => {
     // Tests a scenario similar to the MURRiX exiftool.sh bug
     // where command output is JSON containing = signs
