@@ -179,4 +179,25 @@ Deno.test('executeAndCapture', async (t) => {
     assertEquals(result.code, 1);
     assertEquals(result.stderr, `Error: ${reason.message}\n`);
   });
+
+  await t.step('an aborted command keeps the output it had written', async () => {
+    // A pipeline step stopped at its deadline has nothing but this to say where
+    // it got to; dropping it left every timeout as a bare "exceeded N ms".
+    const shell = new TestShell();
+    shell.mockCommand('tick', async () => {
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      return { code: 0 };
+    });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(new Error('deadline')), 25);
+
+    const result = await shell.executeAndCapture('echo phase-one; echo phase-two >&2; while tick; do true; done', {
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+
+    assertEquals(result.code, 1);
+    assertEquals(result.stdout, 'phase-one\n');
+    assertEquals(result.stderr, 'phase-two\nError: deadline\n');
+  });
 });

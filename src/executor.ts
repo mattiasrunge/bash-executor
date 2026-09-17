@@ -266,10 +266,18 @@ export class AstExecutor {
 
       return { code, stdout, stderr };
     } catch (err) {
+      // What the command wrote before it was stopped is the only record of what
+      // it was doing — a step killed at its deadline is described by nothing else.
+      // Close the pipes so the drains see EOF and hand it over, then append the
+      // failure after it the way the command's own last line would have come.
+      if (stdoutFd) await this.shell.pipeClose(stdoutFd).catch(() => {});
+      if (stderrFd) await this.shell.pipeClose(stderrFd).catch(() => {});
+      const stdout = await stdoutRead?.catch(() => '') ?? '';
+      const stderr = await stderrRead?.catch(() => '') ?? '';
       return {
         code: 1,
-        stdout: '',
-        stderr: `Error: ${(err as Error).message}\n`,
+        stdout,
+        stderr: `${stderr}Error: ${(err as Error).message}\n`,
       };
     } finally {
       // Settle the drains (EOF unblocks them) before removing the pipes so
