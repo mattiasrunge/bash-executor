@@ -225,6 +225,35 @@ Deno.test('Here-strings', async (t) => {
   });
 });
 
+Deno.test('Here-documents', async (t) => {
+  await t.step('a quoted delimiter writes the body as it is, markdown and all', async () => {
+    const shell = new TestShell();
+    const script = 'cat > /tmp/notes.md << \'EOF\'\n# Family\n- **Anna Exempel** (mother) $HOME `x` \\$y\n  "quoted"\nEOF\necho done';
+    const result = await shell.runAndCapture(script);
+    assertEquals(result.exitCode, 0);
+    assertEquals(result.stdout, 'done\n');
+    assertEquals(shell.getFile('/tmp/notes.md'), '# Family\n- **Anna Exempel** (mother) $HOME `x` \\$y\n  "quoted"\n');
+  });
+
+  await t.step('an unquoted delimiter expands parameters and commands; quotes stay ordinary text', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('NAME=Bo; cat <<EOF\nhi "$NAME" (${#NAME}) $(echo "sub") $((1 + 2)) \\$NAME \\"q\\"\nEOF');
+    assertEquals(result.stdout, 'hi "Bo" (2) sub 3 $NAME \\"q\\"\n');
+  });
+
+  await t.step('<<- drops the leading tabs', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('cat <<-EOF\n\t\tone\n\ttwo\n\tEOF');
+    assertEquals(result.stdout, 'one\ntwo\n');
+  });
+
+  await t.step('it feeds read and a pipeline', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('while read l; do echo "[$l]"; done <<EOF\na\nb\nEOF\ncat <<EOF | cat\npiped\nEOF');
+    assertEquals(result.stdout, '[a]\n[b]\npiped\n');
+  });
+});
+
 Deno.test('Redirections on compound commands', async (t) => {
   await t.step('a while loop reads its stdin from a file', async () => {
     const shell = new TestShell();

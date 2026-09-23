@@ -71,8 +71,9 @@ for key in "${!seen[@]}"; do echo "$key ${seen[$key]}"; done
 
 An operator applies to each element of `${a[@]}` and the expansion stays a list
 (`${a[@]%.jpg}`, `${a[@]^^}`, `${a[@]/x/y}`), while `${a[@]:1:2}` slices the list
-itself. Here-strings (`read -a p <<< "$line"`) and process substitution
-(`mapfile -t f < <(find .)`) both work; the latter needs the `tempFile` and
+itself. Here-documents (`cat > f <<'EOF'` … `EOF`, `<<-` too; an unquoted delimiter
+expands the body), here-strings (`read -a p <<< "$line"`) and process substitution
+(`mapfile -t f < <(find .)`) all work; the last needs the `tempFile` and
 `removeTempFile` callbacks on `ShellIf`, since only the host knows what a command
 can open.
 

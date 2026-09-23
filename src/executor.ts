@@ -403,7 +403,16 @@ export class AstExecutor {
       const { values } = await this.resolveExpansions(r.file, ctx, subs);
       const target = values[0] || r.file.text;
 
-      if (r.op.text === '<') {
+      if (r.heredoc) {
+        // A here-document: its text, expanded unless the delimiter was quoted, fed in as stdin the
+        // way a here-string is.
+        const text = r.heredoc.quoted ? r.heredoc.body : await this.expandHereDocument(r.heredoc.body, ctx);
+        const pipe = await this.shell.pipeOpen();
+
+        temporary.push(pipe);
+        handled(this.shell.pipeWrite(pipe, text).then(() => this.shell.pipeClose(pipe)));
+        ctx.redirectStdin(pipe);
+      } else if (r.op.text === '<') {
         ctx.redirectStdin(target);
       } else if (r.op.text === '<<<') {
         // A here-string is the word plus a newline, fed in as stdin. The write
@@ -2175,6 +2184,60 @@ export class AstExecutor {
     await this.withFileBridging(cmdCtx, () => this.executeNode(xp.commandAST!, cmdCtx));
 
     return path;
+  }
+
+  /**
+   * The text of an unquoted here-document, expanded: `$name`, `${…}`, `$(…)`, `` `…` `` and
+   * `$((…))` apply, and a backslash escapes only `$`, `` ` ``, `\` and a newline — which is
+   * double-quote expansion, except that a `"` in the body is an ordinary character. So the body is
+   * put in double quotes with its own `"` escaped (outside command substitutions, whose quotes
+   * are their own) and expanded as one word, without field splitting or globbing.
+   */
+  protected async expandHereDocument(body: string, ctx: ExecContextIf): Promise<string> {
+    if (!/[$`\\]/.test(body)) {
+      return body;
+    }
+
+    let quoted = '"';
+    let depth = 0;
+    for (let i = 0; i < body.length; i++) {
+      const char = body[i];
+      const next = body[i + 1];
+      if (depth === 0 && char === '\\' && next === '"') {
+        // A literal backslash and quote, which in double quotes are written \\\"
+        quoted += '\\\\\\"';
+        i++;
+      } else if (char === '\\' && next !== undefined) {
+        quoted += char + next;
+        i++;
+      } else if (char === '$' && next === '(') {
+        depth++;
+        quoted += '$(';
+        i++;
+      } else if (depth > 0 && char === '(') {
+        depth++;
+        quoted += char;
+      } else if (depth > 0 && char === ')') {
+        depth--;
+        quoted += char;
+      } else if (depth === 0 && char === '"') {
+        quoted += '\\"';
+      } else {
+        quoted += char;
+      }
+    }
+    quoted += '"';
+
+    const ast = await parse(quoted, { mode: 'word-expansion' });
+    const word = (ast.commands[0] as AstNodeCommand).name;
+
+    if (!word) {
+      return body;
+    }
+
+    const { values } = await this.resolveExpansions({ ...word, type: 'AssignmentWord' } as AstNodeAssignmentWord, ctx);
+
+    return values[0] ?? '';
   }
 
   /**
