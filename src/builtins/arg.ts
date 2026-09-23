@@ -274,6 +274,32 @@ function parseArgDeclaration(args: string[]): ParseResult {
 // Help text generation
 // ============================================================================
 
+/**
+ * The declarations as a spec object, in the shape a host's command table uses.
+ *
+ * A positional becomes an argument, an option becomes a flag that takes a value, and a boolean
+ * flag becomes one typed `bool` — the distinction a caller cannot recover from rendered help,
+ * and the one a tool schema needs most: `--kind photo` and `-l` look alike in a usage block.
+ */
+export function generateSpec(registry: ArgRegistry, scriptName: string): Record<string, unknown> {
+  const args: Record<string, unknown>[] = [];
+  const flags: Record<string, unknown>[] = [];
+  for (const spec of registry.specs) {
+    if (spec.kind === 'positional') {
+      args.push({ name: spec.name, type: spec.type, description: spec.description, ...(spec.required ? {} : { optional: true }) });
+    } else if (spec.kind === 'option') {
+      flags.push({ name: spec.long, type: spec.type, description: spec.description, ...(spec.short ? { short: spec.short } : {}) });
+    } else {
+      flags.push({ name: spec.long, type: 'bool', description: spec.description, ...(spec.short ? { short: spec.short } : {}) });
+    }
+  }
+  // The name a caller would type, not the path the shell resolved it to: `$0` is the full
+  // path for a script run from PATH, and a spec naming "/usr/modules/core/bin/mkfile" is not
+  // a command anyone can call.
+  const name = scriptName.split('/').filter(Boolean).pop() || scriptName;
+  return { name, ...(registry.description ? { description: registry.description } : {}), args, flags };
+}
+
 function generateHelp(registry: ArgRegistry, scriptName: string): string {
   const lines: string[] = [];
 
@@ -612,7 +638,13 @@ export const argBuiltin: BuiltinHandler = async (
       // Handle help request - EXIT the script
       if (result.helpRequested) {
         const scriptName = params['0'] || 'script';
-        const helpText = generateHelp(registry, scriptName);
+        // Asked in JSON, answer with the declarations themselves rather than the rendered help.
+        // A script that declares its arguments with `arg` knows them as precisely as a compiled
+        // command knows its spec, and a caller that asked for JSON — a tool-schema generator,
+        // an agent reading `command_help` — wants the structure, not a usage block to parse.
+        const helpText = ctx.getEnv().JSON_OUTPUT === '1'
+          ? JSON.stringify(generateSpec(registry, scriptName))
+          : generateHelp(registry, scriptName);
 
         // Clean up registry
         argRegistries.delete(root);

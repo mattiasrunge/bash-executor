@@ -232,6 +232,46 @@ Deno.test('arg builtin', async (t) => {
       assertStringIncludes(result.stdout!, '--verbose');
       assertStringIncludes(result.stdout!, '-h, --help');
     });
+
+    await t.step('answers with the spec itself when JSON_OUTPUT is set', async () => {
+      // A script that declares its arguments knows them as precisely as a compiled command
+      // knows its spec. A caller that asked for JSON — a tool-schema generator, or an agent
+      // reading a command's help — wants that structure rather than a usage block to parse,
+      // and above all wants to know which flags take a value: `--out FILE` and `-v` look the
+      // same in rendered help.
+      const ctx = new ExecContext();
+      ctx.setEnv({ JSON_OUTPUT: '1' });
+      ctx.setParams({ '1': '--help', '#': '1', '0': 'myscript' });
+
+      await argBuiltin(ctx, ['--desc', 'Test command'], mockShell, noopExecute);
+      await argBuiltin(ctx, ['<name>', 'string', 'User name'], mockShell, noopExecute);
+      await argBuiltin(ctx, ['[<count>]', 'number', '=', '3', 'How many'], mockShell, noopExecute);
+      await argBuiltin(ctx, ['-o', '--out', 'string', 'Where to write'], mockShell, noopExecute);
+      await argBuiltin(ctx, ['-v', '--verbose', 'Verbose mode'], mockShell, noopExecute);
+      const result = await argBuiltin(ctx, ['--export'], mockShell, noopExecute);
+
+      const spec = JSON.parse(result.stdout!) as {
+        name: string;
+        description: string;
+        args: { name: string; type: string; optional?: boolean }[];
+        flags: { name: string; type: string; short?: string }[];
+      };
+      assertEquals(spec.name, 'myscript');
+      assertEquals(spec.description, 'Test command');
+      assertEquals(spec.args.map((a) => [a.name, a.type, a.optional ?? false]), [['name', 'string', false], ['count', 'number', true]]);
+      assertEquals(spec.flags.find((f) => f.name === 'out')?.type, 'string');
+      assertEquals(spec.flags.find((f) => f.name === 'out')?.short, 'o');
+      // The distinction the whole thing is for: a switch is typed, not just undescribed.
+      assertEquals(spec.flags.find((f) => f.name === 'verbose')?.type, 'bool');
+    });
+
+    await t.step('renders text help when JSON_OUTPUT is not set', async () => {
+      const ctx = new ExecContext();
+      ctx.setParams({ '1': '--help', '#': '1', '0': 'myscript' });
+      await argBuiltin(ctx, ['<name>', 'string', 'User name'], mockShell, noopExecute);
+      const result = await argBuiltin(ctx, ['--export'], mockShell, noopExecute);
+      assertStringIncludes(result.stdout!, 'Usage: myscript');
+    });
   });
 
   await t.step('error handling', async (t) => {
