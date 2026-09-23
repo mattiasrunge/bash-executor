@@ -59,6 +59,10 @@ type ArgSpec = PositionalArgSpec | OptionArgSpec | FlagArgSpec;
 
 interface ArgRegistry {
   description: string;
+  /** Real command lines, for a reader who has never run this script. See `arg --example`. */
+  examples: string[];
+  /** What the script answers with, in a sentence. See `arg --returns`. */
+  returns: string;
   specs: ArgSpec[];
   /** When set, unconsumed args are collected instead of rejected, and `--export` leaves them in `$@`. */
   rest: boolean;
@@ -86,7 +90,7 @@ function getOrCreateRegistry(ctx: ExecContextIf): ArgRegistry {
   const root = getRootContext(ctx);
   let registry = argRegistries.get(root);
   if (!registry) {
-    registry = { description: '', specs: [], rest: false };
+    registry = { description: '', examples: [], returns: '', specs: [], rest: false };
     argRegistries.set(root, registry);
   }
   return registry;
@@ -98,6 +102,8 @@ function getOrCreateRegistry(ctx: ExecContextIf): ArgRegistry {
 
 type ParseResult =
   | { type: 'desc'; description: string }
+  | { type: 'example'; example: string }
+  | { type: 'returns'; returns: string }
   | { type: 'export' }
   | { type: 'rest' }
   | { type: 'spec'; spec: ArgSpec }
@@ -238,6 +244,23 @@ function parseArgDeclaration(args: string[]): ParseResult {
     return { type: 'desc', description: args[1] };
   }
 
+  // Handle --example / --returns: what a call looks like, and what comes back. A description
+  // says what a command is FOR; only an example shows which words are positional and which
+  // flags go together, and only `--returns` says whether a call gives back rows or nothing.
+  if (args[0] === '--example') {
+    if (args.length < 2) {
+      return { type: 'error', message: 'arg --example: missing example' };
+    }
+    return { type: 'example', example: args[1] };
+  }
+
+  if (args[0] === '--returns') {
+    if (args.length < 2) {
+      return { type: 'error', message: 'arg --returns: missing description' };
+    }
+    return { type: 'returns', returns: args[1] };
+  }
+
   // Handle --export
   if (args[0] === '--export') {
     return { type: 'export' };
@@ -297,7 +320,14 @@ export function generateSpec(registry: ArgRegistry, scriptName: string): Record<
   // path for a script run from PATH, and a spec naming "/usr/modules/core/bin/mkfile" is not
   // a command anyone can call.
   const name = scriptName.split('/').filter(Boolean).pop() || scriptName;
-  return { name, ...(registry.description ? { description: registry.description } : {}), args, flags };
+  return {
+    name,
+    ...(registry.description ? { description: registry.description } : {}),
+    args,
+    flags,
+    ...(registry.examples.length ? { examples: registry.examples } : {}),
+    ...(registry.returns ? { returns: registry.returns } : {}),
+  };
 }
 
 function generateHelp(registry: ArgRegistry, scriptName: string): string {
@@ -364,6 +394,20 @@ function generateHelp(registry: ArgRegistry, scriptName: string): string {
     }
     // Always include -h/--help
     lines.push('  -h, --help                 Show this help message');
+    lines.push('');
+  }
+
+  if (registry.returns) {
+    lines.push('Returns:');
+    lines.push(`  ${registry.returns}`);
+    lines.push('');
+  }
+
+  if (registry.examples.length > 0) {
+    lines.push('Examples:');
+    for (const example of registry.examples) {
+      lines.push(`  ${example}`);
+    }
     lines.push('');
   }
 
@@ -600,6 +644,18 @@ export const argBuiltin: BuiltinHandler = async (
       return { code: 0 };
     }
 
+    case 'example': {
+      const registry = getOrCreateRegistry(ctx);
+      registry.examples.push(parsed.example);
+      return { code: 0 };
+    }
+
+    case 'returns': {
+      const registry = getOrCreateRegistry(ctx);
+      registry.returns = parsed.returns;
+      return { code: 0 };
+    }
+
     case 'rest': {
       const registry = getOrCreateRegistry(ctx);
       registry.rest = true;
@@ -616,9 +672,14 @@ export const argBuiltin: BuiltinHandler = async (
       const root = getRootContext(ctx);
       const registry = argRegistries.get(root);
 
-      if (!registry || registry.specs.length === 0) {
-        return { code: 0 }; // No args defined, nothing to do
+      if (!registry) {
+        return { code: 0 }; // `arg --export` with nothing declared at all
       }
+
+      // NOT `specs.length === 0`: a script that declares only a description — mkdir and mkbuf
+      // forward every argument to another command and so declare none — still has help to
+      // give, and used to fall through to the wrapped command's own `--help` instead. Only
+      // the parse-and-export half below needs declared arguments.
 
       // Extract raw positional arguments from context
       const params = ctx.getParams();
@@ -650,6 +711,12 @@ export const argBuiltin: BuiltinHandler = async (
         argRegistries.delete(root);
 
         return { code: makeExitSignal(0), stdout: helpText };
+      }
+
+      if (registry.specs.length === 0) {
+        // Nothing declared to parse: leave $@ exactly as it was.
+        argRegistries.delete(root);
+        return { code: 0 };
       }
 
       // Handle errors

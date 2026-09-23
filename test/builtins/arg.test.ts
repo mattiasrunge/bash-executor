@@ -265,6 +265,31 @@ Deno.test('arg builtin', async (t) => {
       assertEquals(spec.flags.find((f) => f.name === 'verbose')?.type, 'bool');
     });
 
+    await t.step('--example and --returns reach both shapes of help', async () => {
+      const json = new ExecContext();
+      json.setEnv({ JSON_OUTPUT: '1' });
+      json.setParams({ '1': '--help', '#': '1', '0': 'myscript' });
+      await argBuiltin(json, ['--desc', 'Test command'], mockShell, noopExecute);
+      await argBuiltin(json, ['--example', 'myscript --out /tmp/x'], mockShell, noopExecute);
+      await argBuiltin(json, ['--returns', 'the rows it wrote'], mockShell, noopExecute);
+      const spec = JSON.parse((await argBuiltin(json, ['--export'], mockShell, noopExecute)).stdout!) as {
+        examples: string[];
+        returns: string;
+      };
+      assertEquals(spec.examples, ['myscript --out /tmp/x']);
+      assertEquals(spec.returns, 'the rows it wrote');
+
+      const text = new ExecContext();
+      text.setParams({ '1': '--help', '#': '1', '0': 'myscript' });
+      await argBuiltin(text, ['--desc', 'Test command'], mockShell, noopExecute);
+      await argBuiltin(text, ['--example', 'myscript --out /tmp/x'], mockShell, noopExecute);
+      await argBuiltin(text, ['--returns', 'the rows it wrote'], mockShell, noopExecute);
+      const rendered = (await argBuiltin(text, ['--export'], mockShell, noopExecute)).stdout!;
+      assertStringIncludes(rendered, 'Returns:');
+      assertStringIncludes(rendered, 'Examples:');
+      assertStringIncludes(rendered, 'myscript --out /tmp/x');
+    });
+
     await t.step('renders text help when JSON_OUTPUT is not set', async () => {
       const ctx = new ExecContext();
       ctx.setParams({ '1': '--help', '#': '1', '0': 'myscript' });
