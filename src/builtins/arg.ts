@@ -11,6 +11,9 @@
  *   arg -f --flag "desc"               # Boolean flag
  *   arg --rest                         # Collect unconsumed args; leave them in $@ after --export
  *   arg --export                       # Parse $@ and export variables
+ *   arg --effect read|write            # Whether running the script changes anything
+ *   arg --writes <name> [value...]     # This argument or option makes a call a write (with these values only)
+ *   arg --group                        # A dispatcher: `<script> <sub>` runs `<script>-<sub>`
  *
  * With `--rest`, args not matched by a declared spec are not errors: they are
  * left in the positional parameters ($1..$#, $@) so a dispatcher can forward
@@ -66,6 +69,15 @@ interface ArgRegistry {
   specs: ArgSpec[];
   /** When set, unconsumed args are collected instead of rejected, and `--export` leaves them in `$@`. */
   rest: boolean;
+  /**
+   * Whether running the script changes anything: `read` never does, `write` always does. A script
+   * that does both is `read`, with what makes it a write in `writes`. See `arg --effect`.
+   */
+  effect?: 'read' | 'write';
+  /** Arguments and options that make a call a write: given at all (`true`), or given one of these values. */
+  writes: Map<string, true | string[]>;
+  /** The script dispatches `<script> <sub>` to `<script>-<sub>`, which is what a caller should judge. */
+  group: boolean;
 }
 
 // ============================================================================
@@ -90,7 +102,7 @@ function getOrCreateRegistry(ctx: ExecContextIf): ArgRegistry {
   const root = getRootContext(ctx);
   let registry = argRegistries.get(root);
   if (!registry) {
-    registry = { description: '', examples: [], returns: '', specs: [], rest: false };
+    registry = { description: '', examples: [], returns: '', specs: [], rest: false, writes: new Map(), group: false };
     argRegistries.set(root, registry);
   }
   return registry;
@@ -106,6 +118,9 @@ type ParseResult =
   | { type: 'returns'; returns: string }
   | { type: 'export' }
   | { type: 'rest' }
+  | { type: 'effect'; effect: 'read' | 'write' }
+  | { type: 'writes'; name: string; values: true | string[] }
+  | { type: 'group' }
   | { type: 'spec'; spec: ArgSpec }
   | { type: 'error'; message: string };
 
@@ -261,6 +276,26 @@ function parseArgDeclaration(args: string[]): ParseResult {
     return { type: 'returns', returns: args[1] };
   }
 
+  // What a call does to the system, for a caller that must know before running it: an assistant
+  // runs a read at once and shows a write to its user first.
+  if (args[0] === '--effect') {
+    if (args[1] !== 'read' && args[1] !== 'write') {
+      return { type: 'error', message: 'arg --effect: expected read or write' };
+    }
+    return { type: 'effect', effect: args[1] };
+  }
+
+  if (args[0] === '--writes') {
+    if (!args[1]) {
+      return { type: 'error', message: 'arg --writes: missing argument or option name' };
+    }
+    return { type: 'writes', name: args[1].replace(/^-+/, ''), values: args.length > 2 ? args.slice(2) : true };
+  }
+
+  if (args[0] === '--group') {
+    return { type: 'group' };
+  }
+
   // Handle --export
   if (args[0] === '--export') {
     return { type: 'export' };
@@ -308,12 +343,14 @@ export function generateSpec(registry: ArgRegistry, scriptName: string): Record<
   const args: Record<string, unknown>[] = [];
   const flags: Record<string, unknown>[] = [];
   for (const spec of registry.specs) {
+    const writes = registry.writes.get(spec.kind === 'positional' ? spec.name : spec.long);
+    const marked = writes === undefined ? {} : { writes };
     if (spec.kind === 'positional') {
-      args.push({ name: spec.name, type: spec.type, description: spec.description, ...(spec.required ? {} : { optional: true }) });
+      args.push({ name: spec.name, type: spec.type, description: spec.description, ...(spec.required ? {} : { optional: true }), ...marked });
     } else if (spec.kind === 'option') {
-      flags.push({ name: spec.long, type: spec.type, description: spec.description, ...(spec.short ? { short: spec.short } : {}) });
+      flags.push({ name: spec.long, type: spec.type, description: spec.description, ...(spec.short ? { short: spec.short } : {}), ...marked });
     } else {
-      flags.push({ name: spec.long, type: 'bool', description: spec.description, ...(spec.short ? { short: spec.short } : {}) });
+      flags.push({ name: spec.long, type: 'bool', description: spec.description, ...(spec.short ? { short: spec.short } : {}), ...marked });
     }
   }
   // The name a caller would type, not the path the shell resolved it to: `$0` is the full
@@ -327,6 +364,8 @@ export function generateSpec(registry: ArgRegistry, scriptName: string): Record<
     flags,
     ...(registry.examples.length ? { examples: registry.examples } : {}),
     ...(registry.returns ? { returns: registry.returns } : {}),
+    ...(registry.effect ? { effect: registry.effect } : {}),
+    ...(registry.group ? { group: true } : {}),
   };
 }
 
@@ -659,6 +698,21 @@ export const argBuiltin: BuiltinHandler = async (
     case 'rest': {
       const registry = getOrCreateRegistry(ctx);
       registry.rest = true;
+      return { code: 0 };
+    }
+
+    case 'effect': {
+      getOrCreateRegistry(ctx).effect = parsed.effect;
+      return { code: 0 };
+    }
+
+    case 'writes': {
+      getOrCreateRegistry(ctx).writes.set(parsed.name, parsed.values);
+      return { code: 0 };
+    }
+
+    case 'group': {
+      getOrCreateRegistry(ctx).group = true;
       return { code: 0 };
     }
 

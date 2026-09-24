@@ -290,6 +290,29 @@ Deno.test('arg builtin', async (t) => {
       assertStringIncludes(rendered, 'myscript --out /tmp/x');
     });
 
+    await t.step('--effect, --writes and --group reach the spec', async () => {
+      const json = new ExecContext();
+      json.setEnv({ JSON_OUTPUT: '1' });
+      json.setParams({ '1': '--help', '#': '1', '0': 'myscript' });
+      await argBuiltin(json, ['<command>', 'string', 'list, active or set'], mockShell, noopExecute);
+      await argBuiltin(json, ['--out', 'string', 'where to write'], mockShell, noopExecute);
+      await argBuiltin(json, ['--effect', 'read'], mockShell, noopExecute);
+      await argBuiltin(json, ['--writes', 'command', 'set'], mockShell, noopExecute);
+      await argBuiltin(json, ['--writes', '--out'], mockShell, noopExecute);
+      await argBuiltin(json, ['--group'], mockShell, noopExecute);
+      const spec = JSON.parse((await argBuiltin(json, ['--export'], mockShell, noopExecute)).stdout!) as {
+        effect: string;
+        group: boolean;
+        args: { name: string; writes?: unknown }[];
+        flags: { name: string; writes?: unknown }[];
+      };
+      assertEquals(spec.effect, 'read');
+      assertEquals(spec.group, true);
+      assertEquals(spec.args[0].writes, ['set']);
+      assertEquals(spec.flags.find((f) => f.name === 'out')?.writes, true);
+      assertEquals((await argBuiltin(new ExecContext(), ['--effect', 'maybe'], mockShell, noopExecute)).code, 1);
+    });
+
     await t.step('renders text help when JSON_OUTPUT is not set', async () => {
       const ctx = new ExecContext();
       ctx.setParams({ '1': '--help', '#': '1', '0': 'myscript' });
