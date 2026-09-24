@@ -7,6 +7,7 @@ import {
   type AstConditionalWord,
   type AstNode,
   type AstNodeArithmeticCommand,
+  type AstNodeArithmeticFor,
   type AstNodeAssignmentWord,
   type AstNodeCase,
   type AstNodeCommand,
@@ -328,6 +329,8 @@ export class AstExecutor {
         return this.executeUntil(node as AstNodeUntil, ctx);
       case 'For':
         return this.executeFor(node as AstNodeFor, ctx);
+      case 'ArithmeticFor':
+        return this.executeArithmeticFor(node as AstNodeArithmeticFor, ctx);
       case 'Case':
         return this.executeCase(node as AstNodeCase, ctx);
       case 'Subshell':
@@ -1354,6 +1357,32 @@ export class AstExecutor {
         if (stop) {
           return code;
         }
+      }
+
+      return last;
+    });
+  }
+
+  /**
+   * `for (( init; test; update ))`: `init` once, then the body while `test` is non-zero, `update`
+   * after each pass — `continue` included. A missing `test` is true, as in bash, so `for ((;;))`
+   * runs until something breaks out of it.
+   */
+  protected async executeArithmeticFor(node: AstNodeArithmeticFor, parentCtx: ExecContextIf): Promise<number> {
+    return this.withCompoundRedirections(node, parentCtx, async (ctx) => {
+      if (node.init) await this.evaluateArithmetic(node.init.arithmeticAST, ctx);
+
+      let last = 0;
+
+      while (!node.test || await this.evaluateArithmetic(node.test.arithmeticAST, ctx) !== 0) {
+        const { stop, code } = await this.runLoopBody(node.do, ctx);
+        last = code;
+
+        if (stop) {
+          return code;
+        }
+
+        if (node.update) await this.evaluateArithmetic(node.update.arithmeticAST, ctx);
       }
 
       return last;

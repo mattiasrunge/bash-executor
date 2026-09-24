@@ -297,6 +297,48 @@ Deno.test('For Loops', async (t) => {
 
 // A body that fails is ordinary — `for f in *; do grep x $f; done` runs to the
 // end. Aborting the loop instead turned a scan into a silent "nothing found".
+Deno.test('Arithmetic For Loops', async (t) => {
+  await t.step('init, test and update', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture(`
+      for ((i=0; i<3; i++)); do
+        echo "i=$i"
+      done
+    `);
+    assertEquals(result.stdout, 'i=0\ni=1\ni=2\n');
+  });
+
+  await t.step('spaced, no separator before do, two variables', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture(`for (( i = 0, j = 3 ; i < j ; i++, j-- )) do echo "$i $j"; done`);
+    assertEquals(result.stdout, '0 3\n1 2\n');
+  });
+
+  await t.step('continue still runs the update', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture(`for ((i=0; i<4; i++)); do (( i == 1 )) && continue; echo $i; done`);
+    assertEquals(result.stdout, '0\n2\n3\n');
+  });
+
+  await t.step('no test runs until break', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture(`n=0; for ((;;)); do n=$((n+1)); (( n >= 3 )) && break; done; echo $n`);
+    assertEquals(result.stdout, '3\n');
+  });
+
+  await t.step('a false test never runs the body, and the variable stays set', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture(`for ((i=5; i<3; i++)); do echo no; done; echo $i`);
+    assertEquals(result.stdout, '5\n');
+  });
+
+  await t.step('while with a comparison in (( ))', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture(`i=0; while (( i < 3 )); do echo $i; i=$((i+1)); done`);
+    assertEquals(result.stdout, '0\n1\n2\n');
+  });
+});
+
 Deno.test('Loops - failing body', async (t) => {
   await t.step('for loop runs every iteration when the body fails', async () => {
     const shell = new TestShell();
