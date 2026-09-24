@@ -345,3 +345,23 @@ Deno.test('Arithmetic Edge Cases', async (t) => {
     assertEquals(result.stdout, '-2\n');
   });
 });
+
+Deno.test('Arithmetic: ${…} and $(…) inside', async (t) => {
+  const cases: [string, string][] = [
+    ['echo $(( ${x:-3} + 1 ))', '4\n'],
+    ['x=5; echo $(( ${x:-3} + 1 ))', '6\n'],
+    ['s=hello; echo $(( ${#s} * 2 ))', '10\n'],
+    ['a=(4 5 6); echo $(( ${a[1]} + ${a[2]} ))', '11\n'],
+    ['e="2+3"; echo $(( ${e} * 2 ))', '10\n'],
+    ['(( ${n:-2} > 1 )) && echo yes', 'yes\n'],
+    ['(( $(echo 5) > 3 )) && echo yes || echo no', 'yes\n'],
+    ['for ((i=${from:-1}; i<=$(echo 3); i++)); do printf "%s" $i; done; echo', '123\n'],
+  ];
+  for (const [script, expected] of cases) {
+    await t.step(script, async () => {
+      const shell = new TestShell();
+      const result = await shell.runAndCapture(script);
+      assertEquals(result.stdout, expected);
+    });
+  }
+});

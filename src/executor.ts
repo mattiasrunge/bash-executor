@@ -2947,6 +2947,19 @@ export class AstExecutor {
         return node.prefix ? newValue : currentValue;
       }
 
+      case 'ParameterExpansion': {
+        // `${…}` inside arithmetic: expanded as the shell word it is, then read as a number — or,
+        // when it expands to an expression (`x="1+2"`), evaluated as one. bash substitutes the text
+        // before parsing, so `$(( ${x} * 3 ))` is 7 there and 9 here; for a number the two agree.
+        const paramNode = node as { type: 'ParameterExpansion'; text: string; word?: AstNodeWord };
+        if (!paramNode.word) return 0;
+        const { values } = await this.resolveExpansions(paramNode.word, ctx);
+        const text = values.join(' ').trim();
+        if (text === '') return 0;
+        if (/^[+-]?\d+$/.test(text)) return Number.parseInt(text, 10);
+        return await this.evaluateArithmetic(parseArithmetic(text), ctx);
+      }
+
       case 'CommandSubstitution': {
         const cmdNode = node as { type: 'CommandSubstitution'; commandAST: AstNode };
         if (!cmdNode.commandAST) {
