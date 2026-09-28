@@ -10,6 +10,7 @@
   "publish": {
     "exclude": [
       "test",
+      "conformance",
       ".vscode",
       ".github",
       ".claude",
@@ -17,6 +18,9 @@
       "CONTRIBUTING.md"
     ]
   },
+  // The fetched bash source is GPL test data, not ours to lint or format, and the
+  // report is generated
+  "exclude": ["conformance/.cache", "conformance/REPORT.md"],
   "compilerOptions": {
     "strict": true
   },
@@ -48,6 +52,9 @@
     "coverage": "false && deno coverage coverage && deno coverage coverage --html",
     "test": "deno task coverage-clean && deno test -R --coverage=coverage",
     "test-nc": "deno task coverage-clean && deno test -R --coverage=coverage --no-check",
-    "test-fast": "deno test -A --parallel --no-check --quiet"
+    "test-fast": "deno test -A --parallel --no-check --quiet",
+    "conformance:fetch": "./conformance/fetch.sh",
+    "conformance": "deno run -A --no-check conformance/run.ts",
+    "conformance:update": "deno run -A --no-check conformance/run.ts --update"
   }
 }

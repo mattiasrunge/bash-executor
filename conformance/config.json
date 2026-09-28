@@ -1,0 +1,10 @@
+{
+  "bash": "5.2.21",
+  "timeoutSeconds": 60,
+  "tolerance": 0.01,
+  "exclude": {
+    "run-all": "the driver itself, not a test",
+    "run-minimal": "the driver for a minimal-config bash, not a test",
+    "run-gprof": "profiling driver, not a test"
+  }
+}

@@ -1,0 +1,15 @@
+#!/bin/sh
+# bash-ts: bash's command line around bash-parser and bash-executor, for use as
+# THIS_SH in bash's own test suite. Uses the compiled binary when run.ts built one.
+HERE=$(cd "$(dirname "$0")" && pwd)
+BASH_TS_SELF="${HERE}/bash-ts"
+export BASH_TS_SELF
+if [ -x "${HERE}/.cache/bash-ts-bin" ]; then
+  # A compiled deno binary unpacks itself under TMPDIR, and the tests point
+  # TMPDIR all over; give it a fixed place and hand the script's own through
+  BASH_TS_TMPDIR="${TMPDIR-}"
+  BASH_TS_TMPDIR_SET="${TMPDIR+set}"
+  export BASH_TS_TMPDIR BASH_TS_TMPDIR_SET
+  TMPDIR="${HERE}/.cache/bin-tmp" exec "${HERE}/.cache/bash-ts-bin" "$@"
+fi
+exec deno run -A --no-check --quiet --config "${HERE}/../deno.jsonc" "${HERE}/cli.ts" "$@"
