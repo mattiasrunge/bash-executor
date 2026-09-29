@@ -178,11 +178,10 @@ export const getoptsBuiltin: BuiltinHandler = async (
     }
   };
 
-  // bash's unbind skips the readonly check `unset` makes
+  // bash's unbind_variable_noref: no readonly check as `unset` makes, and
+  // OPTARG itself even when it is a nameref, never what it refers to
   const unbindOptarg = () => {
-    ctx.setReadonlyVar('OPTARG', false);
-    ctx.setParams({ OPTARG: null });
-    if ('OPTARG' in ctx.getEnv()) ctx.setEnv({ OPTARG: null });
+    ctx.unsetVariable('OPTARG', { noref: true });
   };
 
   // OPTIND is set whatever happened, `--` skipped included; the state goes

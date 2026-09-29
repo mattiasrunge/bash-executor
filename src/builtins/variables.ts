@@ -116,31 +116,42 @@ export const exportBuiltin: BuiltinHandler = (ctx, args) => declareCommand('expo
  */
 export const unsetBuiltin: BuiltinHandler = async (ctx, args) => {
   let unsetFunctions = false;
-  const names: string[] = [];
+  let variablesOnly = false;
+  let noref = false;
+  let i = 0;
 
-  for (const arg of args) {
-    if (arg === '-f') {
-      unsetFunctions = true;
-    } else if (arg === '-v') {
-      unsetFunctions = false;
-    } else if (arg === '--') {
-      continue;
-    } else {
-      names.push(arg);
-    }
+  for (; i < args.length && /^-[fvn]+$/.test(args[i]); i++) {
+    unsetFunctions ||= args[i].includes('f');
+    variablesOnly ||= args[i].includes('v');
+    noref ||= args[i].includes('n');
   }
 
+  if (args[i] === '--') i++;
+
+  const names = args.slice(i);
   let stderr = '';
 
   for (const name of names) {
-    if (unsetFunctions) {
+    // A name that is no variable but a function is the function, unless -v says otherwise
+    if (unsetFunctions || (!variablesOnly && !noref && !ctx.getVariable(name) && ctx.getFunction(name))) {
       ctx.unsetFunction(name);
       ctx.setEnv({ [functionEnvName(name)]: null });
       continue;
     }
 
+    // `unset -n ref` takes the reference away, not what it refers to
+    if (noref && ctx.getVariable(name)?.attributes.includes('n')) {
+      if (ctx.getVariable(name)?.attributes.includes('r')) {
+        stderr += `unset: ${name}: cannot unset: readonly variable\n`;
+      } else {
+        ctx.unsetVariable(name, { noref: true });
+      }
+
+      continue;
+    }
+
     if (ctx.isReadonlyVar(name.replace(/\[.*$/, ''))) {
-      stderr += `unset: ${name}: cannot unset: readonly variable\n`;
+      stderr += `unset: ${ctx.resolveNameref(name.replace(/\[.*$/, ''))}: cannot unset: readonly variable\n`;
       continue;
     }
 
@@ -148,6 +159,14 @@ export const unsetBuiltin: BuiltinHandler = async (ctx, args) => {
     const element = subscripted(name);
 
     if (element) {
+      // An element of a plain variable is no element at all
+      const kind = ctx.getVariable(ctx.resolveNameref(element.name))?.kind;
+
+      if (kind === 'scalar') {
+        stderr += `unset: ${element.name}: not an array variable\n`;
+        continue;
+      }
+
       if (ctx.getAssoc(element.name)) {
         ctx.unsetAssocElement(element.name, element.subscript);
         continue;

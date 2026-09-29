@@ -2152,7 +2152,10 @@ export class AstExecutor {
 
       let last = 0;
 
-      if (ctx.isReadonlyVar(node.name.text)) {
+      // A nameref loop variable is pointed at each word, so what it refers to being readonly is no matter
+      const nameref = ctx.getVariable(node.name.text)?.attributes.includes('n');
+
+      if (!nameref && ctx.isReadonlyVar(node.name.text)) {
         await this.diagnose(ctx, `${node.name.text}: readonly variable`);
 
         return this.applyErrexit(1, ctx);
@@ -2162,7 +2165,12 @@ export class AstExecutor {
         // bash repeats the `for` line once per iteration, not once per loop
         await this.trace(ctx, traceLine);
 
-        ctx.assignVariable(node.name.text, value);
+        // A nameref as the loop variable refers to each word in turn, as bash does
+        if (ctx.getVariable(node.name.text)?.attributes.includes('n')) {
+          ctx.declareVariable(node.name.text, { value, noref: true });
+        } else {
+          ctx.assignVariable(node.name.text, value);
+        }
 
         const { stop, code } = await this.runLoopBody(node.do, ctx);
         last = code;
@@ -3060,21 +3068,41 @@ export class AstExecutor {
    *                precedes can see; a bare assignment goes to the shell.
    */
   protected async applyAssignment(assignment: Assignment, ctx: ExecContextIf, local: boolean): Promise<void> {
-    const { name, subscript, append, values, list } = assignment;
+    let { name, subscript } = assignment;
+    const { append, values, list } = assignment;
+
+    // Through a name reference to an element, `declare -n r='a[2]'; r=x` assigns a[2]
+    if (subscript === undefined && !list) {
+      const element = ctx.resolveNameref(name).match(/^([A-Za-z_][A-Za-z0-9_]*)\[(.*)\]$/s);
+
+      if (element) [, name, subscript] = element;
+    }
 
     // The call stack is the shell's to keep: assigning FUNCNAME does nothing, as in bash
     if (name === 'FUNCNAME') return;
 
     // A readonly variable cannot be assigned. Before a command that is said and
-    // the command runs without it, as in bash; anywhere else the command ends
+    // the command runs without it, as in bash; anywhere else the command ends.
+    // Through a name reference, the one it refers to is the one named.
     if (ctx.isReadonlyVar(name)) {
+      const refused = ctx.resolveNameref(name);
+
       if (local) {
-        await this.diagnose(ctx, `${name}: readonly variable`);
+        await this.diagnose(ctx, `${refused}: readonly variable`);
 
         return;
       }
 
-      throw new ReadonlyVariableError(name);
+      throw new ReadonlyVariableError(refused);
+    }
+
+    // A nameref that refers to nothing yet is given what it refers to: that has to be a name
+    const nameref = ctx.getVariable(name);
+
+    if (nameref?.attributes.includes('n') && !nameref.value && subscript === undefined && !list && !/^[A-Za-z_][A-Za-z0-9_]*(\[.*\])?$/s.test(values[0] ?? '')) {
+      await this.diagnose(ctx, `\`${values[0] ?? ''}': not a valid identifier`);
+
+      return;
     }
 
     if (list) {
@@ -3523,6 +3551,9 @@ export class AstExecutor {
       case 'stringReplace':
         return this.replacePattern(xp, value, ctx);
 
+      case 'referencedName':
+        return String(xp.value ?? '');
+
       case 'removeSmallestSuffixPattern':
         return this.removeSuffix(value, await this.patternGlob(this.writtenWord(xp.word, xp.wordSource), ctx), false);
 
@@ -3643,6 +3674,17 @@ export class AstExecutor {
       return { values: keys, join: xp.expandWords ? 'field' : 'ifs' };
     }
 
+    // ${!prefix*} and ${!prefix@} — the names of the variables that begin with it
+    if (xp.op === 'prefix') {
+      const prefix = String((xp as { prefix?: string }).prefix ?? '');
+      const names = Object.entries(ctx.getVariables())
+        .filter(([name, info]) => name.startsWith(prefix) && /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) && info.value !== undefined)
+        .map(([name]) => name)
+        .sort();
+
+      return { values: names, join: xp.expandWords ? 'field' : 'ifs' };
+    }
+
     if (xp.op && !DISTRIBUTING_OPS.has(xp.op)) {
       return null;
     }
@@ -3662,6 +3704,62 @@ export class AstExecutor {
     }
 
     return null;
+  }
+
+  /**
+   * `${!name…}`: the value of `name` is the parameter the expansion is really
+   * about, `${!x//c/y}` with x=v being `${v//c/y}`. Each such expansion is
+   * replaced by the one it leads to, parsed from that text, where it stands. A
+   * name reference instead gives the name it refers to, as bash does.
+   */
+  protected async resolveIndirections<T extends { type: string; loc?: unknown }>(expansions: T[], ctx: ExecContextIf): Promise<T[]> {
+    if (!expansions.some((xp) => (xp as { op?: string }).op === 'indirection')) return expansions;
+
+    const resolved: T[] = [];
+
+    for (const xp of expansions) {
+      const word = (xp as { op?: string; word?: unknown }).op === 'indirection' ? String((xp as { word?: unknown }).word ?? '') : undefined;
+
+      if (word === undefined || (xp as { resolved?: boolean }).resolved) {
+        resolved.push(xp);
+        continue;
+      }
+
+      const match = word.match(/^([A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?|\d+|[@*#?$!-])(.*)$/s);
+
+      if (!match) throw new CommandAbortError(`${word}: bad substitution`, { code: 'E_BAD_SUBSTITUTION' });
+
+      const [, name, rest] = match;
+      const nameref = ctx.getVariable(name);
+
+      // `${!ref}` of a nameref is the name it refers to
+      if (nameref?.attributes.includes('n') && rest === '') {
+        resolved.push({ ...xp, op: 'referencedName', parameter: name, value: typeof nameref.value === 'string' ? nameref.value : '' });
+        continue;
+      }
+
+      const params = { ...ctx.getEnv(), ...ctx.getParams() };
+
+      if (!(await this.isParameterSet(name, ctx, params))) {
+        if (ctx.getShellOption('nounset')) throw new UnboundVariableError(`!${name}`);
+        throw new CommandAbortError(`${name}: invalid indirect expansion`, { code: 'E_BAD_SUBSTITUTION' });
+      }
+
+      const target = await this.parameterValue(name, ctx, params);
+
+      if (!/^([A-Za-z_][A-Za-z0-9_]*(\[.*\])?|\d+|[@*#?$!-])$/s.test(target)) {
+        throw new CommandAbortError(`${target}: invalid variable name`, { code: 'E_BAD_SUBSTITUTION' });
+      }
+
+      const ast = await parse(`\${${target}${rest}}`, { mode: 'word-expansion' });
+      const inner = (ast.commands[0] as AstNodeCommand | undefined)?.name?.expansion?.[0];
+
+      if (!inner) throw new CommandAbortError(`\${!${word}}: bad substitution`, { code: 'E_BAD_SUBSTITUTION' });
+
+      resolved.push({ ...inner, loc: xp.loc } as unknown as T);
+    }
+
+    return resolved;
   }
 
   /**
@@ -3688,7 +3786,7 @@ export class AstExecutor {
     // Set when the whole word is a list expansion that turned out to be empty
     let emptyList = false;
 
-    for (const xp of node.expansion) {
+    for (const xp of await this.resolveIndirections(node.expansion, ctx)) {
       if (xp.resolved) {
         continue;
       }

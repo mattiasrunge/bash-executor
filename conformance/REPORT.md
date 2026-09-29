@@ -7,8 +7,8 @@ see [README.md](README.md) for what the scores mean.
 | --- | --- |
 | Test files that parse | 451 / 471 |
 | `run-*` scripts passing | 22 / 83 (real bash here: 74) |
-| Mean upstream score | 70% |
-| Mean stdout score | 74% |
+| Mean upstream score | 71% |
+| Mean stdout score | 75% |
 
 ## Gaps
 
@@ -78,6 +78,7 @@ Errors that escaped the executor and ended the script.
 
 | Name | Tests | Times hit |
 | --- | --- | --- |
+| TypeError: Cannot read properties of undefined (reading 'attributes') | nameref | 1 |
 | Error: No such device or address (os error 6): open '/dev/tty' | vredir | 1 |
 
 ### Invocation options not supported
@@ -120,7 +121,6 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | !e: command not found | histexpand, history |
 | syntax error: Unexpected 'WORD' | parser, vredir |
 | ((: == N: syntax error: operand expected (error token is "== N") | new-exp, test |
-| undefined: unbound variable | new-exp, varenv |
 | [N] N | jobs, trap |
 | /dev/tty: No such device or address (os error N): open '/dev/tty' | read, test |
 | x=value: command not found | alias |
@@ -129,9 +129,10 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | ever: command not found | alias |
 | myalias: command not found | alias |
 | aN: command not found | alias |
-| ((: ++: syntax error: operand expected (error token is "+") | arith |
-| ((: --: syntax error: operand expected (error token is "-") | arith |
-| ((: x=N y=N: syntax error in expression (error token is "y=N") | arith |
+| ﷑second): command not found | array |
+| c: readonly variable | array |
+| let: a=(N﷑+﷑N): missing ')' (error token is "﷑+﷑N)") | array |
+| ﷑[N]=: No such file or directory | array |
 
 ## Per test
 
@@ -143,12 +144,12 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | appendop | pass | yes | 100% | 100% |  |
 | arith | pass | no | 95% | 97% | 164c164 ⏎ &lt; ./arith1.sub: line 48: ((: ++: syntax error: operand expected (error token is "+") ⏎ --- |
 | arith-for | pass | no | 97% | 97% | 67c67,68 ⏎ &lt; bash: syntax error: for (( … )) takes three expressions separated by ';', got "i=0; i &lt; 3" ⏎ --- |
-| array | pass | no | 79% | 82% | 2,3c2,4 ⏎ &lt; ./array.tests: line 28: ﷑second): command not found ⏎ &lt; 127 |
+| array | pass | no | 79% | 83% | 2,3c2,4 ⏎ &lt; ./array.tests: line 28: ﷑second): command not found ⏎ &lt; 127 |
 | array2 | pass | yes | 100% | 100% |  |
-| assoc | pass | no | 54% | 65% | 72c72 ⏎ &lt; 4 -- ⏎ --- |
+| assoc | pass | no | 55% | 65% | 72c72 ⏎ &lt; 4 -- ⏎ --- |
 | attr | pass | yes | 100% | 100% |  |
 | braces | pass | no | 99% | 99% | 23c23 ⏎ &lt; bazx bazy ⏎ --- |
-| builtins | pass | no | 88% | 88% | 0a1 ⏎ &gt; 1000 ⏎ 65a67 |
+| builtins | pass | no | 89% | 90% | 0a1 ⏎ &gt; 1000 ⏎ 65a67 |
 | case | pass | yes | 100% | 100% |  |
 | casemod | pass | yes | 100% | 100% |  |
 | complete | pass | no | 0% | 0% | 1,37c1,63 ⏎ &lt; ./complete.tests: line 19: complete: command not found ⏎ &lt; ./complete.tests: line 22: complete: command not found |
@@ -161,7 +162,7 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | dbg-support | pass | no | 20% | 19% | 1,3c1,2 ⏎ &lt; debug lineno: 1 main ⏎ &lt; debug lineno: 1 main |
 | dbg-support2 | pass | no | 14% | 14% | 1,2c1,6 ⏎ &lt; lineno: 1 (18) main ⏎ &lt; lineno: 1 (18) main |
 | dirstack | pass | no | 40% | 45% | 4,7c4,11 ⏎ &lt; ./dstack.tests: line 26: pushd: no other directory ⏎ &lt; ./dstack.tests: line 27: popd: directory stack empty |
-| dollars | pass | no | 84% | 84% | 136a137 ⏎ &gt; a\|b\|c ⏎ 138,139c139 |
+| dollars | pass | no | 85% | 85% | 2,3d1 ⏎ &lt; ./dollar-at-star: line 37: *: invalid indirect expansion ⏎ &lt; ./dollar-at-star: line 38: @: invalid indirect expansion |
 | dynvar | pass | yes | 100% | 100% |  |
 | errors | pass | no | 7% | 0% | 2a3,4 ⏎ &gt; ./errors.tests: line 31: unalias: -x: invalid option ⏎ &gt; unalias: usage: unalias [-a] name [name ...] |
 | execscript | env | no | 84% | 91% | 1d0 ⏎ &lt; execscript: the test suite should not be run as root ⏎ 11c10 |
@@ -176,7 +177,7 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | globstar | pass | no | 39% | 39% | 0a1,26 ⏎ &gt; lib/glob/glob.o ⏎ &gt; lib/glob/smatch.o |
 | heredoc | env | no | 76% | 84% | 6,7c6,7 ⏎ &lt; $PS4 ⏎ &lt; $PS4 |
 | herestr | pass | no | 87% | 87% | 6,7c6,7 ⏎ &lt; "$empty" ⏎ &lt; $empty |
-| histexpand | pass | no | 33% | 43% | 1,27c1,51 ⏎ &lt; ./histexp.tests: line 23: history: command not found ⏎ &lt; ./histexp.tests: line 34: history: command not found |
+| histexpand | pass | no | 33% | 44% | 1,27c1,51 ⏎ &lt; ./histexp.tests: line 23: history: command not found ⏎ &lt; ./histexp.tests: line 34: history: command not found |
 | history | pass | no | 29% | 39% | 1,17c1,36 ⏎ &lt; ./history.tests: line 17: history: command not found ⏎ &lt; ./history.tests: line 19: history: command not found |
 | ifs | pass | yes | 100% | 100% |  |
 | ifs-posix | pass | no | 0% | 0% | 1,1345c1 ⏎ &lt; echo ":::" \| ( IFS=": " read x y; echo "($x)($y)" ) # expected "()(::)" got "()( )" ⏎ &lt; echo ":: :" \| ( IFS=": " read x y; echo "($x)($y)" ) # expe |
@@ -184,12 +185,12 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | intl | env | no | 71% | 77% | 13a14 ⏎ &gt; 1,0000 ⏎ 18,19c19 |
 | invert | pass | yes | 100% | 100% |  |
 | iquote | pass | yes | 100% | 100% |  |
-| jobs | env | timeout | 37% | 47% | timeout |
+| jobs | env | timeout | 38% | 47% | timeout |
 | lastpipe | pass | yes | 100% | 100% |  |
 | mapfile | pass | no | 62% | 62% | 16a17,32 ⏎ &gt; a[0] Abcdefghijklmnop ⏎ &gt; [1] aBcdefghijklmnop |
 | more-exp | pass | no | 81% | 89% | 20,23c20,30 ⏎ &lt; argv[1] = &lt;a b c d e f&gt; ⏎ &lt; argv[1] = &lt;a b c d e f&gt; |
-| nameref | pass | no | 30% | 30% | 1,3c1,5 ⏎ &lt; bar ⏎ &lt; flow |
-| new-exp | pass | no | 83% | 86% | 1d0 ⏎ &lt; ./new-exp.tests: line 14: ((: == 0: syntax error: operand expected (error token is "== 0") ⏎ 7,8c6,7 |
+| nameref | pass | no | 75% | 81% | 125c125,127 ⏎ &lt; global ⏎ --- |
+| new-exp | pass | no | 88% | 91% | 1d0 ⏎ &lt; ./new-exp.tests: line 14: ((: == 0: syntax error: operand expected (error token is "== 0") ⏎ 7,8c6,7 |
 | nquote | pass | no | 76% | 81% | 7,10c7,10 ⏎ &lt; argv[1] = &lt;$hello,&gt; ⏎ &lt; argv[2] = &lt;$world&gt; |
 | nquote1 | pass | yes | 100% | 100% |  |
 | nquote2 | pass | yes | 100% | 100% |  |
@@ -206,19 +207,19 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | printf | pass | yes | 100% | 100% |  |
 | procsub | pass | no | 67% | 70% | 15,17c15 ⏎ &lt; ./procsub.tests: line 63: ulimit: command not found ⏎ &lt; ./procsub.tests: line 67: ulimit: command not found |
 | quote | pass | no | 94% | 94% | 13,14c13 ⏎ &lt; foo\ ⏎ &lt; bar |
-| quotearray | pass | no | 46% | 58% | 1,12c1,8 ⏎ &lt; ./quotearray.tests: line 20: ((: $(echo uname &gt;&2): syntax error: operand expected (error token is "$(echo uname &gt;&2)") ⏎ &lt; declare -A assoc |
+| quotearray | pass | no | 46% | 56% | 1,12c1,8 ⏎ &lt; ./quotearray.tests: line 20: ((: $(echo uname &gt;&2): syntax error: operand expected (error token is "$(echo uname &gt;&2)") ⏎ &lt; declare -A assoc |
 | read | env | timeout | 42% | 50% | timeout |
 | redir | pass | no | 67% | 69% | 6c6 ⏎ &lt; ./redir.tests: a: No such file or directory ⏎ --- |
 | rhs-exp | pass | no | 92% | 92% | 1d0 ⏎ &lt; argv[1] = &lt;TDEFAULTS = -DSELECT_VECS=$selvecs&gt; ⏎ 2a2 |
 | rsh | pass | no | 6% | 0% | 1,11c1,16 ⏎ &lt; ./rsh1.sub: line 20: set: -r: invalid option ⏎ &lt; ./rsh1.sub: line 25: sh: command not found |
 | set-e | pass | yes | 100% | 100% |  |
 | set-x | pass | no | 76% | 83% | 0a1,2 ⏎ &gt; + (( i=0 )) ⏎ &gt; + (( i&lt;=5 )) |
-| shopt | pass | no | 84% | 84% | 307,335c307,309 ⏎ &lt; /home/mattias/m/git/bash-executor-conformance/conformance/.cache/work/ours/run-shopt/tmp/tmp.HUuDv42CEf: 1: shopt: not found ⏎ &lt; 0a1,57 |
+| shopt | pass | no | 84% | 84% | 307,335c307,309 ⏎ &lt; /home/mattias/m/git/bash-executor-conformance/conformance/.cache/work/ours/run-shopt/tmp/tmp.I4LBiuhMuf: 1: shopt: not found ⏎ &lt; 0a1,57 |
 | strip | pass | yes | 100% | 100% |  |
 | test | env | timeout | 88% | 91% | timeout |
 | tilde | pass | no | 64% | 64% | 2c2 ⏎ &lt; /home/mattias/foo ⏎ --- |
 | tilde2 | pass | no | 61% | 61% | 2c2 ⏎ &lt; ~/bin:~/bin2:/bin:/usr/bin:. ⏎ --- |
 | trap | pass | no | 71% | 77% | 8c8 ⏎ &lt; [1] debug ⏎ --- |
 | type | pass | no | 86% | 86% | 43,44c43,44 ⏎ &lt; /tmp/bash-ts ⏎ &lt; bash-ts is hashed (/tmp/bash-ts) |
-| varenv | pass | no | 63% | 66% | 1,5c1,3 ⏎ &lt; 1 2 ⏎ &lt; ./varenv.tests: line 42: c=7: command not found |
+| varenv | pass | no | 77% | 80% | 1,5c1,3 ⏎ &lt; 1 2 ⏎ &lt; ./varenv.tests: line 42: c=7: command not found |
 | vredir | env | no | 65% | 69% | 8c8 ⏎ &lt;     exec {v} &gt; $TMPFILE; ⏎ --- |

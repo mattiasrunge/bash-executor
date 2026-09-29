@@ -499,9 +499,9 @@
       "reference": "pass"
     },
     "run-array": {
-      "upstream": 0.785,
+      "upstream": 0.786,
       "pass": false,
-      "stdout": 0.823,
+      "stdout": 0.825,
       "reference": "pass"
     },
     "run-array2": {
@@ -511,9 +511,9 @@
       "reference": "pass"
     },
     "run-assoc": {
-      "upstream": 0.543,
+      "upstream": 0.549,
       "pass": false,
-      "stdout": 0.646,
+      "stdout": 0.654,
       "reference": "pass"
     },
     "run-attr": {
@@ -529,9 +529,9 @@
       "reference": "pass"
     },
     "run-builtins": {
-      "upstream": 0.879,
+      "upstream": 0.892,
       "pass": false,
-      "stdout": 0.883,
+      "stdout": 0.897,
       "reference": "pass"
     },
     "run-case": {
@@ -607,9 +607,9 @@
       "reference": "pass"
     },
     "run-dollars": {
-      "upstream": 0.844,
+      "upstream": 0.849,
       "pass": false,
-      "stdout": 0.844,
+      "stdout": 0.85,
       "reference": "pass"
     },
     "run-dynvar": {
@@ -697,9 +697,9 @@
       "reference": "pass"
     },
     "run-histexpand": {
-      "upstream": 0.327,
+      "upstream": 0.332,
       "pass": false,
-      "stdout": 0.434,
+      "stdout": 0.441,
       "reference": "pass"
     },
     "run-history": {
@@ -745,7 +745,7 @@
       "reference": "pass"
     },
     "run-jobs": {
-      "upstream": 0.374,
+      "upstream": 0.376,
       "pass": false,
       "stdout": 0.474,
       "reference": "env",
@@ -770,15 +770,15 @@
       "reference": "pass"
     },
     "run-nameref": {
-      "upstream": 0.303,
+      "upstream": 0.747,
       "pass": false,
-      "stdout": 0.299,
+      "stdout": 0.811,
       "reference": "pass"
     },
     "run-new-exp": {
-      "upstream": 0.826,
+      "upstream": 0.879,
       "pass": false,
-      "stdout": 0.862,
+      "stdout": 0.908,
       "reference": "pass"
     },
     "run-nquote": {
@@ -878,9 +878,9 @@
       "reference": "pass"
     },
     "run-quotearray": {
-      "upstream": 0.458,
+      "upstream": 0.46,
       "pass": false,
-      "stdout": 0.576,
+      "stdout": 0.565,
       "reference": "pass"
     },
     "run-read": {
@@ -964,9 +964,9 @@
       "reference": "pass"
     },
     "run-varenv": {
-      "upstream": 0.634,
+      "upstream": 0.772,
       "pass": false,
-      "stdout": 0.662,
+      "stdout": 0.804,
       "reference": "pass"
     },
     "run-vredir": {

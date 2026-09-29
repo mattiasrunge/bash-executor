@@ -65,6 +65,10 @@ export type DeclareOptions = {
   remove?: string;
   /** Declare it in this context — a function's own, as `local` does — rather than where it is */
   local?: boolean;
+  /** Its own value, set as it is: the name a nameref refers to */
+  value?: string;
+  /** The variable of that name even when it is a nameref, not what it refers to */
+  noref?: boolean;
 };
 
 export type IO = {
@@ -770,10 +774,19 @@ export interface ExecContextIf {
 
   /**
    * Unset a variable, whatever its kind. A function's local stays local, unset,
-   * so assigning it again sets the function's own, as in bash.
+   * so assigning it again sets the function's own, as in bash. A name reference
+   * unsets what it refers to, unless `noref` (`unset -n`).
    * @param {string} name - The variable's name.
    */
-  unsetVariable: (name: string) => void;
+  unsetVariable: (name: string, opts?: { noref?: boolean }) => void;
+
+  /**
+   * Where a name leads once name references (`declare -n`) are followed: the
+   * variable itself when it is none, and `a[1]` for one that refers to an element.
+   * @param {string} name - The name.
+   * @returns {string} The name at the end of the chain.
+   */
+  resolveNameref: (name: string) => string;
 
   /**
    * Checks if a variable is marked as readonly.

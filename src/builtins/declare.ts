@@ -209,8 +209,37 @@ class Declaration {
 
     const { on, off } = this.opts;
     const { target, local } = this.scopeFor();
+
+    // Making a name reference, or changing what one refers to
+    if (on.has('n')) {
+      this.declareNameref(target, local, name, subscript, assigning ? value ?? '' : undefined);
+      return;
+    }
+
+    // `declare +n ref=v` assigns through the reference, then it is a plain variable
+    if (off.has('n') && target.getVariable(name)?.attributes.includes('n')) {
+      if (assigning) target.setParams({ [name]: value ?? '' });
+      target.declareVariable(name, { remove: 'n', noref: true });
+      return;
+    }
+
+    // A nameref otherwise stands for what it refers to — except that `local x` makes a new x
+    if (!local && subscript === undefined) {
+      const resolved = target.resolveNameref(name);
+      const element = resolved.match(/^([A-Za-z_][A-Za-z0-9_]*)\[(.*)\]$/s);
+
+      name = element ? element[1] : resolved;
+      subscript = element ? element[2] : subscript;
+    }
+
     const own = local ? target.getOwnVariables()[name] : undefined;
     let info: VariableInfo | undefined = local ? own : target.getVariable(name);
+
+    // A nameref that refers to nothing yet is given what it refers to: that has to be a name
+    if (assigning && info?.attributes.includes('n') && !info.value && !/^[A-Za-z_][A-Za-z0-9_]*(\[.*\])?$/s.test(value ?? '')) {
+      this.error(`${this.command}: \`${value ?? ''}': not a valid identifier`, true);
+      return;
+    }
     const creatingArray = on.has('a') || on.has('A');
     const arrayExists = info !== undefined && info.kind !== 'scalar';
 
@@ -263,6 +292,64 @@ class Declaration {
     if (!assigning) return;
 
     await this.assign(target, name, info!, { subscript, value: value ?? '', append: parts!.append, compound, quotedList, creatingArray, arrayExists });
+  }
+
+  /**
+   * `declare -n ref[=name]`: the variable becomes a reference to another, and
+   * its value is that one's name. What bash refuses: an element as the
+   * reference, a value no variable could be called, a reference to itself
+   * (outside a function, where it is only a warning), an array, a readonly one.
+   */
+  private declareNameref(target: ExecContextIf, local: boolean, name: string, subscript: string | undefined, value: string | undefined): void {
+    const validName = (text: string) => /^[A-Za-z_][A-Za-z0-9_]*(\[.*\])?$/s.test(text);
+
+    if (subscript !== undefined) {
+      this.error(`${this.command}: ${name}[${subscript}]: reference variable cannot be an array`);
+      return;
+    }
+
+    if (value !== undefined && value !== '' && !validName(value)) {
+      this.error(`${this.command}: \`${value}': invalid variable name for name reference`, true);
+      return;
+    }
+
+    if (value === name) {
+      if (!this.ctx.getFunctionScope()) {
+        this.error(`${this.command}: ${name}: nameref variable self references not allowed`, true);
+        return;
+      }
+
+      this.stderr += `${this.command}: warning: ${name}: circular name reference\n`;
+    }
+
+    const own = local ? target.getOwnVariables()[name] : undefined;
+    const existing = local ? own : target.getVariable(name);
+
+    if (existing && existing.kind !== 'scalar') {
+      this.error(`${this.command}: ${name}: reference variable cannot be an array`);
+      return;
+    }
+
+    if (existing?.attributes.includes('r')) {
+      this.error(`${this.command}: ${name}: readonly variable`, value !== undefined);
+      return;
+    }
+
+    if (value === undefined && typeof existing?.value === 'string' && !existing.attributes.includes('n') && !validName(existing.value)) {
+      this.error(`${this.command}: \`${existing.value}': invalid variable name for name reference`);
+      return;
+    }
+
+    const { on, off } = this.opts;
+
+    target.declareVariable(name, {
+      // A reference is no integer and changes no case: those go, as in ksh93
+      add: [...on].filter((letter) => ATTRIBUTES.includes(letter) && !'iluc'.includes(letter)).join(''),
+      remove: 'iluc' + [...off].filter((letter) => ATTRIBUTES.includes(letter)).join(''),
+      local: local && !own,
+      value,
+      noref: true,
+    });
   }
 
   private async assign(

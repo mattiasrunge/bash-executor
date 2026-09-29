@@ -69,6 +69,9 @@ const cased = (variable: Variable, value: string): string =>
     : value;
 
 /** `$1`, `$#`, `$?` and the like: parameters, but no variables. */
+/** How many name references bash follows before it calls the chain circular. */
+const NAMEREF_MAX = 8;
+
 const isSpecialParam = (name: string): boolean => /^(\d+|[#@*?$!-])$/.test(name);
 
 export class ExecContext implements ExecContextIf {
@@ -210,7 +213,7 @@ export class ExecContext implements ExecContextIf {
     const env: Record<string, string> = {};
 
     for (const [name, variable] of this.visibleVariables()) {
-      if (variable.attrs.has('x') && typeof variable.value === 'string') env[name] = variable.value;
+      if (variable.attrs.has('x') && !variable.attrs.has('n') && typeof variable.value === 'string') env[name] = variable.value;
     }
 
     return env;
@@ -222,9 +225,9 @@ export class ExecContext implements ExecContextIf {
     for (const [name, value] of Object.entries(values)) {
       if (value === null) {
         // What is exported goes; one that is not was never in the environment
-        if (this.lookup(name)?.variable.attrs.has('x')) this.unsetVariable(name);
+        if (this.lookup(this.ref(name))?.variable.attrs.has('x')) this.unsetVariable(name);
       } else {
-        this.assign(this.ownerOf(name), name, value).attrs.add('x');
+        this.assignVariableValue(name, value).attrs.add('x');
       }
     }
 
@@ -238,7 +241,7 @@ export class ExecContext implements ExecContextIf {
       if (value === null) {
         if (this.vars.get(name)?.attrs.has('x')) this.vars.delete(name);
       } else {
-        this.assign(this, name, value).attrs.add('x');
+        this.assign(this, this.ref(name), value).attrs.add('x');
       }
     }
 
@@ -342,7 +345,13 @@ export class ExecContext implements ExecContextIf {
     const visible = this.visibleVariables();
 
     for (const [name, variable] of visible) {
-      if (!variable.attrs.has('x') && typeof variable.value === 'string') params[name] = variable.value;
+      if (variable.attrs.has('n')) {
+        // `$ref` is what it refers to
+        const value = this.scalarOf(name);
+        if (value !== undefined) params[name] = value;
+      } else if (!variable.attrs.has('x') && typeof variable.value === 'string') {
+        params[name] = variable.value;
+      }
     }
 
     const root = chain[0];
@@ -376,7 +385,8 @@ export class ExecContext implements ExecContextIf {
         root.setLocalParams({ [key]: value });
       } else if (value === null) {
         // Unsetting a scalar; an array of that name is `unset`'s to remove
-        if (this.lookup(key)?.variable.kind === 'scalar') this.unsetVariable(key);
+        const target = this.ref(key);
+        if (this.lookup(target)?.variable.kind === 'scalar') this.unsetVariable(key);
       } else {
         this.assignVariableValue(key, value);
       }
@@ -413,7 +423,8 @@ export class ExecContext implements ExecContextIf {
       } else if (value === null) {
         if (this.vars.get(key)?.kind === 'scalar') this.vars.delete(key);
       } else {
-        this.assign(this, key, value);
+        // `ref=x cmd` gives what ref refers to a value for the command
+        this.assign(this, this.ref(key), value);
       }
     }
 
@@ -427,6 +438,8 @@ export class ExecContext implements ExecContextIf {
   }
 
   getArray(name: string): string[] | undefined {
+    name = this.ref(name);
+
     const variable = this.lookup(name)?.variable;
 
     if (variable?.kind !== 'array') return undefined;
@@ -446,14 +459,20 @@ export class ExecContext implements ExecContextIf {
   }
 
   setArray(name: string, values: string[]): void {
+    name = this.ref(name);
+
     this.storeArray(this.ownerOf(name), name, values);
   }
 
   setLocalArray(name: string, values: string[]): void {
+    name = this.ref(name);
+
     this.storeArray(this, name, values);
   }
 
   setArrayElement(name: string, index: number, value: string): void {
+    name = this.ref(name);
+
     // The element goes where the variable already is, so `a[0]=x` updates the
     // array it can see instead of shadowing it; a new one lands in the shell.
     const owner = this.ownerOf(name);
@@ -478,10 +497,14 @@ export class ExecContext implements ExecContextIf {
   }
 
   unsetArray(name: string): void {
+    name = this.ref(name);
+
     if (this.lookup(name)?.variable.kind === 'array') this.unsetVariable(name);
   }
 
   unsetArrayElement(name: string, index: number): void {
+    name = this.ref(name);
+
     const variable = this.lookup(name)?.variable;
 
     if (variable?.kind === 'array' && Array.isArray(variable.value)) {
@@ -490,6 +513,8 @@ export class ExecContext implements ExecContextIf {
   }
 
   getAssoc(name: string): Record<string, string> | undefined {
+    name = this.ref(name);
+
     const variable = this.lookup(name)?.variable;
 
     if (variable?.kind !== 'assoc') return undefined;
@@ -511,14 +536,20 @@ export class ExecContext implements ExecContextIf {
   }
 
   setAssoc(name: string, values: Record<string, string>): void {
+    name = this.ref(name);
+
     this.storeAssoc(this.ownerOf(name), name, values);
   }
 
   setLocalAssoc(name: string, values: Record<string, string>): void {
+    name = this.ref(name);
+
     this.storeAssoc(this, name, values);
   }
 
   setAssocElement(name: string, key: string, value: string): void {
+    name = this.ref(name);
+
     const owner = this.ownerOf(name);
     const variable = owner.vars.get(name) ?? newVariable('assoc');
 
@@ -533,10 +564,14 @@ export class ExecContext implements ExecContextIf {
   }
 
   unsetAssoc(name: string): void {
+    name = this.ref(name);
+
     if (this.lookup(name)?.variable.kind === 'assoc') this.unsetVariable(name);
   }
 
   unsetAssocElement(name: string, key: string): void {
+    name = this.ref(name);
+
     const variable = this.lookup(name)?.variable;
 
     if (variable?.kind === 'assoc' && variable.value && typeof variable.value === 'object' && !Array.isArray(variable.value)) {
@@ -570,6 +605,12 @@ export class ExecContext implements ExecContextIf {
   }
 
   declareVariable(name: string, opts: DeclareOptions = {}): void {
+    // `declare -i ref` gives what ref refers to the attribute; making or
+    // unmaking a reference is about the reference itself
+    const refers = opts.noref || opts.add?.includes('n') || opts.remove?.includes('n');
+
+    if (!refers) name = this.ref(name);
+
     const found = this.lookup(name);
     // `local x` is a variable of the function's own, whatever the caller has
     const owner = opts.local ? this : found?.scope ?? this.root();
@@ -590,6 +631,9 @@ export class ExecContext implements ExecContextIf {
 
     for (const attr of opts.remove ?? '') variable.attrs.delete(attr);
 
+    // A reference's own value, the name it refers to, set as it is
+    if (opts.value !== undefined) variable.value = opts.value;
+
     for (const attr of opts.add ?? '') {
       // Upper, lower and capitalized case exclude each other: the one given last wins
       if ('luc'.includes(attr)) { for (const other of 'luc') variable.attrs.delete(other); }
@@ -597,7 +641,22 @@ export class ExecContext implements ExecContextIf {
     }
   }
 
-  unsetVariable(name: string): void {
+  unsetVariable(name: string, opts: { noref?: boolean } = {}): void {
+    // `unset ref` unsets what it refers to, `unset -n ref` the reference
+    const resolved = opts.noref ? name : this.resolveNameref(name);
+    const element = opts.noref ? undefined : this.element(resolved);
+
+    if (element) {
+      const target = this.lookup(element.name)?.variable;
+
+      if (Array.isArray(target?.value)) delete target.value[Number.parseInt(element.key, 10) || 0];
+      else if (target?.value && typeof target.value === 'object') delete target.value[element.key];
+
+      return;
+    }
+
+    name = resolved;
+
     const found = this.lookup(name);
 
     if (!found) return;
@@ -611,6 +670,56 @@ export class ExecContext implements ExecContextIf {
   }
 
   // -- the variable store --------------------------------------------------------------------
+
+  /**
+   * Where a name leads once its name references are followed, as bash's
+   * find_variable does: `r` after `declare -n r=a` is `a`, and a reference to
+   * an element keeps its subscript, `a[1]`. A nameref with no value yet leads
+   * to itself, so assigning it gives it one. bash gives up after 8 steps.
+   */
+  resolveNameref(name: string): string {
+    let current = name;
+
+    for (let depth = 0; depth < NAMEREF_MAX; depth++) {
+      const variable = this.lookup(current)?.variable;
+
+      if (!variable?.attrs.has('n') || typeof variable.value !== 'string' || variable.value === '' || variable.value === current) return current;
+
+      current = variable.value;
+
+      if (current.includes('[')) return current;
+    }
+
+    return current;
+  }
+
+  /** A name references followed, and without the subscript one to an element carries: what array operations take. */
+  private ref(name: string): string {
+    const resolved = this.resolveNameref(name);
+
+    return /^[A-Za-z_][A-Za-z0-9_]*\[/.test(resolved) ? resolved.slice(0, resolved.indexOf('[')) : resolved;
+  }
+
+  /** A reference to an element, `a[1]`, split; undefined for a plain name. */
+  private element(resolved: string): { name: string; key: string } | undefined {
+    const match = resolved.match(/^([A-Za-z_][A-Za-z0-9_]*)\[(.*)\]$/s);
+
+    return match ? { name: match[1], key: match[2] } : undefined;
+  }
+
+  /** What `$name` gives, name references followed: a string, element 0 of an array, or the element referred to. */
+  private scalarOf(name: string): string | undefined {
+    const resolved = this.resolveNameref(name);
+    const element = this.element(resolved);
+    const variable = this.lookup(element?.name ?? resolved)?.variable;
+
+    if (!variable || variable.attrs.has('n') && resolved === name) return undefined;
+    if (Array.isArray(variable.value)) return variable.value[element ? Number.parseInt(element.key, 10) || 0 : 0];
+    if (variable.value && typeof variable.value === 'object') return variable.value[element?.key ?? '0'];
+
+    // A plain variable is its own element 0
+    return element && element.key !== '0' ? undefined : variable.value;
+  }
 
   /** The contexts from the shell's own down to this one. */
   private chain(): ExecContext[] {
@@ -659,9 +768,19 @@ export class ExecContext implements ExecContextIf {
     return variable;
   }
 
-  /** Assign a variable wherever it is, or in the shell when it is nowhere. */
-  private assignVariableValue(name: string, value: string): void {
-    this.assign(this.ownerOf(name), name, value);
+  /** Assign a variable wherever it is, or in the shell when it is nowhere; through a name reference, what it refers to. */
+  private assignVariableValue(name: string, value: string): Variable {
+    const resolved = this.resolveNameref(name);
+    const element = this.element(resolved);
+
+    if (element) {
+      if (this.lookup(element.name)?.variable.kind === 'assoc') this.setAssocElement(element.name, element.key, value);
+      else this.setArrayElement(element.name, Number.parseInt(element.key, 10) || 0, value);
+
+      return this.lookup(element.name)!.variable;
+    }
+
+    return this.assign(this.ownerOf(resolved), resolved, value);
   }
 
   private storeArray(scope: ExecContext, name: string, values: string[]): void {
@@ -801,6 +920,8 @@ export class ExecContext implements ExecContextIf {
   }
 
   isReadonlyVar(name: string): boolean {
+    name = this.ref(name);
+
     return this.lookup(name)?.variable.attrs.has('r') ?? false;
   }
 
@@ -809,6 +930,8 @@ export class ExecContext implements ExecContextIf {
   }
 
   isIntegerVar(name: string): boolean {
+    name = this.ref(name);
+
     return this.lookup(name)?.variable.attrs.has('i') ?? false;
   }
 
