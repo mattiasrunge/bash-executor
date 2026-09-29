@@ -5,10 +5,10 @@ see [README.md](README.md) for what the scores mean.
 
 | Measure | Result |
 | --- | --- |
-| Test files that parse | 439 / 471 |
+| Test files that parse | 448 / 471 |
 | `run-*` scripts passing | 3 / 83 (real bash here: 74) |
-| Mean upstream score | 45% |
-| Mean stdout score | 48% |
+| Mean upstream score | 46% |
+| Mean stdout score | 50% |
 
 ## Gaps
 
@@ -19,11 +19,11 @@ that command, while the parser here takes the whole file at once. Some files hol
 
 | Error | Files | Count |
 | --- | --- | --- |
-| Unexpected 'OPEN_PAREN' | array2.sub, extglob.tests, extglob1.sub, extglob1a.sub, extglob3.sub, extglob4.sub, extglob6.sub, extglob7.sub, histexp5.sub, printf.tests, unicode1.sub | 11 |
 | Unclosed here-document | comsub-eof0.sub, comsub-eof2.sub, comsub-eof3.sub, heredoc.tests, heredoc3.sub, heredoc7.sub | 6 |
 | Unexpected 'Rbrace' | coproc.tests, nameref11.sub, nameref18.sub, type4.sub | 4 |
 | Unexpected 'CONTINUE' | assoc5.sub, posixexp.tests, quote1.sub | 3 |
 | Unexpected 'CLOSE_PAREN' | comsub5.sub, comsub6.sub, quote.tests | 3 |
+| Unexpected 'OPEN_PAREN' | array2.sub, unicode1.sub | 2 |
 | Unexpected 'WORD' | errors.tests, vredir2.sub | 2 |
 | Unexpected 'In' | alias4.sub | 1 |
 | Unexpected 'EOF' | comsub-posix1.sub | 1 |
@@ -68,7 +68,6 @@ What bash-ts refused to parse as it ran: test scripts, the `.sub` files and `-c`
 | Name | Tests | Times hit |
 | --- | --- | --- |
 | Unexpected 'CLOSE_PAREN' | comsub, parser, posix2, quote | 5 |
-| Unexpected 'OPEN_PAREN' | extglob, histexpand, parser, printf | 4 |
 | Unexpected 'Rbrace' | coproc, nameref, type | 5 |
 | Unexpected 'WORD' | errors, parser, vredir | 4 |
 | Unexpected 'CONTINUE' | assoc, comsub-eof, posixexp | 3 |
@@ -79,6 +78,7 @@ What bash-ts refused to parse as it ran: test scripts, the `.sub` files and `-c`
 | Unexpected 'Esac' | comsub-posix | 2 |
 | for (( … )) takes three expressions separated by ';', got "i=0; i &lt; 3" | arith-for | 1 |
 | for (( … )) takes three expressions separated by ';', got "i=0; i &lt; 3; i++; 7" | arith-for | 1 |
+| Unexpected 'OPEN_PAREN' | parser | 1 |
 | Unclosed " | posixexp2 | 1 |
 
 ### Uncaught exceptions
@@ -106,7 +106,6 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | hash: command not found | assoc, builtins, execscript, rsh, type |
 | foo: command not found | alias, execscript, exportfunc, nquote |
 | syntax error: Unexpected 'CLOSE_PAREN' | comsub, parser, posix2, quote |
-| syntax error: Unexpected 'OPEN_PAREN' | extglob, histexpand, parser, printf |
 | the test suite should not be run as root | execscript, glob-test, new-exp, test |
 | unbound variable | array, new-exp, varenv |
 | syntax error: Unexpected 'CONTINUE' | assoc, comsub-eof, posixexp |
@@ -140,7 +139,8 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | fooN: command not found | alias |
 | myalias: command not found | alias |
 | aN: command not found | alias |
-| complete: command not found | complete |
+| N ? N : x+=N: syntax error: Invalid left-hand side in assignment | arith |
+| N#N : syntax error: invalid arithmetic base | arith |
 
 ## Per test
 
@@ -176,7 +176,7 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | execscript | env | no | 64% | 80% | 1d0 ⏎ &lt; execscript: the test suite should not be run as root ⏎ 9c8 |
 | exp-tests | pass | no | 28% | 35% | 41d40 ⏎ &lt; argv[1] = &lt;&gt; ⏎ 48,705c47,51 |
 | exportfunc | pass | no | 0% | 0% | 1,4c1,14 ⏎ &lt; bash: foo: command not found ⏎ &lt; bash: foo-a: command not found |
-| extglob | pass | no | 0% | 0% | 0a1,184 ⏎ &gt; ok 1 ⏎ &gt; ok 2 |
+| extglob | pass | no | 83% | 85% | 44c44 ⏎ &lt; @(*) ⏎ --- |
 | extglob2 | pass | no | 90% | 90% | 45,46c45 ⏎ &lt; 1:  [[ foo = !(foo)* ]] ⏎ &lt; Test failed:  [[ foo = !(foo)* ]] |
 | extglob3 | pass | yes | 100% | 100% |  |
 | func | pass | no | 28% | 28% | 1d0 ⏎ &lt; ./func.tests: compgen: command not found ⏎ 12c11 |
@@ -185,7 +185,7 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | globstar | pass | no | 25% | 25% | 0a1,26 ⏎ &gt; lib/glob/glob.o ⏎ &gt; lib/glob/smatch.o |
 | heredoc | env | no | 0% | 0% | 1c1,133 ⏎ &lt; ./heredoc.tests: syntax error: Unclosed here-document ⏎ --- |
 | herestr | pass | no | 51% | 52% | 1d0 ⏎ &lt; ./herestr.tests: compgen: command not found ⏎ 7,8c6,7 |
-| histexpand | pass | no | 31% | 41% | 1,28c1,51 ⏎ &lt; ./histexp.tests: trap: command not found ⏎ &lt; ./histexp.tests: history: command not found |
+| histexpand | pass | no | 33% | 43% | 1,28c1,51 ⏎ &lt; ./histexp.tests: trap: command not found ⏎ &lt; ./histexp.tests: history: command not found |
 | history | pass | no | 29% | 39% | 1,18c1,36 ⏎ &lt; ./history.tests: trap: command not found ⏎ &lt; ./history.tests: history: command not found |
 | ifs | pass | no | 83% | 83% | 4c4 ⏎ &lt; a:b:c:d:e ⏎ --- |
 | ifs-posix | pass | no | 0% | 0% | 1,1926c1 ⏎ &lt; IFS=": "; x=" "; set x $x; shift; echo "[$#]($1)" # expected "[1]()" got "[0]" ⏎ &lt; IFS=": "; x=" :"; set x $x; shift; echo "[$#]($1)($2)" # expecte |
@@ -212,7 +212,7 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | posixpat | pass | no | 94% | 94% | 24a25 ⏎ &gt; ok 2 ⏎ 26a28 |
 | posixpipe | env | no | 63% | 83% | 3,7d2 ⏎ &lt; /usr/bin/time: cannot run !: No such file or directory ⏎ &lt; Command exited with non-zero status 127 |
 | precedence | pass | no | 41% | 41% | 5,6c5,6 ⏎ &lt;  Truth 1 && Truth 2  \|\| Say 3   output=12 ⏎ &lt;  Truth 1 && Truth 2  \|\| Say 3   output=12 |
-| printf | pass | no | 0% | 0% | 1c1,298 ⏎ &lt; ./printf.tests: line 1: syntax error: Parse error on line 1: Unexpected 'OPEN_PAREN' ⏎ --- |
+| printf | pass | no | 40% | 42% | 1,2c1,2 ⏎ &lt; printf: usage: printf format [arguments] ⏎ &lt; printf: usage: printf format [arguments] |
 | procsub | pass | no | 68% | 77% | 6c6 ⏎ &lt; /usr/bin/cat: '': No such file or directory ⏎ --- |
 | quote | pass | no | 0% | 0% | 1c1,182 ⏎ &lt; ./quote.tests: line 1: syntax error: Parse error on line 1: Unexpected 'CLOSE_PAREN' ⏎ --- |
 | quotearray | pass | no | 32% | 37% | 1,6c1,8 ⏎ &lt; declare -A assoc=([x],b[$(echo uname &gt;&2)]="1") ⏎ &lt; declare -A assoc=([x],b[$(echo uname &gt;&2)]="2") |

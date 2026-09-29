@@ -1,5 +1,6 @@
 import { isAbsolute, join, resolve } from '@std/path';
 import type { ExecCommandOptions, ExecContextIf, PathTestOperation, ShellIf } from '../mod.ts';
+import { globToRegexSource } from '../src/pattern.ts';
 import { PipeBuffer } from '../test/lib/pipe-buffer.ts';
 
 /**
@@ -523,7 +524,7 @@ export class RealShell implements ShellIf {
 
   /** Pathname expansion; a pattern that matches nothing stays as it was, bash's default. */
   async resolvePath(ctx: ExecContextIf, text: string): Promise<string[]> {
-    if (!/[*?[]/.test(text)) {
+    if (!/[*?[]|[@+!]\(/.test(text)) {
       return [text];
     }
 
@@ -535,7 +536,7 @@ export class RealShell implements ShellIf {
       const next: string[] = [];
 
       for (const base of found) {
-        if (!/[*?[]/.test(segment)) {
+        if (!/[*?[]|[@+!]\(/.test(segment)) {
           const candidate = base === '' ? segment : base.endsWith('/') ? base + segment : `${base}/${segment}`;
 
           if (await exists(this.path(ctx, candidate || '.'))) {
@@ -704,106 +705,13 @@ function compareBytes(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
-const CHAR_CLASSES: Record<string, string> = {
-  alpha: 'a-zA-Z',
-  digit: '0-9',
-  alnum: 'a-zA-Z0-9',
-  upper: 'A-Z',
-  lower: 'a-z',
-  space: ' \\t\\n\\r\\f\\v',
-  blank: ' \\t',
-  punct: '!-\\/:-@\\[-`{-~',
-  xdigit: '0-9A-Fa-f',
-  word: '\\w',
-  cntrl: '\\x00-\\x1f\\x7f',
-  print: '\\x20-\\x7e',
-  graph: '\\x21-\\x7e',
-};
-
 /** One path segment of a glob as a regex, or null when it is not a valid one. A leading dot is only matched by a literal dot. */
 export function globSegmentToRegex(segment: string): RegExp | null {
-  let regex = '';
-
-  for (let i = 0; i < segment.length; i++) {
-    const c = segment[i];
-
-    if (c === '\\' && i + 1 < segment.length) {
-      regex += escape(segment[++i]);
-    } else if (c === '*') {
-      regex += '.*';
-    } else if (c === '?') {
-      regex += '.';
-    } else if (c === '[') {
-      const close = findClassEnd(segment, i);
-
-      if (close === -1) {
-        regex += '\\[';
-        continue;
-      }
-
-      let body = segment.slice(i + 1, close);
-      let negate = false;
-
-      if (body.startsWith('!') || body.startsWith('^')) {
-        negate = true;
-        body = body.slice(1);
-      }
-
-      let cls = '';
-
-      for (let j = 0; j < body.length; j++) {
-        const named = body.slice(j).match(/^\[:(\w+):\]/);
-
-        if (named) {
-          cls += CHAR_CLASSES[named[1]] ?? '';
-          j += named[0].length - 1;
-        } else if (body[j] === '\\' && j + 1 < body.length) {
-          cls += `\\${body[++j]}`;
-        } else {
-          // `-` stays a range operator; everything else is literal inside a class
-          cls += body[j] === '-' ? '-' : /[\]\\^[]/.test(body[j]) ? `\\${body[j]}` : body[j];
-        }
-      }
-
-      regex += `[${negate ? '^' : ''}${cls}]`;
-      i = close;
-    } else {
-      regex += escape(c);
-    }
-  }
-
   const leadingDotMatch = segment.startsWith('.') ? '' : '(?!\\.)';
 
   try {
-    return new RegExp(`^${leadingDotMatch}${regex}$`, 's');
+    return new RegExp(`^${leadingDotMatch}${globToRegexSource(segment)}$`, 's');
   } catch {
     return null;
   }
-}
-
-function findClassEnd(segment: string, start: number): number {
-  let i = start + 1;
-
-  if (segment[i] === '!' || segment[i] === '^') i++;
-  if (segment[i] === ']') i++;
-
-  for (; i < segment.length; i++) {
-    if (segment[i] === '[' && segment[i + 1] === ':') {
-      const end = segment.indexOf(':]', i + 2);
-
-      if (end !== -1) {
-        i = end + 1;
-        continue;
-      }
-    }
-    if (segment[i] === ']') {
-      return i;
-    }
-  }
-
-  return -1;
-}
-
-function escape(c: string): string {
-  return /[.*+?^${}()|[\]\\/]/.test(c) ? `\\${c}` : c;
 }

@@ -17,11 +17,9 @@ const HERE = dirname(fromFileUrl(import.meta.url));
 const config = JSON.parse(await Deno.readTextFile(join(HERE, 'config.json')));
 const TESTS = join(HERE, '.cache', `bash-${config.bash}`, 'tests');
 
-// What the tests switch on before the constructs that need it
-const BASH_PRELUDE = 'shopt -s extglob\n';
-
 async function bashAccepts(source: string): Promise<'ok' | 'incomplete' | 'error'> {
-  const out = await new Deno.Command('/bin/bash', { args: ['-n', '-c', BASH_PRELUDE + source], stderr: 'piped', stdout: 'null' }).output();
+  // With extglob on from the start: the tests switch it on before the patterns that need it
+  const out = await new Deno.Command('/bin/bash', { args: ['-O', 'extglob', '-n', '-c', source], stderr: 'piped', stdout: 'null' }).output();
 
   const stderr = new TextDecoder().decode(out.stderr);
 

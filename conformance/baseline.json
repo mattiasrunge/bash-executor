@@ -194,17 +194,17 @@
     "exportfunc1.sub": true,
     "exportfunc2.sub": true,
     "exportfunc3.sub": true,
-    "extglob.tests": false,
-    "extglob1.sub": false,
-    "extglob1a.sub": false,
+    "extglob.tests": true,
+    "extglob1.sub": true,
+    "extglob1a.sub": true,
     "extglob2.sub": true,
     "extglob2.tests": true,
-    "extglob3.sub": false,
+    "extglob3.sub": true,
     "extglob3.tests": true,
-    "extglob4.sub": false,
+    "extglob4.sub": true,
     "extglob5.sub": true,
-    "extglob6.sub": false,
-    "extglob7.sub": false,
+    "extglob6.sub": true,
+    "extglob7.sub": true,
     "func.tests": true,
     "func1.sub": true,
     "func2.sub": true,
@@ -251,7 +251,7 @@
     "histexp2.sub": true,
     "histexp3.sub": true,
     "histexp4.sub": true,
-    "histexp5.sub": false,
+    "histexp5.sub": true,
     "histexp6.sub": true,
     "histexp7.sub": true,
     "history.tests": true,
@@ -357,7 +357,7 @@
     "posixpat.tests": true,
     "posixpipe.tests": true,
     "precedence.tests": true,
-    "printf.tests": false,
+    "printf.tests": true,
     "printf1.sub": true,
     "printf2.sub": true,
     "printf3.sub": true,
@@ -643,9 +643,9 @@
       "reference": "pass"
     },
     "run-extglob": {
-      "upstream": 0,
+      "upstream": 0.826,
       "pass": false,
-      "stdout": 0,
+      "stdout": 0.849,
       "reference": "pass"
     },
     "run-extglob2": {
@@ -697,9 +697,9 @@
       "reference": "pass"
     },
     "run-histexpand": {
-      "upstream": 0.306,
+      "upstream": 0.327,
       "pass": false,
-      "stdout": 0.414,
+      "stdout": 0.434,
       "reference": "pass"
     },
     "run-history": {
@@ -860,9 +860,9 @@
       "reference": "pass"
     },
     "run-printf": {
-      "upstream": 0,
+      "upstream": 0.397,
       "pass": false,
-      "stdout": 0,
+      "stdout": 0.415,
       "reference": "pass"
     },
     "run-procsub": {
