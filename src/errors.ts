@@ -202,18 +202,30 @@ export class ArithmeticSyntaxError extends CommandAbortError {
 }
 
 /**
- * An arithmetic expression that cannot be evaluated: `1/0`. The evaluator does
- * not know the expression's text; whoever has it adds it with `in`.
+ * An arithmetic expression that cannot be evaluated: `1/0`. The evaluator
+ * knows where in the expression it went wrong, not the expression's text;
+ * whoever has the text adds it with `in`, and the message is bash's:
+ * `10/(1-1): division by 0 (error token is "(1-1)")`.
  */
 export class ArithmeticError extends CommandAbortError {
-  constructor(readonly detail: string, readonly expression?: string) {
-    super(expression === undefined ? detail : `${expression}: ${detail}`, { code: 'E_ARITHMETIC' });
+  constructor(readonly reason: string, readonly at?: number, readonly expression?: string) {
+    super(ArithmeticError.describe(reason, at, expression), { code: 'E_ARITHMETIC' });
     this.name = 'ArithmeticError';
   }
 
-  /** The same error, told which expression it was in. */
+  private static describe(reason: string, at?: number, expression?: string): string {
+    if (expression === undefined) {
+      return reason;
+    }
+
+    const token = at === undefined ? '' : ` (error token is "${expression.slice(at)}")`;
+
+    return `${expression}: ${reason}${token}`;
+  }
+
+  /** The same error, told which expression it was in — offsets relative to it. */
   in(expression: string): ArithmeticError {
-    return this.expression === undefined ? new ArithmeticError(this.detail, expression) : this;
+    return this.expression === undefined ? new ArithmeticError(this.reason, this.at, expression) : this;
   }
 }
 

@@ -202,6 +202,13 @@ export class RealShell implements ShellIf {
   // ===== External commands =====
 
   /** Where PATH finds `name`, or null. A name with a slash is taken as a path. */
+  /** Where a diagnostic comes from, as a non-interactive bash says it: `./x.sh: line 3: `. */
+  private where(ctx: ExecContextIf): string {
+    const line = ctx.getParams().LINENO;
+
+    return `${this.opts.name()}: ${line ? `line ${line}: ` : ''}`;
+  }
+
   private async which(ctx: ExecContextIf, name: string): Promise<string | null> {
     if (name.includes('/')) {
       const path = this.path(ctx, name);
@@ -240,13 +247,13 @@ export class RealShell implements ShellIf {
     if (!path) {
       const missing = name.includes('/') ? 'No such file or directory' : 'command not found';
 
-      await this.writeTo(ctx.getStderr(), `${this.opts.name()}: ${name}: ${missing}\n`);
+      await this.writeTo(ctx.getStderr(), `${this.where(ctx)}${name}: ${missing}\n`);
 
       return 127;
     }
 
     if ((await statOf(path))?.isDirectory) {
-      await this.writeTo(ctx.getStderr(), `${this.opts.name()}: ${name}: Is a directory\n`);
+      await this.writeTo(ctx.getStderr(), `${this.where(ctx)}${name}: Is a directory\n`);
 
       return 126;
     }
@@ -287,7 +294,7 @@ export class RealShell implements ShellIf {
       }
 
       if (err instanceof Deno.errors.PermissionDenied || (err instanceof Error && /permission denied|os error 13\b/i.test(err.message))) {
-        await this.writeTo(stderr, `${this.opts.name()}: ${name}: Permission denied\n`);
+        await this.writeTo(stderr, `${this.where(ctx)}${name}: Permission denied\n`);
 
         return 126;
       }

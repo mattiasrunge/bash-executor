@@ -93,6 +93,29 @@ const DECLARATION_COMMANDS = new Set(['declare', 'typeset', 'local', 'export', '
  * Attaching a no-op catch marks the promise handled without consuming it: the
  * reference kept in the array still rejects normally for the Promise.all.
  */
+/** Where an arithmetic expression's text starts in the source: its leftmost node's offset. */
+function firstOffset(node: unknown): number | undefined {
+  let offset: number | undefined;
+
+  const visit = (value: unknown) => {
+    if (!value || typeof value !== 'object') return;
+
+    const char = (value as { loc?: { start?: { char?: number } } }).loc?.start?.char;
+
+    if (typeof char === 'number' && (offset === undefined || char < offset)) {
+      offset = char;
+    }
+
+    for (const [key, child] of Object.entries(value)) {
+      if (key !== 'loc') visit(child);
+    }
+  };
+
+  visit(node);
+
+  return offset;
+}
+
 function handled<T>(promise: Promise<T>): Promise<T> {
   promise.catch(() => {});
   return promise;
@@ -158,6 +181,12 @@ type Assignment = {
 export type AstExecutorOptions = {
   /** Optional builtin registry for handling builtin commands */
   builtins?: BuiltinRegistry;
+  /**
+   * Begin each diagnostic the way a non-interactive bash does, with the
+   * script's name and the line: `./x.sh: line 3: x: readonly variable`.
+   * Without it a diagnostic is the message alone.
+   */
+  lineNumbers?: boolean;
 };
 
 /**
@@ -168,9 +197,48 @@ export class AstExecutor {
   private currentSource?: string;
   private builtins?: BuiltinRegistry;
 
+  /** See `AstExecutorOptions.lineNumbers` */
+  private lineNumbers: boolean;
+
+  /**
+   * Where the source being run starts, for `$LINENO`: 0 in a script and in a
+   * sourced file, the line before its own in an `eval`. The name is the file's
+   * a diagnostic from it begins with, when it is not the script's.
+   */
+  private sourceFrame: { base: number; name?: string } = { base: 0 };
+
   constructor(shell: ShellIf, options?: AstExecutorOptions) {
     this.shell = shell;
     this.builtins = options?.builtins;
+    this.lineNumbers = options?.lineNumbers ?? false;
+  }
+
+  /**
+   * Say something went wrong, on the shell's stderr: with `lineNumbers`, as
+   * `$0: line N: message`, each line of it.
+   */
+  protected async diagnose(ctx: ExecContextIf, message: string): Promise<void> {
+    const params = ctx.getParams();
+    const prefix = this.lineNumbers ? `${this.sourceFrame.name ?? params['0'] ?? 'bash'}: line ${params.LINENO ?? 0}: ` : '';
+    const text = message.endsWith('\n') ? message : `${message}\n`;
+
+    await this.shell.pipeWrite(ctx.getStderr(), prefix ? text.replace(/^(?=.)/gm, prefix) : text).catch(() => {});
+  }
+
+  /**
+   * Run source that is not the script — an `eval`'s string, a sourced file —
+   * with `$LINENO` counted from where it stands.
+   */
+  private async inSourceFrame<T>(frame: { base: number; name?: string }, run: () => Promise<T>): Promise<T> {
+    const previous = this.sourceFrame;
+
+    this.sourceFrame = frame;
+
+    try {
+      return await run();
+    } finally {
+      this.sourceFrame = previous;
+    }
   }
 
   /**
@@ -446,6 +514,14 @@ export class AstExecutor {
     const signal = ctx.getAbortSignal();
     if (signal?.aborted) {
       throw signal.reason ?? new Error('execution aborted');
+    }
+
+    // `$LINENO` is the line of what runs now; a `$( )`, parsed without
+    // locations, keeps the line of the command it is in
+    const row = (node as { loc?: { start?: { row?: number } } }).loc?.start?.row;
+
+    if (row !== undefined && node.type !== 'Script') {
+      ctx.setParams({ LINENO: String(this.sourceFrame.base + row) });
     }
 
     // `&` on anything but a single command. A single command reaches the shell
@@ -776,7 +852,7 @@ export class AstExecutor {
         throw err;
       }
 
-      await this.shell.pipeWrite(ctx.getStderr(), `${err.message}\n`).catch(() => {});
+      await this.diagnose(ctx, err.message);
 
       // Measured: bash leaves 127 behind for an expansion error, but under
       // `set -e` the shell goes out through errexit with the command's own 1
@@ -848,7 +924,7 @@ export class AstExecutor {
    * readonly variable — says why, and leaves 1 behind; `set -e` gets its say.
    */
   protected async abortStatus(err: CommandAbortError, ctx: ExecContextIf): Promise<number> {
-    await this.shell.pipeWrite(ctx.getStderr(), `${err.message}\n`).catch(() => {});
+    await this.diagnose(ctx, err.message);
 
     return this.applyErrexit(1, ctx);
   }
@@ -1086,7 +1162,12 @@ export class AstExecutor {
       // Check for builtin first
       const builtin = this.builtin(cmdName);
       if (builtin) {
-        const execute = (script: string) => this.executeSource(script, ctx);
+        // A sourced file counts its own lines; an eval's string goes on from its line
+        const execute = (script: string, opts: { file?: string } = {}) =>
+          this.inSourceFrame(
+            opts.file !== undefined ? { base: 0, name: opts.file } : { base: Number(ctx.getParams().LINENO ?? 1) - 1, name: this.sourceFrame.name },
+            () => this.executeSource(script, ctx),
+          );
         const result = await builtin(ctx, args || [], this.shell, execute);
 
         code = result.code;
@@ -1099,12 +1180,12 @@ export class AstExecutor {
             await this.shell.pipeWrite(ctx.getStdout(), result.stdout);
           }
         } catch (err) {
-          await this.shell.pipeWrite(ctx.getStderr(), `${cmdName}: write error: ${err instanceof Error ? err.message : err}\n`).catch(() => {});
+          await this.diagnose(ctx, `${cmdName}: write error: ${err instanceof Error ? err.message : err}`);
           code = 1;
         }
 
         if (result.stderr) {
-          await this.shell.pipeWrite(ctx.getStderr(), result.stderr).catch(() => {});
+          await this.diagnose(ctx, result.stderr);
         }
       } else {
         // Check for function
@@ -1569,7 +1650,7 @@ export class AstExecutor {
     } catch (err) {
       if (!(err instanceof BashSyntaxError)) throw err;
 
-      await this.shell.pipeWrite(ctx.getStderr(), `trap: syntax error: ${err.message.split('\n')[0]}\n`).catch(() => {});
+      await this.diagnose(ctx, `trap: syntax error: ${err.message.split('\n')[0]}`);
     } finally {
       this.runningTraps.delete(name);
       ctx.setParams({ '?': String(status) });
@@ -1683,7 +1764,7 @@ export class AstExecutor {
       throw err;
     }
 
-    await this.shell.pipeWrite(ctx.getStderr(), `${err.message}\n`).catch(() => {});
+    await this.diagnose(ctx, err.message);
 
     return this.applyErrexit(1, ctx);
   }
@@ -1878,7 +1959,7 @@ export class AstExecutor {
       let last = 0;
 
       if (ctx.isReadonlyVar(node.name.text)) {
-        await this.shell.pipeWrite(ctx.getStderr(), `${node.name.text}: readonly variable\n`).catch(() => {});
+        await this.diagnose(ctx, `${node.name.text}: readonly variable`);
 
         return this.applyErrexit(1, ctx);
       }
@@ -1907,7 +1988,7 @@ export class AstExecutor {
       return true;
     }
 
-    await this.shell.pipeWrite(ctx.getStderr(), `\`${node.name.text}': not a valid identifier\n`).catch(() => {});
+    await this.diagnose(ctx, `\`${node.name.text}': not a valid identifier`);
 
     return false;
   }
@@ -2198,7 +2279,7 @@ export class AstExecutor {
     // A readonly variable is said as any assignment to one says it
     const prefix = err instanceof ReadonlyVariableError ? '' : '((: ';
 
-    await this.shell.pipeWrite(ctx.getStderr(), `${prefix}${err.message}\n`).catch(() => {});
+    await this.diagnose(ctx, `${prefix}${err.message}`);
 
     return this.applyErrexit(1, ctx);
   }
@@ -2210,38 +2291,55 @@ export class AstExecutor {
    * always does first, and parsed now.
    */
   protected async arithmeticValue(part: { expression: string; arithmeticAST?: AstArithmeticExpression }, ctx: ExecContextIf): Promise<number> {
-    try {
-      return await this.evaluateArithmeticPart(part, ctx);
-    } catch (err) {
-      // `1/0: division by 0` — the evaluator does not have the text, this does
-      throw err instanceof ArithmeticError ? err.in(part.expression.trim()) : err;
+    let ast = part.arithmeticAST;
+    let text = part.expression;
+
+    if (!ast) {
+      // Parameters, command substitutions and quote removal, as in double quotes
+      text = (await this.expandHereDocument(part.expression, ctx)).replace(/(?<!\\)"/g, '');
+
+      // An empty expression is 0: `(( ))` fails quietly, `$(( ))` is 0
+      if (text.trim() === '') {
+        return 0;
+      }
+
+      try {
+        ast = parseArithmetic(text);
+      } catch (err) {
+        const detail = err instanceof Error ? err.message.split('\n')[0] : String(err);
+
+        throw new ArithmeticSyntaxError(text, detail);
+      }
     }
-  }
-
-  private async evaluateArithmeticPart(part: { expression: string; arithmeticAST?: AstArithmeticExpression }, ctx: ExecContextIf): Promise<number> {
-    if (part.arithmeticAST) {
-      return await this.evaluateArithmetic(part.arithmeticAST, ctx);
-    }
-
-    // Parameters, command substitutions and quote removal, as in double quotes
-    const expanded = (await this.expandHereDocument(part.expression, ctx)).replace(/(?<!\\)"/g, '');
-
-    // An empty expression is 0: `(( ))` fails quietly, `$(( ))` is 0
-    if (expanded.trim() === '') {
-      return 0;
-    }
-
-    let ast: AstArithmeticExpression;
 
     try {
-      ast = parseArithmetic(expanded);
+      return await this.evaluateArithmetic(ast, ctx);
     } catch (err) {
-      const detail = err instanceof Error ? err.message.split('\n')[0] : String(err);
+      if (!(err instanceof ArithmeticError) || err.expression !== undefined) {
+        throw err;
+      }
 
-      throw new ArithmeticSyntaxError(expanded, detail);
+      // `1/0: division by 0` — the evaluator has only where it went wrong; the
+      // offsets are the source's, and the expression's first node is where its
+      // text, blanks before it left out, begins
+      const first = firstOffset(ast);
+      const trimmed = text.trimStart();
+      let at = err.at === undefined || first === undefined ? undefined : err.at - first;
+
+      // A parenthesized operand is the token with its parentheses: `(1-1)`
+      while (at !== undefined && at > 0 && trimmed[at - 1] === '(') at--;
+
+      // Bash says it as it read it, expanded: `4 / 0`, not `4 / $y`. Only
+      // where expanding again cannot run anything a second time
+      if (at !== undefined && /\$/.test(trimmed) && !/\$\(|`/.test(trimmed)) {
+        const before = await this.expandHereDocument(trimmed.slice(0, at), ctx);
+        const token = await this.expandHereDocument(trimmed.slice(at), ctx);
+
+        throw new ArithmeticError(err.reason, before.length, before + token);
+      }
+
+      throw new ArithmeticError(err.reason, at, trimmed);
     }
-
-    return await this.evaluateArithmetic(ast, ctx);
   }
 
   /**
@@ -2658,7 +2756,7 @@ export class AstExecutor {
     // the command runs without it, as in bash; anywhere else the command ends
     if (ctx.isReadonlyVar(name)) {
       if (local) {
-        await this.shell.pipeWrite(ctx.getStderr(), `${name}: readonly variable\n`).catch(() => {});
+        await this.diagnose(ctx, `${name}: readonly variable`);
 
         return;
       }
@@ -3646,10 +3744,10 @@ export class AstExecutor {
     ctx.setArrayElement(node.name, await this.arithmeticIndex(node, array?.length ?? 0, ctx), String(value));
   }
 
-  /** Dividing by zero is an error in bash, not a value. */
-  private divisor(value: number): number {
+  /** Dividing by zero is an error in bash, not a value. `node` is the divisor, for the error to point at. */
+  private divisor(value: number, node: { loc?: { start?: { char?: number } } }): number {
     if (value === 0) {
-      throw new ArithmeticError('division by 0 (error token is "0")');
+      throw new ArithmeticError('division by 0', node.loc?.start?.char);
     }
 
     return value;
@@ -3706,9 +3804,9 @@ export class AstExecutor {
           case '*':
             return left * right;
           case '/':
-            return Math.trunc(left / this.divisor(right));
+            return Math.trunc(left / this.divisor(right, node.right));
           case '%':
-            return left % this.divisor(right);
+            return left % this.divisor(right, node.right);
           case '**':
             return Math.pow(left, right);
           case '&':
@@ -3780,10 +3878,10 @@ export class AstExecutor {
               value = currentValue * rightValue;
               break;
             case '/=':
-              value = Math.trunc(currentValue / this.divisor(rightValue));
+              value = Math.trunc(currentValue / this.divisor(rightValue, node.right));
               break;
             case '%=':
-              value = currentValue % this.divisor(rightValue);
+              value = currentValue % this.divisor(rightValue, node.right);
               break;
             case '&=':
               value = currentValue & rightValue;

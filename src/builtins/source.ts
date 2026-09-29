@@ -32,7 +32,7 @@ export const sourceBuiltin: BuiltinHandler = async (
   ctx: ExecContextIf,
   args: string[],
   shell: ShellIf,
-  execute: (script: string) => Promise<number>,
+  execute: (script: string, opts?: { file?: string }) => Promise<number>,
 ): Promise<BuiltinResult> => {
   if (args.length === 0) {
     return {
@@ -54,7 +54,7 @@ export const sourceBuiltin: BuiltinHandler = async (
     const content = await shell.readFile(ctx, filename);
 
     // Execute the file content in the current shell context
-    const code = await execute(content);
+    const code = await execute(content, { file: filename });
 
     // `return` ends the file, not the function or script around the `source`
     return { code: isReturnSignal(code) ? getReturnCode(code) : code };

@@ -166,7 +166,7 @@ async function main(): Promise<number> {
       Deno.exit(await executor.runExitTrap(ctx, 128 + number));
     },
   });
-  const executor = new AstExecutor(shell, { builtins: createBuiltinRegistry() });
+  const executor = new AstExecutor(shell, { builtins: createBuiltinRegistry(), lineNumbers: true });
   const ctx = new ExecContext();
 
   ctx.setCwd(Deno.cwd());

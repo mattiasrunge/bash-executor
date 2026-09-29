@@ -21,10 +21,10 @@ function assign(ctx: ExecContextIf, name: string, value: number): void {
   ctx.assignVariable(name, String(value));
 }
 
-/** Dividing by zero is an error in bash, not a value. */
-function divisor(value: number): number {
+/** Dividing by zero is an error in bash, not a value. `node` is the divisor, for the error to point at. */
+function divisor(value: number, node: { loc?: { start?: { char?: number } } }): number {
   if (value === 0) {
-    throw new ArithmeticError('division by 0 (error token is "0")');
+    throw new ArithmeticError('division by 0', node.loc?.start?.char);
   }
 
   return value;
@@ -99,9 +99,9 @@ export async function evaluateArithmetic(
         case '*':
           return left * right;
         case '/':
-          return Math.trunc(left / divisor(right));
+          return Math.trunc(left / divisor(right, node.right));
         case '%':
-          return left % divisor(right);
+          return left % divisor(right, node.right);
         case '**':
           return Math.pow(left, right);
         case '&':
@@ -174,10 +174,10 @@ export async function evaluateArithmetic(
             value = currentValue * rightValue;
             break;
           case '/=':
-            value = Math.trunc(currentValue / divisor(rightValue));
+            value = Math.trunc(currentValue / divisor(rightValue, node.right));
             break;
           case '%=':
-            value = currentValue % divisor(rightValue);
+            value = currentValue % divisor(rightValue, node.right);
             break;
           case '&=':
             value = currentValue & rightValue;

@@ -306,3 +306,17 @@ Deno.test('a syntax error stops the script where bash stops it', async (t) => {
     assertEquals(result.stdout, 'e1\neval=2\ns1\nsource=2\n');
   });
 });
+
+Deno.test('$LINENO, and diagnostics with the line in them', async (t) => {
+  await t.step('$LINENO is the line of the command, in a function too', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('echo $LINENO\nf() {\n  echo $LINENO\n}\n\nf');
+    assertEquals(result.stdout, '1\n3\n');
+  });
+
+  await t.step('division by zero names the token, as bash does', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('x=0\necho $((10/(1-1)))\necho $(( 5 % x + 1 ))');
+    assertEquals(result.stderr, '10/(1-1): division by 0 (error token is "(1-1)")\n5 % x + 1 : division by 0 (error token is "x + 1 ")\n');
+  });
+});

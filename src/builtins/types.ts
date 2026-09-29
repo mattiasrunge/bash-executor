@@ -25,7 +25,7 @@ export type BuiltinHandler = (
   ctx: ExecContextIf,
   args: string[],
   shell: ShellIf,
-  execute: (script: string) => Promise<number>,
+  execute: (script: string, opts?: { file?: string }) => Promise<number>,
 ) => Promise<BuiltinResult>;
 
 /**
