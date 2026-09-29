@@ -10,7 +10,7 @@
  * as printed, and so are options it has no counterpart for.
  */
 import { fromFileUrl } from '@std/path';
-import { AstExecutor, BashSyntaxError, createBuiltinRegistry, DEFAULT_SHELL_OPTIONS, ExecContext, getExitCode, SHELL_OPTION_FLAG_MAP } from '../mod.ts';
+import { AstExecutor, BashSyntaxError, createBuiltinRegistry, DEFAULT_SHELL_OPTIONS, ExecContext, getExitCode, SHELL_OPTION_FLAG_MAP, SIGNALS } from '../mod.ts';
 import { logGap, RealShell } from './host-shell.ts';
 
 const BASH_VERSION = '5.2.21(1)-release';
@@ -151,7 +151,21 @@ async function main(): Promise<number> {
 
   Deno.env.set('BASH_TS_SCRIPT', inv.file ?? (inv.command !== undefined ? '-c' : 'stdin'));
 
-  const shell = new RealShell({ selfCommand: self, name: () => inv.name, hostEnv });
+  const shell: RealShell = new RealShell({
+    selfCommand: self,
+    name: () => inv.name,
+    hostEnv,
+    // `kill -SIG $$`: the trap for it, or what the signal does by default —
+    // most end the shell with 128 + the signal's number, EXIT trap first
+    onSignal: async (signal) => {
+      if (await executor.trapSignal(ctx, signal)) return;
+      if (['0', 'CHLD', 'CONT', 'URG', 'WINCH'].includes(signal)) return;
+
+      const number = SIGNALS.find(([, name]) => name === signal)?.[0] ?? 15;
+
+      Deno.exit(await executor.runExitTrap(ctx, 128 + number));
+    },
+  });
   const executor = new AstExecutor(shell, { builtins: createBuiltinRegistry() });
   const ctx = new ExecContext();
 

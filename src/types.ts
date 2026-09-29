@@ -1,3 +1,4 @@
+import type { JobHostIf, JobTable } from './jobs.ts';
 import type { AstNodeCompoundList } from '@ein/bash-parser';
 
 /**
@@ -193,6 +194,14 @@ export interface ShellIf {
     args: string[],
     opts: ExecCommandOptions,
   ) => Promise<number>;
+
+  /**
+   * Job control, when the host has it: with this the executor runs every `&`
+   * as a job in its table and provides `jobs`, `wait`, `kill`, `disown`, `fg`
+   * and `bg`. Without it `&` goes to `execute` and `executeBackground` as
+   * before, and those names are left to the host's own commands.
+   */
+  jobControl?: JobHostIf;
 
   /**
    * Runs a piece of the parse tree in the background, for the `&` cases that
@@ -645,6 +654,9 @@ export interface ExecContextIf {
   setTrap(name: string, action: string | null): void;
 
   getTraps(): Record<string, string>;
+
+  /** The shell's job table: a subshell has one of its own, empty. */
+  getJobTable(): JobTable;
 
   /**
    * Gets all aliases from the execution context.

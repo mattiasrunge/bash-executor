@@ -1,5 +1,6 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { isAbsolute, join, resolve } from '@std/path';
-import type { ExecCommandOptions, ExecContextIf, PathTestOperation, ShellIf } from '../mod.ts';
+import type { ExecCommandOptions, ExecContextIf, JobHandle, JobHostIf, PathTestOperation, ShellIf } from '../mod.ts';
 import { globToRegexSource } from '../src/pattern.ts';
 import { PipeBuffer } from '../test/lib/pipe-buffer.ts';
 
@@ -68,7 +69,15 @@ export type RealShellOptions = {
   name: () => string;
   /** Added to every child's environment, out of sight of the script. */
   hostEnv?: Record<string, string>;
+  /** A signal sent to this shell itself, `kill -USR1 $$`: its trap, or its default. */
+  onSignal?: (signal: string) => Promise<void>;
 };
+
+/** Where a job's child processes are recorded, and how the job itself is stopped. */
+type JobRecord = { children: Set<Deno.ChildProcess>; abort: AbortController; finished: boolean; killedBy?: number };
+
+/** Signals whose default is to do nothing; every other one ends what it reaches. */
+const HARMLESS_SIGNALS = new Set(['0', 'CHLD', 'CONT', 'URG', 'WINCH']);
 
 /**
  * A ShellIf on the real operating system: external commands are processes,
@@ -86,7 +95,78 @@ export class RealShell implements ShellIf {
   private background = new Set<Promise<unknown>>();
   private encoder = new TextEncoder();
 
+  /** The job whose code is running now, for `spawn` to file its processes under. */
+  private currentJob = new AsyncLocalStorage<string>();
+  private jobRecords = new Map<string, JobRecord>();
+  /** Job ids, above any real pid on Linux */
+  private nextJobPid = 4_200_000;
+
   constructor(private opts: RealShellOptions) {}
+
+  /**
+   * Job control. A job's id is its own number, not a process's: a job may be a
+   * loop that starts many. `kill` reaches the processes it has running and
+   * stops the job itself between commands.
+   */
+  jobControl: JobHostIf = {
+    start: async (ctx: ExecContextIf, run: (jobCtx: ExecContextIf) => Promise<number>): Promise<JobHandle> => {
+      const pid = String(this.nextJobPid++);
+      const record: JobRecord = { children: new Set(), abort: new AbortController(), finished: false };
+      const jobCtx = ctx.subContext();
+
+      jobCtx.setAbortSignal(record.abort.signal);
+      this.jobRecords.set(pid, record);
+
+      // A job a signal ended ends with 128 + its number, whatever it was running
+      const done = this.currentJob.run(pid, () => run(jobCtx)).catch(() => 1)
+        .then((code) => record.killedBy ? 128 + record.killedBy : code)
+        .finally(() => {
+          record.finished = true;
+        });
+
+      this.track(done);
+
+      return await { pid, done };
+    },
+
+    signal: async (pid: string, signal: string): Promise<boolean> => {
+      if (pid === String(Deno.pid)) {
+        await this.opts.onSignal?.(signal);
+        return true;
+      }
+
+      const record = this.jobRecords.get(pid);
+
+      if (record) {
+        if (record.finished) return false;
+        if (HARMLESS_SIGNALS.has(signal)) return true;
+
+        for (const child of record.children) {
+          try {
+            child.kill(`SIG${signal}` as Deno.Signal);
+          } catch {
+            // already gone
+          }
+        }
+
+        record.killedBy = SIGNALS[`SIG${signal}`] ?? 15;
+        record.abort.abort();
+        return true;
+      }
+
+      // Any other process
+      try {
+        if (signal === '0') {
+          return (await statOf(`/proc/${Number(pid)}`)) !== null;
+        }
+
+        Deno.kill(Number(pid), `SIG${signal}` as Deno.Signal);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+  };
 
   /** Resolves once every job started with `&` has finished. */
   async waitForBackground(): Promise<void> {
@@ -216,6 +296,12 @@ export class RealShell implements ShellIf {
 
       return 126;
     }
+
+    // A child of a job is the job's, for `kill %1` to reach
+    const record = this.jobRecords.get(this.currentJob.getStore() ?? '');
+
+    record?.children.add(child);
+    child.status.finally(() => record?.children.delete(child));
 
     const pumps: Promise<void>[] = [];
 

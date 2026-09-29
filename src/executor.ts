@@ -33,6 +33,7 @@ import {
   utils,
 } from '@ein/bash-parser';
 import { getExitCode, getReturnCode, isExitSignal, isReturnSignal, makeExitSignal } from './builtins/exit.ts';
+import { JOB_BUILTINS } from './builtins/jobs.ts';
 import type { BuiltinRegistry } from './builtins/types.ts';
 import type { ErrorPosition } from './errors.ts';
 import { bracketExpression, globToRegExp, globToRegexSource, posixRegexToSource, quoteGlob, quoteRegex } from './pattern.ts';
@@ -134,6 +135,19 @@ export class AstExecutor {
   }
 
   /**
+   * A builtin by name. The job builtins need the host's job control; without it
+   * those names stay the host's own commands, if it has any. Asked each time,
+   * since a host may set up `jobs` after it has made its executor.
+   */
+  private builtin(name: string) {
+    if (!this.shell.jobControl && JOB_BUILTINS.includes(name)) {
+      return undefined;
+    }
+
+    return this.builtins?.get(name);
+  }
+
+  /**
    * Extract source location from an AST node.
    * Accepts locations with char offset even if row/col are missing.
    */
@@ -190,6 +204,15 @@ export class AstExecutor {
    * @returns {Promise<number>} - The exit code of the executed script.
    */
   public async execute(source: string, ctx: ExecContextIf): Promise<number> {
+    // Without the host's job control the job builtins are not there at all —
+    // not for `type` and `command` either. Done here rather than in the
+    // constructor, since a host may set up `jobs` after making its executor.
+    if (!this.shell.jobControl) {
+      for (const name of JOB_BUILTINS) {
+        this.builtins?.delete(name);
+      }
+    }
+
     // Saved rather than cleared: `eval`/`source` run through here too, and
     // dropping the source on the way out left the script around them with none —
     // no snippet in an error, and nothing for `set -v` to echo
@@ -370,6 +393,10 @@ export class AstExecutor {
     // subshell or a loop has no such call, and used to run in the foreground
     // instead — silently, with no job to bring back or disown. That is what made
     // a multi-step sweep impossible to detach from the session that started it.
+    if (node.async && this.shell.jobControl) {
+      return this.startJob(node, ctx);
+    }
+
     if (node.async && node.type !== 'Command' && this.shell.executeBackground) {
       return this.executeInBackground(node, ctx);
     }
@@ -413,6 +440,34 @@ export class AstExecutor {
   }
 
   /**
+   * `&` with the host's job control: the host starts the node as a job of its
+   * own, a subshell whose EXIT trap runs as it ends, and it goes in the job
+   * table, with its pid in `$!`. With job control on (`set -m`) the shell says
+   * `[1] pid`, as an interactive bash does.
+   */
+  private async startJob(node: AstNode, ctx: ExecContextIf): Promise<number> {
+    const foreground = { ...node, async: false };
+    const command = this.nodeSource(node);
+
+    const handle = await this.shell.jobControl!.start(ctx, async (jobCtx) => {
+      const code = await this.executeNode(foreground, jobCtx);
+      const status = isExitSignal(code) ? getExitCode(code) : isReturnSignal(code) ? getReturnCode(code) : code;
+
+      return await this.runExitTrap(jobCtx, status);
+    }, command);
+
+    const job = ctx.getJobTable().add(handle, command);
+
+    ctx.setParams({ '!': handle.pid });
+
+    if (ctx.getShellOption('monitor')) {
+      await this.shell.pipeWrite(ctx.getStderr(), `[${job.id}] ${handle.pid}\n`).catch(() => {});
+    }
+
+    return 0;
+  }
+
+  /**
    * Hand a node to the shell to run in the background. The copy clears `async`
    * so that re-entering does the work rather than backgrounding it again.
    */
@@ -435,7 +490,7 @@ export class AstExecutor {
 
   /** Whether a name runs in this process — a builtin or a shell function — rather than as a command of its own. */
   private isInProcessCommand(name: string, ctx: ExecContextIf): boolean {
-    return Boolean(this.builtins?.get(name) || ctx.getFunction(name));
+    return Boolean(this.builtin(name) || ctx.getFunction(name));
   }
 
   /**
@@ -929,7 +984,7 @@ export class AstExecutor {
 
     return this.withFileBridging(ctx, async () => {
       // Check for builtin first
-      const builtin = this.builtins?.get(cmdName);
+      const builtin = this.builtin(cmdName);
       if (builtin) {
         const execute = (script: string) => this.execute(script, ctx);
         const result = await builtin(ctx, args || [], this.shell, execute);
@@ -1405,6 +1460,24 @@ export class AstExecutor {
     }
 
     return status;
+  }
+
+  /**
+   * A signal the shell itself received, by name without `SIG`: its trap runs,
+   * or is ignored when it was set to ''. False when there is no trap, and the
+   * host does what the signal does by default — for most, end the shell.
+   */
+  public async trapSignal(ctx: ExecContextIf, signal: string): Promise<boolean> {
+    const name = `SIG${signal}`;
+    const action = ctx.getTrap(name);
+
+    if (action === undefined) {
+      return false;
+    }
+
+    await this.runTrap(name, ctx, Number(ctx.getParams()['?'] ?? 0));
+
+    return true;
   }
 
   /**

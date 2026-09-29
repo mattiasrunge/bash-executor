@@ -1,4 +1,5 @@
 import type { AstNodeCompoundList } from '@ein/bash-parser';
+import { JobTable } from './jobs.ts';
 import { DEFAULT_SHELL_OPTIONS, DEFAULT_SHOPT_OPTIONS, type ExecContextIf, type FunctionDef, type IO } from './types.ts';
 
 // TODO: We need to define when cwd or params should go to parent or not...
@@ -17,6 +18,7 @@ export class ExecContext implements ExecContextIf {
   private fns: Record<string, FunctionDef> = {};
   private alias: Record<string, string> = {};
   private traps: Record<string, string> = {};
+  private jobTable = new JobTable();
   private readonlyVars = new Set<string>();
   private integerVars = new Set<string>();
   private dirStack: string[] = [];
@@ -79,6 +81,8 @@ export class ExecContext implements ExecContextIf {
     for (const [name, args] of Object.entries(this.getAliases())) {
       ctx.setAlias(name, args);
     }
+
+    ctx.jobTable = this.getJobTable().copy();
 
     // A subshell does not run the shell's traps, but what the shell ignores it
     // ignores too, as in bash
@@ -449,6 +453,10 @@ export class ExecContext implements ExecContextIf {
     } else {
       delete this.alias[name];
     }
+  }
+
+  getJobTable(): JobTable {
+    return this.parent ? this.parent.getJobTable() : this.jobTable;
   }
 
   getTrap(name: string): string | undefined {

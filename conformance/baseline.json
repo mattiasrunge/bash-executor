@@ -511,7 +511,7 @@
       "reference": "pass"
     },
     "run-assoc": {
-      "upstream": 0.231,
+      "upstream": 0.232,
       "pass": false,
       "stdout": 0.229,
       "reference": "pass"
@@ -625,9 +625,9 @@
       "reference": "pass"
     },
     "run-execscript": {
-      "upstream": 0.764,
+      "upstream": 0.793,
       "pass": false,
-      "stdout": 0.857,
+      "stdout": 0.883,
       "reference": "env"
     },
     "run-exp-tests": {
@@ -661,9 +661,9 @@
       "reference": "pass"
     },
     "run-func": {
-      "upstream": 0.275,
+      "upstream": 0.282,
       "pass": false,
-      "stdout": 0.28,
+      "stdout": 0.286,
       "reference": "pass"
     },
     "run-getopts": {
@@ -745,9 +745,9 @@
       "reference": "pass"
     },
     "run-jobs": {
-      "upstream": 0,
+      "upstream": 0.351,
       "pass": false,
-      "stdout": 0.039,
+      "stdout": 0.471,
       "reference": "env",
       "timeout": true
     },
@@ -891,9 +891,9 @@
       "timeout": true
     },
     "run-redir": {
-      "upstream": 0.551,
+      "upstream": 0.577,
       "pass": false,
-      "stdout": 0.599,
+      "stdout": 0.607,
       "reference": "pass"
     },
     "run-rhs-exp": {
@@ -935,8 +935,9 @@
     "run-test": {
       "upstream": 0.877,
       "pass": false,
-      "stdout": 0.916,
-      "reference": "env"
+      "stdout": 0.913,
+      "reference": "env",
+      "timeout": true
     },
     "run-tilde": {
       "upstream": 0.607,
@@ -951,7 +952,7 @@
       "reference": "pass"
     },
     "run-trap": {
-      "upstream": 0.682,
+      "upstream": 0.685,
       "pass": false,
       "stdout": 0.741,
       "reference": "pass"

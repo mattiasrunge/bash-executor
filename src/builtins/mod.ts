@@ -41,6 +41,7 @@ export { setBuiltin } from './set.ts';
 export { shiftBuiltin } from './shift.ts';
 export { shoptBuiltin } from './shopt.ts';
 export { SIGNALS, trapBuiltin, trapName } from './trap.ts';
+export { bgBuiltin, disownBuiltin, fgBuiltin, JOB_BUILTINS, jobsBuiltin, killBuiltin, waitBuiltin } from './jobs.ts';
 export { dotBuiltin, sourceBuiltin } from './source.ts';
 export { bracketBuiltin, testBuiltin } from './test.ts';
 export { colonBuiltin, falseBuiltin, trueBuiltin } from './trivial.ts';
@@ -65,6 +66,7 @@ import { setBuiltin } from './set.ts';
 import { shiftBuiltin } from './shift.ts';
 import { shoptBuiltin } from './shopt.ts';
 import { trapBuiltin } from './trap.ts';
+import { bgBuiltin, disownBuiltin, fgBuiltin, jobsBuiltin, killBuiltin, waitBuiltin } from './jobs.ts';
 import { dotBuiltin, sourceBuiltin } from './source.ts';
 import { bracketBuiltin, testBuiltin } from './test.ts';
 import { colonBuiltin, falseBuiltin, trueBuiltin } from './trivial.ts';
@@ -104,6 +106,14 @@ export function createBuiltinRegistry(): BuiltinRegistry {
   registry.set('eval', evalBuiltin);
   registry.set('shopt', shoptBuiltin);
   registry.set('trap', trapBuiltin);
+
+  // Job control: the executor drops these again when the host has none
+  registry.set('jobs', jobsBuiltin);
+  registry.set('wait', waitBuiltin);
+  registry.set('kill', killBuiltin);
+  registry.set('disown', disownBuiltin);
+  registry.set('fg', fgBuiltin);
+  registry.set('bg', bgBuiltin);
   registry.set('source', sourceBuiltin);
   registry.set('.', dotBuiltin);
 

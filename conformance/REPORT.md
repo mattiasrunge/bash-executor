@@ -7,8 +7,8 @@ see [README.md](README.md) for what the scores mean.
 | --- | --- |
 | Test files that parse | 451 / 471 |
 | `run-*` scripts passing | 4 / 83 (real bash here: 74) |
-| Mean upstream score | 49% |
-| Mean stdout score | 53% |
+| Mean upstream score | 50% |
+| Mean stdout score | 54% |
 
 ## Gaps
 
@@ -35,11 +35,9 @@ Bash builtins that reached the host as external commands.
 
 | Name | Tests | Times hit |
 | --- | --- | --- |
-| wait | assoc, execscript, func, procsub, redir, trap | 25 |
 | hash | assoc, builtins, execscript, rsh, type | 17 |
 | ulimit | builtins, procsub, redir, vredir | 8 |
 | compgen | func, herestr, shopt | 4 |
-| kill | execscript, jobs, test | 3 |
 | history | histexpand, history | 64 |
 | getopts | getopts, posix2 | 26 |
 | test | cond, cprint | 7 |
@@ -50,7 +48,6 @@ Bash builtins that reached the host as external commands.
 | umask | builtins | 12 |
 | enable | builtins | 5 |
 | help | redir | 1 |
-| jobs | jobs | 1 |
 
 ### Keywords run as commands
 
@@ -101,7 +98,6 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 
 | Message | Tests |
 | --- | --- |
-| wait: command not found | assoc, execscript, func, procsub, redir, trap |
 | foo: command not found | alias, comsub, execscript, exportfunc, nquote |
 | hash: command not found | assoc, builtins, execscript, rsh, type |
 | syntax error: Unexpected 'CONTINUE' | assoc, comsub-eof, posixexp, quote |
@@ -126,6 +122,7 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | 'A[]]': not a valid identifier | assoc, quotearray |
 | foo: not found | nameref, varenv |
 | syntax error: Unexpected 'WORD' | parser, vredir |
+| [N] N | jobs, trap |
 | /dev/tty: No such device or address (os error N): open '/dev/tty' | read, test |
 | 'x+=N': not a valid identifier | appendop |
 | second): command not found | array |
@@ -173,13 +170,13 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | dollars | pass | no | 68% | 68% | 25,26c25,28 ⏎ &lt; argv[1] = &lt;1&gt; ⏎ &lt; argv[1] = &lt;bobtom dick harryjoe&gt; |
 | dynvar | pass | no | 31% | 40% | 2,4c2,5 ⏎ &lt; BASH_ARGV0 mismatch: hello (./dynvar.tests) ⏎ &lt; BASH_ARGV0 mismatch: arg0 (./dynvar.tests) |
 | errors | pass | no | 0% | 0% | 1,23c1,208 ⏎ &lt; alias: -x: not found ⏎ &lt; alias: hoowah: not found |
-| execscript | env | no | 76% | 86% | 1d0 ⏎ &lt; execscript: the test suite should not be run as root ⏎ 9c8 |
+| execscript | env | no | 79% | 88% | 1d0 ⏎ &lt; execscript: the test suite should not be run as root ⏎ 9c8 |
 | exp-tests | pass | no | 28% | 35% | 41,42c41 ⏎ &lt; argv[1] = &lt;&gt; ⏎ &lt; argv[1] = &lt;"Hello world!"&gt; |
 | exportfunc | pass | no | 30% | 57% | 1,7c1,7 ⏎ &lt; bash: foo: command not found ⏎ &lt; bash: foo-a: command not found |
 | extglob | pass | no | 83% | 85% | 44c44 ⏎ &lt; @(*) ⏎ --- |
 | extglob2 | pass | no | 90% | 90% | 45,46c45 ⏎ &lt; 1:  [[ foo = !(foo)* ]] ⏎ &lt; Test failed:  [[ foo = !(foo)* ]] |
 | extglob3 | pass | yes | 100% | 100% |  |
-| func | pass | no | 28% | 28% | 1d0 ⏎ &lt; ./func.tests: compgen: command not found ⏎ 12c11 |
+| func | pass | no | 28% | 29% | 1d0 ⏎ &lt; ./func.tests: compgen: command not found ⏎ 12c11 |
 | getopts | pass | no | 10% | 14% | 1,24c1,32 ⏎ &lt; ./getopts.tests: getopts: command not found ⏎ &lt; 127 |
 | glob-test | env | no | 70% | 72% | 2,3d1 ⏎ &lt; glob2.sub: warning: you do not have the zh_HK.big5hkscs locale installed; ⏎ &lt; glob2.sub: warning: that will cause some of these tests to fail. |
 | globstar | pass | no | 25% | 25% | 0a1,26 ⏎ &gt; lib/glob/glob.o ⏎ &gt; lib/glob/smatch.o |
@@ -193,7 +190,7 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | intl | env | no | 9% | 9% | 1,3c1,3 ⏎ &lt; Ã© ⏎ &lt; 2 |
 | invert | pass | no | 80% | 80% | 1d0 ⏎ &lt; 0 ⏎ 4d2 |
 | iquote | pass | no | 90% | 90% | 11,13c11,13 ⏎ &lt; 0x0 ⏎ &lt; 0x0 |
-| jobs | env | timeout | 0% | 4% | timeout |
+| jobs | env | timeout | 35% | 47% | timeout |
 | lastpipe | pass | yes | 100% | 100% |  |
 | mapfile | pass | no | 62% | 62% | 16a17,32 ⏎ &gt; a[0] Abcdefghijklmnop ⏎ &gt; [1] aBcdefghijklmnop |
 | more-exp | pass | no | 66% | 81% | 2c2 ⏎ &lt; argv[1] = &lt;aaa&gt; ⏎ --- |
@@ -217,17 +214,17 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | quote | pass | no | 67% | 68% | 13,14c13 ⏎ &lt; foo\ ⏎ &lt; bar |
 | quotearray | pass | no | 32% | 37% | 1,6c1,8 ⏎ &lt; declare -A assoc=([x],b[$(echo uname &gt;&2)]="1") ⏎ &lt; declare -A assoc=([x],b[$(echo uname &gt;&2)]="2") |
 | read | env | timeout | 31% | 39% | timeout |
-| redir | pass | no | 55% | 60% | 2c2 ⏎ &lt; /tmp/redir-test: cannot overwrite existing file ⏎ --- |
+| redir | pass | no | 58% | 61% | 2c2 ⏎ &lt; /tmp/redir-test: cannot overwrite existing file ⏎ --- |
 | rhs-exp | pass | no | 84% | 84% | 1d0 ⏎ &lt; argv[1] = &lt;TDEFAULTS = -DSELECT_VECS=$selvecs&gt; ⏎ 2a2 |
 | rsh | pass | no | 0% | 0% | 1,17c1,19 ⏎ &lt; ./rsh1.sub: hash: command not found ⏎ &lt; set: -r: invalid option |
 | set-e | pass | no | 88% | 88% | 17c17 ⏎ &lt; 0 bad ⏎ --- |
 | set-x | pass | no | 76% | 83% | 0a1,2 ⏎ &gt; + (( i=0 )) ⏎ &gt; + (( i&lt;=5 )) |
 | shopt | pass | no | 83% | 84% | 1c1 ⏎ &lt; shopt: -z: invalid option ⏎ --- |
 | strip | pass | yes | 100% | 100% |  |
-| test | env | no | 88% | 92% | 1d0 ⏎ &lt; test-tests: the test suite should not be run as root ⏎ 5c4 |
+| test | env | timeout | 88% | 91% | timeout |
 | tilde | pass | no | 61% | 61% | 2c2 ⏎ &lt; /home/mattias/foo ⏎ --- |
 | tilde2 | pass | no | 57% | 57% | 2,3c2,3 ⏎ &lt;  ⏎ &lt;  |
-| trap | pass | no | 68% | 74% | 8c8 ⏎ &lt; [] debug ⏎ --- |
+| trap | pass | no | 69% | 74% | 8c8 ⏎ &lt; [] debug ⏎ --- |
 | type | pass | no | 33% | 35% | 1c1 ⏎ &lt; ./type.tests: hash: command not found ⏎ --- |
 | varenv | pass | no | 33% | 38% | 1,5c1,3 ⏎ &lt; 1 2 ⏎ &lt; ./varenv.tests: c=7: command not found |
 | vredir | env | no | 40% | 44% | 6,12c6,13 ⏎ &lt; 10 ⏎ &lt; bad foo 1 |
