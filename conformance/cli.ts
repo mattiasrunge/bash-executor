@@ -239,6 +239,13 @@ async function main(): Promise<number> {
   // The shell ends: its EXIT trap runs, and may change the status
   code = await executor.runExitTrap(ctx, code);
 
+  // Its descriptors close as it exits, which a coprocess reading from one sees as the end of its input
+  for (let fd = 0; fd < 256; fd++) {
+    const target = ctx.getFd(String(fd));
+
+    if (target !== undefined && shell.isPipe(target)) await shell.pipeClose(target);
+  }
+
   await shell.waitForBackground();
 
   return code & 0xff;

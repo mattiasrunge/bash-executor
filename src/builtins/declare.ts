@@ -38,8 +38,6 @@ type Options = {
   global: boolean;
 };
 
-type Result = { code: number; stdout: string; stderr: string };
-
 const isIdentifier = (name: string): boolean => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name);
 
 /** The shell's own context, below every function and command. */
@@ -88,8 +86,8 @@ function wordsOf(list: string): string[] {
 }
 
 class Declaration {
-  private stdout = '';
-  private stderr = '';
+  // What declare writes, in the order it writes it: `declare -p nope x` complains before it shows x
+  private output: { stdout?: string; stderr?: string }[] = [];
   private failed = false;
   private assignError = false;
 
@@ -99,14 +97,22 @@ class Declaration {
     private readonly opts: Options,
   ) {}
 
+  private print(stdout: string): void {
+    this.output.push({ stdout });
+  }
+
+  private warn(message: string): void {
+    this.output.push({ stderr: `${message}\n` });
+  }
+
   private error(message: string, assignment = false): void {
-    this.stderr += `${message}\n`;
+    this.warn(message);
     if (assignment) this.assignError = true;
     else this.failed = true;
   }
 
-  result(): Result {
-    return { code: this.failed || this.assignError ? 1 : 0, stdout: this.stdout, stderr: this.stderr };
+  result(): BuiltinResult {
+    return { code: this.failed || this.assignError ? 1 : 0, output: this.output };
   }
 
   private get posix(): boolean {
@@ -124,13 +130,13 @@ class Declaration {
       return;
     }
 
-    this.stdout += declareLine(name, info, { command: this.command, posix: this.posix });
+    this.print(declareLine(name, info, { command: this.command, posix: this.posix }));
   }
 
   /** `declare -p`: every variable. */
   showAll(): void {
     for (const [name, info] of sortedVariables(this.ctx)) {
-      this.stdout += declareLine(name, info, { command: this.command, posix: this.posix });
+      this.print(declareLine(name, info, { command: this.command, posix: this.posix }));
     }
   }
 
@@ -148,7 +154,7 @@ class Declaration {
       if (assocs && info.kind !== 'assoc') continue;
       if (letters.length && !letters.some((letter) => info.attributes.includes(letter))) continue;
 
-      this.stdout += declareLine(name, info, { command: this.command, posix: this.posix });
+      this.print(declareLine(name, info, { command: this.command, posix: this.posix }));
     }
   }
 
@@ -157,7 +163,7 @@ class Declaration {
     const own = Object.entries(scope.getOwnVariables()).filter(([name]) => isIdentifier(name)).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
 
     for (const [name, info] of own) {
-      this.stdout += declareLine(name, info);
+      this.print(declareLine(name, info));
     }
   }
 
@@ -212,7 +218,7 @@ class Declaration {
 
     // Making a name reference, or changing what one refers to
     if (on.has('n')) {
-      this.declareNameref(target, local, name, subscript, assigning ? value ?? '' : undefined);
+      this.declareNameref(target, local, name, subscript, assigning ? value ?? '' : undefined, parts?.append ?? false);
       return;
     }
 
@@ -223,6 +229,9 @@ class Declaration {
       return;
     }
 
+    // `declare -n x; declare x[1]=one`: an element assigned makes the reference an array, as in bash
+    if (assigning && subscript !== undefined) this.dropNameref(target, name);
+
     // A nameref otherwise stands for what it refers to — except that `local x` makes a new x
     if (!local && subscript === undefined) {
       const resolved = target.resolveNameref(name);
@@ -230,6 +239,9 @@ class Declaration {
 
       name = element ? element[1] : resolved;
       subscript = element ? element[2] : subscript;
+
+      // …and what it leads to may be an element of a reference: `declare -n a=b b='a[1]'`
+      if (element && assigning) this.dropNameref(target, name);
     }
 
     const own = local ? target.getOwnVariables()[name] : undefined;
@@ -294,13 +306,28 @@ class Declaration {
     await this.assign(target, name, info!, { subscript, value: value ?? '', append: parts!.append, compound, quotedList, creatingArray, arrayExists });
   }
 
+  /** A reference that is to be an array stops being a reference, and loses the name it held. */
+  private dropNameref(target: ExecContextIf, name: string): void {
+    if (!target.getVariable(name)?.attributes.includes('n')) return;
+
+    this.warn(`warning: ${name}: removing nameref attribute`);
+    target.unsetVariable(name, { noref: true });
+  }
+
   /**
    * `declare -n ref[=name]`: the variable becomes a reference to another, and
    * its value is that one's name. What bash refuses: an element as the
    * reference, a value no variable could be called, a reference to itself
    * (outside a function, where it is only a warning), an array, a readonly one.
    */
-  private declareNameref(target: ExecContextIf, local: boolean, name: string, subscript: string | undefined, value: string | undefined): void {
+  private declareNameref(
+    target: ExecContextIf,
+    local: boolean,
+    name: string,
+    subscript: string | undefined,
+    value: string | undefined,
+    append: boolean,
+  ): void {
     const validName = (text: string) => /^[A-Za-z_][A-Za-z0-9_]*(\[.*\])?$/s.test(text);
 
     if (subscript !== undefined) {
@@ -308,18 +335,36 @@ class Declaration {
       return;
     }
 
-    if (value !== undefined && value !== '' && !validName(value)) {
+    // `declare -n ref+=f` adds to the name it holds, which is checked only whole: `ref=var ref+=[@]`
+    if (append && value !== undefined) {
+      const current = local ? target.getOwnVariables()[name] : target.getVariable(name);
+      const whole = (current?.attributes.includes('n') && typeof current.value === 'string' ? current.value : '') + value;
+
+      if (whole === name || whole.startsWith(`${name}[`)) {
+        if (this.ctx.getFunctionScope()) {
+          this.warn(`warning: ${name}: circular name reference`);
+        } else {
+          this.error(`${name}: nameref variable self references not allowed`, true);
+          return;
+        }
+      }
+
+      value = whole;
+    } else if (value !== undefined && value !== '' && !validName(value)) {
       this.error(`${this.command}: \`${value}': invalid variable name for name reference`, true);
       return;
     }
 
-    if (value === name) {
+    // A reference to itself, or to one of its own elements
+    if (!append && (value === name || value?.startsWith(`${name}[`))) {
       if (!this.ctx.getFunctionScope()) {
         this.error(`${this.command}: ${name}: nameref variable self references not allowed`, true);
         return;
       }
 
-      this.stderr += `${this.command}: warning: ${name}: circular name reference\n`;
+      // And a second time as the value is bound, as bash says it
+      this.warn(`${this.command}: warning: ${name}: circular name reference`);
+      this.warn(`warning: ${name}: circular name reference`);
     }
 
     const own = local ? target.getOwnVariables()[name] : undefined;
@@ -522,8 +567,7 @@ export async function declareCommand(command: Command, ctx: ExecContextIf, args:
       declaration.showWithAttributes();
     }
 
-    const result = declaration.result();
-    return { code: result.code, stdout: result.stdout || undefined, stderr: result.stderr || undefined };
+    return declaration.result();
   }
 
   if (opts.print && command !== 'export' && command !== 'readonly') {
@@ -532,9 +576,7 @@ export async function declareCommand(command: Command, ctx: ExecContextIf, args:
     for (const name of names) await declaration.declare(name);
   }
 
-  const result = declaration.result();
-
-  return { code: result.code, stdout: result.stdout || undefined, stderr: result.stderr || undefined };
+  return declaration.result();
 }
 
 /** Every function as `set` ends its listing with them; posix mode leaves them out. */

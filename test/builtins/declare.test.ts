@@ -1,7 +1,11 @@
 import { assertEquals, assertStringIncludes } from '@std/assert';
 import { declareBuiltin, typesetBuiltin } from '../../src/builtins/declare.ts';
 import { ExecContext } from '../../src/context.ts';
+import type { BuiltinResult } from '../../src/builtins/types.ts';
 import type { ShellIf } from '../../src/types.ts';
+
+/** What a builtin wrote to one stream, whether in order in `output` or all at once. */
+const written = (result: BuiltinResult, stream: 'stdout' | 'stderr') => (result.output ?? []).map((part) => part[stream] ?? '').join('') + (result[stream] ?? '');
 
 // No-op execute function for tests
 const noopExecute = async (_script: string) => 0;
@@ -60,7 +64,7 @@ Deno.test('declare builtin', async (t) => {
     ctx.setEnv({ foo: 'bar' });
     const result = await declareBuiltin(ctx, ['-p', 'foo'], mockShell, noopExecute);
     assertEquals(result.code, 0);
-    assertStringIncludes(result.stdout || '', 'foo="bar"');
+    assertStringIncludes(written(result, 'stdout'), 'foo="bar"');
   });
 
   await t.step('-p for non-existent variable returns error', async () => {
@@ -86,7 +90,7 @@ Deno.test('declare builtin', async (t) => {
     // Try to modify it
     result = await declareBuiltin(ctx, ['CONST=20'], mockShell, noopExecute);
     assertEquals(result.code, 1);
-    assertStringIncludes(result.stderr || '', 'readonly');
+    assertStringIncludes(written(result, 'stderr'), 'readonly');
   });
 
   await t.step('-i declares integer variable', async () => {

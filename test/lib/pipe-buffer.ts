@@ -75,17 +75,29 @@ export class PipeBuffer {
     }
   }
 
-  async read(maxBytes: number): Promise<Uint8Array> {
+  /**
+   * Up to `maxBytes`, waiting for some; empty at EOF. A reader that gives up
+   * through `signal` gets nothing, and what comes later stays for the next one.
+   */
+  async read(maxBytes: number, signal?: AbortSignal): Promise<Uint8Array> {
     if (this.capacity === 0) {
       return new Uint8Array(0);
     }
 
     while (this.size === 0) {
-      if (this._closed) {
+      if (this._closed || signal?.aborted) {
         return new Uint8Array(0);
       }
 
-      await new Promise<void>((res) => this.readWaiters.push(res));
+      await new Promise<void>((res) => {
+        const wake = () => {
+          signal?.removeEventListener('abort', wake);
+          res();
+        };
+
+        this.readWaiters.push(wake);
+        signal?.addEventListener('abort', wake, { once: true });
+      });
     }
 
     const toRead = Math.min(maxBytes, this.size);

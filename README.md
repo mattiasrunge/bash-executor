@@ -125,6 +125,17 @@ to the variable and not to its name. `getVariable`/`getVariables` show them,
 strings and `getParams()` the rest, as before. `BASH_ALIASES` is the alias table
 and `BASH_CMDS` the hash table, as in bash.
 
+A name reference (`declare -n`, `local -n ref=$1`) reads and assigns what it
+refers to. One that leads round in a circle warns `circular name reference`, as
+bash does, and in a function reads and assigns the shell's variable of that name.
+
+`time [-p] pipeline` reports on the shell's stderr in `TIMEFORMAT`, or POSIX's
+format after `-p`; the CPU times, its own and `times`', come from the optional
+`cpuTimes` callback on `ShellIf`, and are zero without one. `coproc [NAME] command`
+runs the command as a job with a pipe each way, the shell's ends under high
+descriptors in `NAME[0]` (read) and `NAME[1]` (write): closing `NAME[1]`, or the
+shell ending, is the end of the command's input.
+
 `type`, `declare -f` and `set` print a function as bash does (`printFunction`),
 from the source it was defined in. `export -f name` hands it to the commands the
 shell runs as `BASH_FUNC_name%%`, the variable bash reads it back from; a host

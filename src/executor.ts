@@ -13,6 +13,7 @@ import {
   type AstNodeCommand,
   type AstNodeCompoundList,
   type AstNodeConditionalCommand,
+  type AstNodeCoproc,
   type AstNodeFor,
   type AstNodeFunction,
   type AstNodeIf,
@@ -37,6 +38,7 @@ import { assocKeys } from './builtins/variable-listing.ts';
 import type { ErrorPosition } from './errors.ts';
 import { exportedFunctionName, exportedFunctionText, functionEnvName } from './print-command.ts';
 import { singleQuoted } from './quote.ts';
+import { cpuTime, timeReport } from './timing.ts';
 import { contextVariables, evaluateArithmeticText } from './arith.ts';
 import { bracketExpression, globToRegExp, globToRegexSource, posixRegexToSource, quoteGlob, quoteRegex, unquoteGlob } from './pattern.ts';
 import {
@@ -592,6 +594,11 @@ export class AstExecutor {
       return this.executeInBackground(node, ctx);
     }
 
+    // `time pipeline`, reported as it ends; `time ! cmd` times the negation
+    if (node.time) {
+      return this.executeTimed(node, ctx);
+    }
+
     // `! ( … )`, `! { …; }`, `! if …`: a command and a pipeline negate their
     // own status; any other command is negated here. `set -e` does not act on
     // a negated command, so it runs with errexit held off
@@ -642,8 +649,148 @@ export class AstExecutor {
         return this.executeArithmeticCommand(node as AstNodeArithmeticCommand, ctx);
       case 'ConditionalCommand':
         return this.executeConditionalCommand(node as AstNodeConditionalCommand, ctx);
+      case 'Coproc':
+        return this.executeCoproc(node as AstNodeCoproc, ctx);
       default:
         throw new UnknownNodeTypeError(node.type, this.getSourceLocation(node), this.currentSource);
+    }
+  }
+
+  /**
+   * `time`: the elapsed time and the CPU time the pipeline used, the host's
+   * commands' included, written to the shell's stderr in `TIMEFORMAT` (POSIX's
+   * format after `-p`) once it ends. The status is the pipeline's own.
+   */
+  private async executeTimed(node: AstNode, ctx: ExecContextIf): Promise<number> {
+    const started = performance.now();
+    const before = await cpuTime(this.shell);
+    const code = await this.executeNode({ ...node, time: undefined }, ctx);
+    const after = await cpuTime(this.shell);
+
+    const { text, warnings } = timeReport(ctx, node.time!.posix, {
+      real: (performance.now() - started) / 1000,
+      user: after.user + after.childrenUser - before.user - before.childrenUser,
+      system: after.system + after.childrenSystem - before.system - before.childrenSystem,
+    });
+
+    for (const warning of warnings) {
+      await this.diagnose(ctx, warning);
+    }
+
+    if (text) {
+      await this.shell.pipeWrite(ctx.getStderr(), text).catch(() => {});
+    }
+
+    return code;
+  }
+
+  /** The coprocesses started, by the shell's descriptor for each end: `NAME[0]` reads its output, `NAME[1]` writes its input. */
+  private coprocFds = new Map<string, { name: string; index: 0 | 1; pipe: string }>();
+
+  /** The coprocesses still to be cleaned up after, with the job each runs as. */
+  private coprocs: { name: string; fds: string[]; done: boolean }[] = [];
+
+  /**
+   * `coproc [NAME] command`: the command runs as a job with a pipe to its stdin
+   * and one from its stdout. The shell holds the other ends under high
+   * descriptors, picked as bash picks them (63 and 60 while nothing else has
+   * those), in `NAME[0]` (to read) and `NAME[1]` (to write), with the job's pid
+   * in `NAME_PID` and `$!`. The command sees end of input once the shell closes
+   * `NAME[1]`, or ends.
+   */
+  protected async executeCoproc(node: AstNodeCoproc, ctx: ExecContextIf): Promise<number> {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(node.name)) {
+      await this.diagnose(ctx, `\`${node.name}': not a valid identifier`);
+      return 1;
+    }
+
+    // A coprocess that has ended gives its descriptors back before the next takes some
+    for (const done of this.coprocs.filter((coproc) => coproc.done)) {
+      for (const fd of done.fds.filter((fd) => this.coprocFds.has(fd))) {
+        this.coprocFds.delete(fd);
+        ctx.closeFd(fd);
+      }
+    }
+    this.coprocs = this.coprocs.filter((coproc) => !coproc.done);
+
+    const input = await this.shell.pipeOpen();
+    const output = await this.shell.pipeOpen();
+    const free = this.freeHighFds(ctx, 4);
+    const [readFd, writeFd] = [free[0], free[3]];
+    const record = { name: node.name, fds: [readFd, writeFd], done: false };
+    const command = this.nodeSource(node);
+
+    const run = async (jobCtx: ExecContextIf): Promise<number> => {
+      jobCtx.redirectStdin(input);
+      jobCtx.redirectStdout(output);
+
+      try {
+        const code = await this.executeNode(node.body, jobCtx);
+
+        return isExitSignal(code) ? getExitCode(code) : isReturnSignal(code) ? getReturnCode(code) : code;
+      } finally {
+        record.done = true;
+        await this.shell.pipeClose(output).catch(() => {});
+      }
+    };
+
+    let pid = '';
+
+    if (this.shell.jobs) {
+      const handle = await this.shell.jobs.start(ctx, run, command);
+
+      ctx.getJobTable().add(handle, command);
+      pid = handle.pid;
+    } else if (this.shell.executeBackground) {
+      await this.shell.executeBackground(ctx, run, command);
+    } else {
+      handled(run(ctx.subContext()));
+    }
+
+    this.coprocs.push(record);
+    this.coprocFds.set(readFd, { name: node.name, index: 0, pipe: output });
+    this.coprocFds.set(writeFd, { name: node.name, index: 1, pipe: input });
+    ctx.redirectFd(readFd, output);
+    ctx.redirectFd(writeFd, input);
+    ctx.setArray(node.name, [readFd, writeFd]);
+    ctx.setParams({ [`${node.name}_PID`]: pid, '!': pid });
+
+    return 0;
+  }
+
+  /** `count` descriptors below 64 that are not in use, highest first, as bash moves a new pipe's ends up out of the way. */
+  private freeHighFds(ctx: ExecContextIf, count: number): string[] {
+    const free: string[] = [];
+
+    for (let fd = 63; fd > 2 && free.length < count; fd--) {
+      if (ctx.getFd(String(fd)) === undefined) free.push(String(fd));
+    }
+
+    return free;
+  }
+
+  /**
+   * A descriptor the shell closed or moved away. When it was a coprocess's end,
+   * its element of `NAME` becomes -1, as in bash; and when nothing else holds
+   * the pipe to the coprocess's input, it sees the input end.
+   */
+  private async descriptorClosed(ctx: ExecContextIf, fd: string): Promise<void> {
+    const end = this.coprocFds.get(fd);
+
+    if (!end) return;
+
+    this.coprocFds.delete(fd);
+
+    if (ctx.getArray(end.name)?.[end.index] === fd) {
+      ctx.setArrayElement(end.name, end.index, '-1');
+    }
+
+    if (end.index === 1) {
+      for (let n = 0; n < 256; n++) {
+        if (ctx.getFd(String(n)) === end.pipe) return;
+      }
+
+      await this.shell.pipeClose(end.pipe).catch(() => {});
     }
   }
 
@@ -768,6 +915,13 @@ export class AstExecutor {
           const fd = sourceFd || '1';
           await this.shell.fdClose?.(fd);
           ctx.closeFd(fd);
+          await this.descriptorClosed(ctx, fd);
+          continue;
+        }
+
+        // Move FD: N>&M- is N>&M and then M>&-
+        if (/^\d+-$/.test(target)) {
+          await this.moveDescriptor(ctx, sourceFd || '1', target.slice(0, -1));
           continue;
         }
 
@@ -797,6 +951,12 @@ export class AstExecutor {
         if (target === '-') {
           await this.shell.fdClose?.(sourceFd);
           ctx.closeFd(sourceFd);
+          await this.descriptorClosed(ctx, sourceFd);
+          continue;
+        }
+
+        if (/^\d+-$/.test(target)) {
+          await this.moveDescriptor(ctx, sourceFd, target.slice(0, -1));
           continue;
         }
 
@@ -815,6 +975,23 @@ export class AstExecutor {
     }
 
     return temporary;
+  }
+
+  /** `N<&M-`, `N>&M-`: N becomes what M was, and M is closed. */
+  private async moveDescriptor(ctx: ExecContextIf, fd: string, from: string): Promise<void> {
+    const target = ctx.getFd(from);
+
+    if (target === undefined) {
+      throw new CommandAbortError(`${from}: Bad file descriptor`, { code: 'E_BAD_FD' });
+    }
+
+    ctx.redirectFd(fd, target);
+
+    if (Number(from) > 2) {
+      ctx.closeFd(from);
+    }
+
+    await this.descriptorClosed(ctx, from);
   }
 
   /** Descriptors handed out by `exec {fd}>file`, so the next one takes another number. */
@@ -2679,9 +2856,9 @@ export class AstExecutor {
 
     // Variable tests
     if (op === '-v') {
-      // -v varname: true if variable is set
+      // -v name: whether it is set — an array by its element 0, `a[k]` by that element, `a[@]` by having any
       const params = { ...ctx.getEnv(), ...ctx.getParams() };
-      return arg in params;
+      return await this.isParameterSet(arg, ctx, params);
     }
 
     // File tests - delegate to shell.execCommand('test', ...)
@@ -3071,11 +3248,47 @@ export class AstExecutor {
     let { name, subscript } = assignment;
     const { append, values, list } = assignment;
 
+    // An assignment bash refuses ends the command line, as a readonly one does,
+    // except before a command, where only that command goes without it
+    const refuse = async (message: string): Promise<void> => {
+      if (local) return await this.diagnose(ctx, message);
+
+      throw new CommandAbortError(message, { code: 'E_ASSIGNMENT' });
+    };
+
+    // A reference round in a circle: a function's own assigns the shell's
+    // variable of that name, one of the shell's refuses
+    if (subscript === undefined && ctx.namerefLoops(name)) {
+      const message = `warning: ${name}: circular name reference`;
+
+      if (!ctx.getVariable(name)?.local) return await refuse(message);
+
+      await this.diagnose(ctx, message);
+    }
+
     // Through a name reference to an element, `declare -n r='a[2]'; r=x` assigns a[2]
     if (subscript === undefined && !list) {
       const element = ctx.resolveNameref(name).match(/^([A-Za-z_][A-Za-z0-9_]*)\[(.*)\]$/s);
 
       if (element) [, name, subscript] = element;
+
+      // `declare -n r='a[@]'; r=x` names no one element
+      if (element && (subscript === '@' || subscript === '*')) {
+        return await refuse(`${name}[${subscript}]: bad array subscript`);
+      }
+
+      // An element of an array that is itself a reference: in a function, `local -n a='a[0]'`,
+      // bash gives up; the shell's own reference stops being one and becomes the array
+      const base = element ? ctx.getVariable(name) : undefined;
+
+      if (base?.attributes.includes('n')) {
+        if (base.local) {
+          return await refuse(`\`${name}[${subscript}]': not a valid identifier`);
+        }
+
+        await this.diagnose(ctx, `warning: ${name}: removing nameref attribute`);
+        ctx.unsetVariable(name, { noref: true });
+      }
     }
 
     // The call stack is the shell's to keep: assigning FUNCNAME does nothing, as in bash
@@ -3416,6 +3629,10 @@ export class AstExecutor {
     }
 
     if (subscript === undefined) {
+      if (ctx.namerefLoops(name)) {
+        await this.diagnose(ctx, `warning: ${name}: circular name reference`);
+      }
+
       // `$a` on an array is its first element, as in bash; on an associative
       // array, the one whose key is 0
       return params[name] ?? ctx.getArray(name)?.[0] ?? ctx.getAssoc(name)?.['0'] ?? '';
@@ -3451,8 +3668,9 @@ export class AstExecutor {
   protected async isParameterSet(parameter: string | number, ctx: ExecContextIf, params: Record<string, string>): Promise<boolean> {
     const { name, subscript } = this.splitSubscript(parameter);
 
+    // An array's name alone is its element 0, set or not
     if (subscript === undefined) {
-      return params[name] !== undefined || ctx.getArray(name) !== undefined || ctx.getAssoc(name) !== undefined;
+      return params[name] !== undefined || ctx.getArray(name)?.[0] !== undefined || ctx.getAssoc(name)?.['0'] !== undefined;
     }
 
     if (subscript === '@' || subscript === '*') {

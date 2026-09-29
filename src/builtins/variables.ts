@@ -155,8 +155,9 @@ export const unsetBuiltin: BuiltinHandler = async (ctx, args) => {
       continue;
     }
 
-    // `unset a[1]` removes one element and leaves a hole, `unset a` the whole array
-    const element = subscripted(name);
+    // `unset a[1]` removes one element and leaves a hole, `unset a` the whole array; so
+    // does `unset ref` after `declare -n ref='a[1]'`
+    const element = subscripted(name) ?? subscripted(ctx.resolveNameref(name));
 
     if (element) {
       // An element of a plain variable is no element at all

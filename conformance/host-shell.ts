@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { isAbsolute, join, resolve } from '@std/path';
-import type { ExecCommandOptions, ExecContextIf, JobHandle, JobHostIf, PathTestOperation, ShellIf } from '../mod.ts';
+import type { CpuTimes, ExecCommandOptions, ExecContextIf, JobHandle, JobHostIf, PathTestOperation, ShellIf } from '../mod.ts';
 import { encodeShellText } from '../mod.ts';
 import { globToRegexSource } from '../src/pattern.ts';
 import { PipeBuffer } from '../test/lib/pipe-buffer.ts';
@@ -78,6 +78,9 @@ export type RealShellOptions = {
 type JobRecord = { children: Set<Deno.ChildProcess>; abort: AbortController; finished: boolean; killedBy?: number };
 
 /** Signals whose default is to do nothing; every other one ends what it reaches. */
+/** The kernel's USER_HZ, what /proc counts CPU time in. */
+const CLOCK_TICKS = 100;
+
 const HARMLESS_SIGNALS = new Set(['0', 'CHLD', 'CONT', 'URG', 'WINCH']);
 
 /**
@@ -322,8 +325,12 @@ export class RealShell implements ShellIf {
 
     const pumps: Promise<void>[] = [];
 
+    // A child that ends without reading its input to the end, as `sleep` does
+    // with a coprocess's, leaves the rest in the pipe for whoever reads next
+    const exited = new AbortController();
+
     if (stdin !== '0') {
-      pumps.push(this.pumpIn(stdin, child.stdin));
+      pumps.push(this.pumpIn(stdin, child.stdin, exited.signal));
     }
     if (stdout !== '1') {
       pumps.push(this.pumpOut(child.stdout, stdout));
@@ -334,6 +341,8 @@ export class RealShell implements ShellIf {
 
     const status = await child.status;
 
+    exited.abort();
+
     // The input pump stops by itself once the child's stdin is gone; the output
     // pumps end at the child's EOF
     await Promise.allSettled(pumps);
@@ -342,7 +351,7 @@ export class RealShell implements ShellIf {
   }
 
   /** Feed a child's stdin from one of our endpoints. */
-  private async pumpIn(source: string, sink: WritableStream<Uint8Array>): Promise<void> {
+  private async pumpIn(source: string, sink: WritableStream<Uint8Array>, exited: AbortSignal): Promise<void> {
     const writer = sink.getWriter();
 
     try {
@@ -353,7 +362,7 @@ export class RealShell implements ShellIf {
         let chunk: Uint8Array;
 
         if (pipe) {
-          chunk = await pipe.read(16384);
+          chunk = await pipe.read(16384, exited);
         } else if (handle) {
           const buf = new Uint8Array(16384);
           const n = await handle.file.read(buf);
@@ -406,6 +415,16 @@ export class RealShell implements ShellIf {
     this.track(run(ctx));
 
     return await 0;
+  }
+
+  /** From /proc: fields 14–17 of stat are user and system time, the process's and its reaped children's, in clock ticks. */
+  async cpuTimes(): Promise<CpuTimes> {
+    const stat = await Deno.readTextFile('/proc/self/stat');
+    // The command name, in parentheses, may hold blanks: count from after it
+    const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+    const seconds = (n: number) => Number(fields[n - 3]) / CLOCK_TICKS;
+
+    return { user: seconds(14), system: seconds(15), childrenUser: seconds(16), childrenSystem: seconds(17) };
   }
 
   // ===== Pipes and descriptors =====

@@ -54,3 +54,49 @@ Deno.test('indirect expansion', async (t) => {
     assertEquals(result.stderr, 'x: invalid indirect expansion\na b: invalid variable name\n');
   });
 });
+
+Deno.test('circular name references', async (t) => {
+  await t.step("a function's reference to its own name warns, and reads and assigns the shell's variable", async () => {
+    const result = await run('f() { typeset -n v=$1; v+=X; echo "in $v"; }; v=g; f v; echo $v');
+
+    assertEquals(result.stdout, 'in gX\ngX\n');
+    assertEquals(
+      result.stderr,
+      'typeset: warning: v: circular name reference\nwarning: v: circular name reference\nwarning: v: circular name reference\nwarning: v: circular name reference\n',
+    );
+  });
+
+  await t.step('a chain round at the top level has no value, and assigning it ends the line', async () => {
+    const result = await run('declare -n v=w w=x x=v; echo "[$x]"; x=4; echo not here\necho next');
+
+    assertEquals(result.stdout, '[]\nnext\n');
+    assertEquals(result.stderr, 'warning: x: circular name reference\nwarning: x: circular name reference\n');
+  });
+
+  await t.step("a function's reference to its own element cannot be assigned", async () => {
+    const result = await run("f() { local -n a=$1; a=X; }; a=(0); f 'a[0]'; echo not here\ndeclare -p a");
+
+    assertEquals(result.stdout, 'declare -a a=([0]="0")\n');
+    assertEquals(result.stderr.split('\n').slice(2).join('\n'), "`a[0]': not a valid identifier\n");
+  });
+
+  await t.step('ref+= adds to the name a reference holds, and may not make it its own', async () => {
+    const result = await run('typeset -n ref=re ref+=f; declare -n r=var r+=[@]; declare -p ref r; r=1; echo not here');
+
+    assertEquals(result.stdout, 'declare -n ref="re"\ndeclare -n r="var[@]"\n');
+    assertEquals(result.stderr, 'ref: nameref variable self references not allowed\nvar[@]: bad array subscript\n');
+  });
+
+  await t.step('an element assigned to a reference makes it an array', async () => {
+    const result = await run('declare -n x=array; declare -a x[1]=one; declare -n a=b b=a[1]; a=foo; declare -p x a');
+
+    assertEquals(result.stdout, 'declare -a x=([1]="one")\ndeclare -a a=([1]="foo")\n');
+    assertEquals(result.stderr, 'warning: x: removing nameref attribute\nwarning: a: removing nameref attribute\n');
+  });
+});
+
+Deno.test('[[ -v ]] on arrays is about the element named, 0 when none is', async () => {
+  const result = await run('a=(0); b=([1]=x); declare -A h=([k]=v); for t in a "a[0]" "a[1]" b "b[@]" "h[k]" h; do [[ -v $t ]] && echo "$t"; done; echo "${b-unset}"');
+
+  assertEquals(result.stdout, 'a\na[0]\nb[@]\nh[k]\nunset\n');
+});

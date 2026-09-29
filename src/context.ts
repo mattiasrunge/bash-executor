@@ -170,8 +170,8 @@ export class ExecContext implements ExecContextIf {
       ctx.pushDirStack(dir);
     }
 
-    // Copy arbitrary file descriptors
-    ctx.fds = { ...this.fds };
+    // Copy arbitrary file descriptors, which the shell's root context holds
+    ctx.fds = { ...this.rootFds() };
 
     // A subshell inherits the shell's options and cannot write them back
     ctx.options = { ...this.getShellOptions() };
@@ -227,7 +227,7 @@ export class ExecContext implements ExecContextIf {
         // What is exported goes; one that is not was never in the environment
         if (this.lookup(this.ref(name))?.variable.attrs.has('x')) this.unsetVariable(name);
       } else {
-        this.assignVariableValue(name, value).attrs.add('x');
+        this.assignVariableValue(name, value)?.attrs.add('x');
       }
     }
 
@@ -678,12 +678,14 @@ export class ExecContext implements ExecContextIf {
    * to itself, so assigning it gives it one. bash gives up after 8 steps.
    */
   resolveNameref(name: string): string {
+    if (this.namerefLoops(name)) return name;
+
     let current = name;
 
     for (let depth = 0; depth < NAMEREF_MAX; depth++) {
       const variable = this.lookup(current)?.variable;
 
-      if (!variable?.attrs.has('n') || typeof variable.value !== 'string' || variable.value === '' || variable.value === current) return current;
+      if (!variable?.attrs.has('n') || typeof variable.value !== 'string' || variable.value === '') return current;
 
       current = variable.value;
 
@@ -691,6 +693,26 @@ export class ExecContext implements ExecContextIf {
     }
 
     return current;
+  }
+
+  /**
+   * Whether following a name's references comes back round, which bash takes
+   * 8 steps to be sure of: `declare -n a=b b=a`, or a function's `local -n v=$1`
+   * called with `v`. Such a name has no value and takes none, except in a
+   * function, where bash reads and assigns the shell's variable of that name.
+   */
+  namerefLoops(name: string): boolean {
+    let current = name;
+
+    for (let depth = 0; depth <= NAMEREF_MAX; depth++) {
+      const variable = this.lookup(current)?.variable;
+
+      if (!variable?.attrs.has('n') || typeof variable.value !== 'string' || variable.value === '' || variable.value.includes('[')) return false;
+
+      current = variable.value;
+    }
+
+    return true;
   }
 
   /** A name references followed, and without the subscript one to an element carries: what array operations take. */
@@ -709,6 +731,16 @@ export class ExecContext implements ExecContextIf {
 
   /** What `$name` gives, name references followed: a string, element 0 of an array, or the element referred to. */
   private scalarOf(name: string): string | undefined {
+    if (this.namerefLoops(name)) {
+      // A function's reference round to itself reads the shell's variable of that name, as it assigns it
+      const root = this.root();
+      const global = this.lookup(name)!.scope !== root ? root.vars.get(name) : undefined;
+
+      const value = global?.value;
+
+      return Array.isArray(value) ? value[0] : value && typeof value === 'object' ? value['0'] : value;
+    }
+
     const resolved = this.resolveNameref(name);
     const element = this.element(resolved);
     const variable = this.lookup(element?.name ?? resolved)?.variable;
@@ -769,7 +801,14 @@ export class ExecContext implements ExecContextIf {
   }
 
   /** Assign a variable wherever it is, or in the shell when it is nowhere; through a name reference, what it refers to. */
-  private assignVariableValue(name: string, value: string): Variable {
+  private assignVariableValue(name: string, value: string): Variable | undefined {
+    if (this.namerefLoops(name)) {
+      const root = this.root();
+
+      // A function's reference round to itself: bash assigns the shell's variable instead, when that one leads somewhere
+      return this.lookup(name)!.scope !== root && !root.namerefLoops(name) ? root.assignVariableValue(name, value) : undefined;
+    }
+
     const resolved = this.resolveNameref(name);
     const element = this.element(resolved);
 
@@ -1044,6 +1083,10 @@ export class ExecContext implements ExecContextIf {
       return;
     }
     this.fds[fd] = target;
+  }
+
+  private rootFds(): Record<string, string> {
+    return this.parent ? this.parent.rootFds() : this.fds;
   }
 
   closeFd(fd: string): void {

@@ -363,6 +363,9 @@ class CommandPrinter {
     if (this.skipThisIndent) this.skipThisIndent--;
     else this.indent(this.indentation);
 
+    const time = (command as AstNode).time;
+
+    if (time) this.cprintf(time.posix ? 'time -p ' : 'time ');
     if ((command as { bang?: boolean }).bang) this.cprintf('! ');
 
     let redirects: AstNodeRedirect[] | undefined;
@@ -396,6 +399,14 @@ class CommandPrinter {
       case 'Function':
         this.printFunctionDef(command as AstNodeFunction);
         break;
+
+      case 'Coproc': {
+        const node = command as AstNode & { name: string; body: AstNode };
+        this.cprintf(`coproc ${node.name} `);
+        this.skipThisIndent++;
+        this.makeCommandString(node.body);
+        break;
+      }
 
       case 'CompoundList':
         this.printGroupCommand(command as AstNodeCompoundList);

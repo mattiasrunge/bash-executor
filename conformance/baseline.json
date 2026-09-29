@@ -115,7 +115,7 @@
     "cond-regexp2.sub": true,
     "cond-regexp3.sub": true,
     "cond.tests": true,
-    "coproc.tests": false,
+    "coproc.tests": true,
     "cprint.tests": true,
     "dbg-support.sub": true,
     "dbg-support.tests": true,
@@ -291,14 +291,14 @@
     "nameref.tests": true,
     "nameref1.sub": true,
     "nameref10.sub": true,
-    "nameref11.sub": false,
+    "nameref11.sub": true,
     "nameref12.sub": true,
     "nameref13.sub": true,
     "nameref14.sub": true,
     "nameref15.sub": true,
     "nameref16.sub": true,
     "nameref17.sub": true,
-    "nameref18.sub": false,
+    "nameref18.sub": true,
     "nameref19.sub": true,
     "nameref2.sub": true,
     "nameref20.sub": true,
@@ -436,7 +436,7 @@
     "type1.sub": true,
     "type2.sub": true,
     "type3.sub": true,
-    "type4.sub": false,
+    "type4.sub": true,
     "unicode1.sub": true,
     "unicode2.sub": true,
     "unicode3.sub": true,
@@ -499,9 +499,9 @@
       "reference": "pass"
     },
     "run-array": {
-      "upstream": 0.786,
+      "upstream": 0.788,
       "pass": false,
-      "stdout": 0.825,
+      "stdout": 0.827,
       "reference": "pass"
     },
     "run-array2": {
@@ -529,9 +529,9 @@
       "reference": "pass"
     },
     "run-builtins": {
-      "upstream": 0.892,
+      "upstream": 0.911,
       "pass": false,
-      "stdout": 0.897,
+      "stdout": 0.917,
       "reference": "pass"
     },
     "run-case": {
@@ -577,9 +577,9 @@
       "reference": "pass"
     },
     "run-coproc": {
-      "upstream": 0,
-      "pass": false,
-      "stdout": 0,
+      "upstream": 1,
+      "pass": true,
+      "stdout": 1,
       "reference": "pass"
     },
     "run-cprint": {
@@ -770,9 +770,9 @@
       "reference": "pass"
     },
     "run-nameref": {
-      "upstream": 0.747,
+      "upstream": 0.859,
       "pass": false,
-      "stdout": 0.811,
+      "stdout": 0.887,
       "reference": "pass"
     },
     "run-new-exp": {
@@ -848,9 +848,9 @@
       "reference": "pass"
     },
     "run-posixpipe": {
-      "upstream": 0.674,
-      "pass": false,
-      "stdout": 0.889,
+      "upstream": 1,
+      "pass": true,
+      "stdout": 1,
       "reference": "env"
     },
     "run-precedence": {
@@ -878,9 +878,9 @@
       "reference": "pass"
     },
     "run-quotearray": {
-      "upstream": 0.46,
+      "upstream": 0.472,
       "pass": false,
-      "stdout": 0.565,
+      "stdout": 0.588,
       "reference": "pass"
     },
     "run-read": {
@@ -891,7 +891,7 @@
       "timeout": true
     },
     "run-redir": {
-      "upstream": 0.671,
+      "upstream": 0.673,
       "pass": false,
       "stdout": 0.691,
       "reference": "pass"
@@ -958,9 +958,9 @@
       "reference": "pass"
     },
     "run-type": {
-      "upstream": 0.857,
+      "upstream": 0.978,
       "pass": false,
-      "stdout": 0.857,
+      "stdout": 0.977,
       "reference": "pass"
     },
     "run-varenv": {
@@ -970,9 +970,9 @@
       "reference": "pass"
     },
     "run-vredir": {
-      "upstream": 0.645,
+      "upstream": 0.652,
       "pass": false,
-      "stdout": 0.686,
+      "stdout": 0.693,
       "reference": "env"
     }
   }

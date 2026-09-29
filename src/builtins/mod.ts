@@ -12,6 +12,7 @@ export * from './types.ts';
 export { argBuiltin } from './arg.ts';
 export { aliasBuiltin, unaliasBuiltin } from './alias.ts';
 export { callerBuiltin } from './caller.ts';
+export { timesBuiltin } from './times.ts';
 export { cdBuiltin } from './cd.ts';
 export { createCompgenBuiltin } from './compgen.ts';
 export { clearAttributes, declareBuiltin, isReadonly, typesetBuiltin } from './declare.ts';
@@ -56,6 +57,7 @@ export { exportBuiltin, localBuiltin, unsetBuiltin } from './variables.ts';
 import { argBuiltin } from './arg.ts';
 import { aliasBuiltin, unaliasBuiltin } from './alias.ts';
 import { callerBuiltin } from './caller.ts';
+import { timesBuiltin } from './times.ts';
 import { cdBuiltin } from './cd.ts';
 import { createCompgenBuiltin } from './compgen.ts';
 import { declareBuiltin, typesetBuiltin } from './declare.ts';
@@ -144,6 +146,7 @@ export function createBuiltinRegistry(): BuiltinRegistry {
   registry.set('hash', createHashBuiltin(registry));
   registry.set('enable', createEnableBuiltin(registry));
   registry.set('caller', callerBuiltin);
+  registry.set('times', timesBuiltin);
   registry.set('compgen', createCompgenBuiltin(registry));
 
   // Phase 3: Arithmetic

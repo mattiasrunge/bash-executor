@@ -5,10 +5,10 @@ see [README.md](README.md) for what the scores mean.
 
 | Measure | Result |
 | --- | --- |
-| Test files that parse | 451 / 471 |
-| `run-*` scripts passing | 22 / 83 (real bash here: 74) |
-| Mean upstream score | 71% |
-| Mean stdout score | 75% |
+| Test files that parse | 455 / 471 |
+| `run-*` scripts passing | 24 / 83 (real bash here: 74) |
+| Mean upstream score | 73% |
+| Mean stdout score | 76% |
 
 ## Gaps
 
@@ -20,7 +20,6 @@ that command, while the parser here takes the whole file at once. Some files hol
 | Error | Files | Count |
 | --- | --- | --- |
 | Unclosed here-document | comsub-eof0.sub, comsub-eof2.sub, comsub-eof3.sub, heredoc.tests, heredoc3.sub, heredoc7.sub | 6 |
-| Unexpected 'Rbrace' | coproc.tests, nameref11.sub, nameref18.sub, type4.sub | 4 |
 | Unexpected 'CONTINUE' | assoc5.sub, posixexp.tests, quote1.sub | 3 |
 | Unexpected 'CLOSE_PAREN' | comsub5.sub, comsub6.sub | 2 |
 | Unexpected 'In' | alias4.sub | 1 |
@@ -47,10 +46,7 @@ Bash builtins that reached the host as external commands.
 
 Reserved words the parser handed over as a command name.
 
-| Name | Tests | Times hit |
-| --- | --- | --- |
-| time | posixpipe | 6 |
-| coproc | type | 1 |
+None.
 
 ### Syntax errors at run time
 
@@ -60,7 +56,6 @@ What bash-ts refused to parse as it ran: test scripts, the `.sub` files and `-c`
 | --- | --- | --- |
 | Unexpected 'CONTINUE' | assoc, comsub-eof, posixexp, quote | 4 |
 | Unclosed here-document | comsub-eof, exportfunc, heredoc | 7 |
-| Unexpected 'Rbrace' | coproc, nameref, type | 4 |
 | Unexpected 'CLOSE_PAREN' | comsub, parser | 3 |
 | Unexpected 'In' | alias, comsub-posix | 2 |
 | Unexpected 'OPEN_PAREN' | array, parser | 2 |
@@ -96,7 +91,6 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | syntax error: Unexpected 'CONTINUE' | assoc, comsub-eof, posixexp, quote |
 | foo: command not found | alias, comsub, nquote |
 | fooN: command not found | alias, builtins, comsub |
-| syntax error: Unexpected 'Rbrace' | coproc, nameref, type |
 | ulimit: command not found | procsub, redir, vredir |
 | syntax error: Unexpected 'In' | alias, comsub-posix |
 | syntax error: Unexpected 'OPEN_PAREN' | array, parser |
@@ -129,10 +123,11 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | ever: command not found | alias |
 | myalias: command not found | alias |
 | aN: command not found | alias |
+| ((: ++: syntax error: operand expected (error token is "+") | arith |
+| ((: --: syntax error: operand expected (error token is "-") | arith |
+| ((: x=N y=N: syntax error in expression (error token is "y=N") | arith |
+| a[b[c]d]=e: command not found | arith |
 | ﷑second): command not found | array |
-| c: readonly variable | array |
-| let: a=(N﷑+﷑N): missing ')' (error token is "﷑+﷑N)") | array |
-| ﷑[N]=: No such file or directory | array |
 
 ## Per test
 
@@ -149,7 +144,7 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | assoc | pass | no | 55% | 65% | 72c72 ⏎ &lt; 4 -- ⏎ --- |
 | attr | pass | yes | 100% | 100% |  |
 | braces | pass | no | 99% | 99% | 23c23 ⏎ &lt; bazx bazy ⏎ --- |
-| builtins | pass | no | 89% | 90% | 0a1 ⏎ &gt; 1000 ⏎ 65a67 |
+| builtins | pass | no | 91% | 92% | 0a1 ⏎ &gt; 1000 ⏎ 104,107c105,108 |
 | case | pass | yes | 100% | 100% |  |
 | casemod | pass | yes | 100% | 100% |  |
 | complete | pass | no | 0% | 0% | 1,37c1,63 ⏎ &lt; ./complete.tests: line 19: complete: command not found ⏎ &lt; ./complete.tests: line 22: complete: command not found |
@@ -157,7 +152,7 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | comsub-eof | pass | no | 39% | 77% | 1c1 ⏎ &lt; ./comsub-eof0.sub: syntax error: Unclosed here-document ⏎ --- |
 | comsub-posix | pass | no | 86% | 99% | 62c62,63 ⏎ &lt; ./comsub-posix1.sub: line 1: syntax error: Parse error on line 1: Unexpected 'EOF' ⏎ --- |
 | cond | pass | no | 99% | 99% | 82a83 ⏎ &gt; ok 4a ⏎ 89a91 |
-| coproc | pass | no | 0% | 0% | 1c1,10 ⏎ &lt; ./coproc.tests: line 17: syntax error: Parse error on line 17: Unexpected 'Rbrace' ⏎ --- |
+| coproc | pass | yes | 100% | 100% |  |
 | cprint | pass | yes | 100% | 100% |  |
 | dbg-support | pass | no | 20% | 19% | 1,3c1,2 ⏎ &lt; debug lineno: 1 main ⏎ &lt; debug lineno: 1 main |
 | dbg-support2 | pass | no | 14% | 14% | 1,2c1,6 ⏎ &lt; lineno: 1 (18) main ⏎ &lt; lineno: 1 (18) main |
@@ -189,7 +184,7 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | lastpipe | pass | yes | 100% | 100% |  |
 | mapfile | pass | no | 62% | 62% | 16a17,32 ⏎ &gt; a[0] Abcdefghijklmnop ⏎ &gt; [1] aBcdefghijklmnop |
 | more-exp | pass | no | 81% | 89% | 20,23c20,30 ⏎ &lt; argv[1] = &lt;a b c d e f&gt; ⏎ &lt; argv[1] = &lt;a b c d e f&gt; |
-| nameref | pass | no | 75% | 81% | 125c125,127 ⏎ &lt; global ⏎ --- |
+| nameref | pass | no | 86% | 89% | 80d79 ⏎ &lt; ./nameref4.sub: line 181: unset: x: not an array variable ⏎ 155d153 |
 | new-exp | pass | no | 88% | 91% | 1d0 ⏎ &lt; ./new-exp.tests: line 14: ((: == 0: syntax error: operand expected (error token is "== 0") ⏎ 7,8c6,7 |
 | nquote | pass | no | 76% | 81% | 7,10c7,10 ⏎ &lt; argv[1] = &lt;$hello,&gt; ⏎ &lt; argv[2] = &lt;$world&gt; |
 | nquote1 | pass | yes | 100% | 100% |  |
@@ -202,24 +197,24 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | posixexp | pass | no | 76% | 78% | 9c9 ⏎ &lt; argv[1] = &lt;a b&gt; ⏎ --- |
 | posixexp2 | pass | no | 0% | 0% | 1,3c1,40 ⏎ &lt; 1 ⏎ &lt; 2  |
 | posixpat | pass | yes | 100% | 100% |  |
-| posixpipe | env | no | 67% | 89% | 3,7d2 ⏎ &lt; /usr/bin/time: cannot run !: No such file or directory ⏎ &lt; Command exited with non-zero status 127 |
+| posixpipe | env | yes | 100% | 100% |  |
 | precedence | pass | no | 69% | 69% | 6c6 ⏎ &lt;   Truth 1 && Truth 2   \|\| Say 3   output=12 ⏎ --- |
 | printf | pass | yes | 100% | 100% |  |
 | procsub | pass | no | 67% | 70% | 15,17c15 ⏎ &lt; ./procsub.tests: line 63: ulimit: command not found ⏎ &lt; ./procsub.tests: line 67: ulimit: command not found |
 | quote | pass | no | 94% | 94% | 13,14c13 ⏎ &lt; foo\ ⏎ &lt; bar |
-| quotearray | pass | no | 46% | 56% | 1,12c1,8 ⏎ &lt; ./quotearray.tests: line 20: ((: $(echo uname &gt;&2): syntax error: operand expected (error token is "$(echo uname &gt;&2)") ⏎ &lt; declare -A assoc |
+| quotearray | pass | no | 47% | 59% | 1,12c1,8 ⏎ &lt; ./quotearray.tests: line 20: ((: $(echo uname &gt;&2): syntax error: operand expected (error token is "$(echo uname &gt;&2)") ⏎ &lt; declare -A assoc |
 | read | env | timeout | 42% | 50% | timeout |
 | redir | pass | no | 67% | 69% | 6c6 ⏎ &lt; ./redir.tests: a: No such file or directory ⏎ --- |
 | rhs-exp | pass | no | 92% | 92% | 1d0 ⏎ &lt; argv[1] = &lt;TDEFAULTS = -DSELECT_VECS=$selvecs&gt; ⏎ 2a2 |
 | rsh | pass | no | 6% | 0% | 1,11c1,16 ⏎ &lt; ./rsh1.sub: line 20: set: -r: invalid option ⏎ &lt; ./rsh1.sub: line 25: sh: command not found |
 | set-e | pass | yes | 100% | 100% |  |
 | set-x | pass | no | 76% | 83% | 0a1,2 ⏎ &gt; + (( i=0 )) ⏎ &gt; + (( i&lt;=5 )) |
-| shopt | pass | no | 84% | 84% | 307,335c307,309 ⏎ &lt; /home/mattias/m/git/bash-executor-conformance/conformance/.cache/work/ours/run-shopt/tmp/tmp.I4LBiuhMuf: 1: shopt: not found ⏎ &lt; 0a1,57 |
+| shopt | pass | no | 84% | 84% | 307,335c307,309 ⏎ &lt; /home/mattias/m/git/bash-executor-conformance/conformance/.cache/work/ours/run-shopt/tmp/tmp.nwJ91N6OQ2: 1: shopt: not found ⏎ &lt; 0a1,57 |
 | strip | pass | yes | 100% | 100% |  |
 | test | env | timeout | 88% | 91% | timeout |
 | tilde | pass | no | 64% | 64% | 2c2 ⏎ &lt; /home/mattias/foo ⏎ --- |
 | tilde2 | pass | no | 61% | 61% | 2c2 ⏎ &lt; ~/bin:~/bin2:/bin:/usr/bin:. ⏎ --- |
 | trap | pass | no | 71% | 77% | 8c8 ⏎ &lt; [1] debug ⏎ --- |
-| type | pass | no | 86% | 86% | 43,44c43,44 ⏎ &lt; /tmp/bash-ts ⏎ &lt; bash-ts is hashed (/tmp/bash-ts) |
+| type | pass | no | 98% | 98% | 43,44c43,44 ⏎ &lt; /tmp/bash-ts ⏎ &lt; bash-ts is hashed (/tmp/bash-ts) |
 | varenv | pass | no | 77% | 80% | 1,5c1,3 ⏎ &lt; 1 2 ⏎ &lt; ./varenv.tests: line 42: c=7: command not found |
 | vredir | env | no | 65% | 69% | 8c8 ⏎ &lt;     exec {v} &gt; $TMPFILE; ⏎ --- |

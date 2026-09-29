@@ -229,6 +229,9 @@ export const PATH_TEST_OPERATOR_MAP: Record<string, string> = {
 type PathTestOperator = keyof typeof PATH_TEST_OPERATOR_MAP;
 export type PathTestOperation = typeof PATH_TEST_OPERATOR_MAP[PathTestOperator];
 
+/** CPU time in seconds, the shell's and its finished children's. */
+export type CpuTimes = { user: number; system: number; childrenUser: number; childrenSystem: number };
+
 /**
  * Interface for the shell operations.
  * @interface ShellIf
@@ -280,6 +283,13 @@ export interface ShellIf {
     run: (ctx: ExecContextIf) => Promise<number>,
     command: string,
   ) => Promise<number>;
+
+  /**
+   * The CPU time used so far, in seconds: the shell's own, and that of the
+   * commands it ran and saw finish. `time` reports the difference over a
+   * command, `times` the totals. Optional: without it both report zero.
+   */
+  cpuTimes?: () => Promise<CpuTimes>;
 
   /**
    * Opens a pipe.
@@ -787,6 +797,13 @@ export interface ExecContextIf {
    * @returns {string} The name at the end of the chain.
    */
   resolveNameref: (name: string) => string;
+
+  /**
+   * Whether a name's references lead round in a circle, `declare -n a=b b=a`:
+   * it then has no value, and what is assigned to it goes nowhere — or, for a
+   * function's own reference, to the shell's variable of that name.
+   */
+  namerefLoops: (name: string) => boolean;
 
   /**
    * Checks if a variable is marked as readonly.
