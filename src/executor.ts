@@ -432,18 +432,9 @@ export class AstExecutor {
           await this.assertClobberable(ctx, target);
         }
 
-        if (r.numberIo?.text === '2') {
-          ctx.redirectStderr(target);
-        } else {
-          ctx.redirectStdout(target);
-        }
+        this.redirectOutput(ctx, r.numberIo?.text, target, false);
       } else if (r.op.text === '>>') {
-        // TODO: Implement append redirection
-        if (r.numberIo?.text === '2') {
-          ctx.redirectStderr(target, true);
-        } else {
-          ctx.redirectStdout(target, true);
-        }
+        this.redirectOutput(ctx, r.numberIo?.text, target, true);
       } else if (r.op.text === '>&') {
         const sourceFd = r.numberIo?.text;
 
@@ -499,6 +490,60 @@ export class AstExecutor {
     }
 
     return temporary;
+  }
+
+  /**
+   * `exec N>file`, `exec >>file`, `exec <file`: the file is opened once and
+   * stays open for everything after, so each command appends where the last one
+   * stopped — the path itself would be reopened, and truncated, by every
+   * command. A descriptor above 2 is opened under its own number, which is what
+   * `>&3` and `read -u 3` look up; 0–1–2 are the host's own, so those point at a
+   * handle the host names.
+   *
+   * @returns false when this is not such a redirection, or the host cannot open
+   *          files, so the caller applies it the ordinary way
+   */
+  private async openExecRedirection(ctx: ExecContextIf, r: AstNodeRedirect): Promise<boolean> {
+    const modes: Record<string, string> = { '>': 'w+', '>|': 'w+', '>>': 'a+', '<': 'r' };
+    const mode = modes[r.op.text];
+
+    if (!this.shell.fdOpen || !mode || r.heredoc) {
+      return false;
+    }
+
+    const fd = r.numberIo?.text ?? (r.op.text === '<' ? '0' : '1');
+    const { values } = await this.resolveExpansions(r.file, ctx);
+    const target = values[0] || r.file.text;
+
+    if (r.op.text === '>') {
+      await this.assertClobberable(ctx, target);
+    }
+
+    if (Number(fd) > 2) {
+      await this.shell.fdClose?.(fd);
+      await this.shell.fdOpen(ctx, target, mode, fd);
+      ctx.closeFd(fd);
+    } else {
+      ctx.redirectFd(fd, await this.shell.fdOpen(ctx, target, mode));
+    }
+
+    return true;
+  }
+
+  /**
+   * `N>file` for one command. Descriptors above 2 are kept on the shell's root
+   * context, so this one outlives the command — later `>&N` still reaches the
+   * file where bash would call it a bad descriptor — which is the lesser fault
+   * next to writing the command's stdout there instead.
+   */
+  private redirectOutput(ctx: ExecContextIf, fd: string | undefined, target: string, append: boolean): void {
+    if (fd === '2') {
+      ctx.redirectStderr(target, append);
+    } else if (fd === undefined || fd === '1') {
+      ctx.redirectStdout(target, append);
+    } else {
+      ctx.redirectFd(fd, target);
+    }
   }
 
   /**
@@ -595,7 +640,13 @@ export class AstExecutor {
     // `pick-a-command` two times, side effects included.
     if (node.name && !node.name.expansion?.length && node.name.text === 'exec') {
       const redirects = node.suffix?.filter((arg) => arg.type === 'Redirect') as AstNodeRedirect[] | undefined;
-      await this.applyRedirections(parentCtx, redirects);
+
+      for (const redirect of redirects ?? []) {
+        if (!(await this.openExecRedirection(parentCtx, redirect))) {
+          await this.applyRedirections(parentCtx, [redirect]);
+        }
+      }
+
       return 0;
     }
 

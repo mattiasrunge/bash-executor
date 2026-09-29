@@ -280,3 +280,61 @@ Deno.test('Redirections on compound commands', async (t) => {
     assertEquals(result.stdout, 'x-y\n');
   });
 });
+
+Deno.test('exec opens a file once for the commands after it', async (t) => {
+  await t.step('exec >file: every later command appends', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture(`
+      exec >/tmp/out
+      echo one
+      echo two
+    `);
+    assertEquals(result.exitCode, 0);
+    assertEquals(result.stdout, '');
+    assertEquals(shell.getFile('/tmp/out'), 'one\ntwo\n');
+  });
+
+  await t.step('exec 3>file: >&3 writes accumulate', async () => {
+    const shell = new TestShell();
+    shell.setFile('/tmp/log', 'old\n');
+    const result = await shell.runAndCapture(`
+      exec 3>/tmp/log
+      echo a >&3
+      echo b >&3
+      echo out
+    `);
+    assertEquals(result.stdout, 'out\n');
+    assertEquals(shell.getFile('/tmp/log'), 'a\nb\n');
+  });
+
+  await t.step('exec 3>>file keeps what was there', async () => {
+    const shell = new TestShell();
+    shell.setFile('/tmp/log', 'old\n');
+    await shell.runAndCapture(`
+      exec 3>>/tmp/log
+      echo new >&3
+    `);
+    assertEquals(shell.getFile('/tmp/log'), 'old\nnew\n');
+  });
+
+  await t.step('exec 3<file: read -u 3 reads it', async () => {
+    const shell = new TestShell();
+    shell.setFile('/tmp/in', 'first\nsecond\n');
+    const result = await shell.runAndCapture(`
+      exec 3</tmp/in
+      read -u 3 a
+      read -u 3 b
+      echo "$b $a"
+    `);
+    assertEquals(result.stdout, 'second first\n');
+  });
+});
+
+Deno.test('N>file on a command redirects fd N, not stdout', async () => {
+  const shell = new TestShell();
+  const result = await shell.runAndCapture(`
+    { echo to-three >&3; echo to-stdout; } 3>/tmp/three
+  `);
+  assertEquals(result.stdout, 'to-stdout\n');
+  assertEquals(shell.getFile('/tmp/three'), 'to-three\n');
+});

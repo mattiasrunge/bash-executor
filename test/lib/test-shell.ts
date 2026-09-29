@@ -42,6 +42,8 @@ export class TestShell implements ShellIf {
   private capturedStderr: string[];
   private files: Map<string, string>;
   private fdReadBuffers: Map<string, string>;
+  /** Descriptors opened for writing (`exec 3>f`, `exec >>f`): the file they write through to. */
+  private fdFiles = new Map<string, string>();
   private decoder = new TextDecoder();
 
   constructor() {
@@ -119,7 +121,9 @@ export class TestShell implements ShellIf {
    * Write to the appropriate output stream
    */
   private async writeToStream(stream: string, content: string): Promise<void> {
-    if (stream === '1') {
+    if (this.fdFiles.has(stream)) {
+      await this.pipeWrite(stream, content);
+    } else if (stream === '1') {
       this.capturedStdout.push(content);
     } else if (stream === '2') {
       this.capturedStderr.push(content);
@@ -180,6 +184,13 @@ export class TestShell implements ShellIf {
   }
 
   async pipeWrite(name: string, data: string): Promise<void> {
+    const file = this.fdFiles.get(name);
+
+    if (file !== undefined) {
+      this.files.set(file, (this.files.get(file) ?? '') + data);
+      return;
+    }
+
     // Handle standard streams (stdout and stderr)
     if (name === '1') {
       this.capturedStdout.push(data);
@@ -227,8 +238,21 @@ export class TestShell implements ShellIf {
     }
   }
 
-  async fdOpen(_ctx: ExecContextIf, path: string, _mode: string, fd?: string): Promise<string> {
+  async fdOpen(_ctx: ExecContextIf, path: string, mode: string, fd?: string): Promise<string> {
     fd = fd ?? `pipe_${++this.pipeCounter}`;
+
+    // Opened only for writing: writes go to the file, from where it stands
+    if (mode.startsWith('w') || mode.startsWith('a')) {
+      if (mode.startsWith('w') || !this.files.has(path)) {
+        this.files.set(path, '');
+      }
+
+      this.fdFiles.set(fd, path);
+      this.pipes.set(fd, new PipeBuffer());
+
+      return fd;
+    }
+
     const pipe = new PipeBuffer();
     // Pre-load file content if it exists, then close to signal EOF for reads
     const content = this.files.get(path);
@@ -243,6 +267,7 @@ export class TestShell implements ShellIf {
   }
 
   async fdClose(fd: string): Promise<void> {
+    this.fdFiles.delete(fd);
     const pipe = this.pipes.get(fd);
     if (pipe && !pipe.isClosed) {
       pipe.close();
@@ -430,6 +455,7 @@ export class TestShell implements ShellIf {
     this.capturedStderr = [];
     this.files.clear();
     this.fdReadBuffers.clear();
+    this.fdFiles.clear();
     this.clearMocks();
   }
 }
