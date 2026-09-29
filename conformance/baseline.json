@@ -607,9 +607,9 @@
       "reference": "pass"
     },
     "run-dollars": {
-      "upstream": 0.668,
+      "upstream": 0.674,
       "pass": false,
-      "stdout": 0.668,
+      "stdout": 0.675,
       "reference": "pass"
     },
     "run-dynvar": {
@@ -661,9 +661,9 @@
       "reference": "pass"
     },
     "run-func": {
-      "upstream": 0.258,
+      "upstream": 0.27,
       "pass": false,
-      "stdout": 0.262,
+      "stdout": 0.274,
       "reference": "pass"
     },
     "run-getopts": {
@@ -718,8 +718,7 @@
       "upstream": 0,
       "pass": false,
       "stdout": 0,
-      "reference": "pass",
-      "timeout": true
+      "reference": "pass"
     },
     "run-input-test": {
       "upstream": 0.667,
@@ -771,9 +770,9 @@
       "reference": "pass"
     },
     "run-nameref": {
-      "upstream": 0.139,
+      "upstream": 0.146,
       "pass": false,
-      "stdout": 0.182,
+      "stdout": 0.191,
       "reference": "pass"
     },
     "run-new-exp": {
@@ -964,11 +963,10 @@
       "reference": "pass"
     },
     "run-varenv": {
-      "upstream": 0,
+      "upstream": 0.295,
       "pass": false,
-      "stdout": 0.001,
-      "reference": "pass",
-      "timeout": true
+      "stdout": 0.36,
+      "reference": "pass"
     },
     "run-vredir": {
       "upstream": 0.18,
