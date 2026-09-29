@@ -7,7 +7,7 @@
 import { BashSyntaxError } from '../errors.ts';
 import { getReturnCode, isReturnSignal, makeExitSignal } from './exit.ts';
 import type { ExecContextIf, ShellIf } from '../types.ts';
-import type { BuiltinHandler, BuiltinResult } from './types.ts';
+import type { BuiltinHandler, BuiltinResult, BuiltinServices } from './types.ts';
 
 /**
  * The source builtin command.
@@ -28,7 +28,7 @@ import type { BuiltinHandler, BuiltinResult } from './types.ts';
  * . ~/.bashrc             -> executes .bashrc in current shell
  * source script.sh arg1 arg2 -> $1=arg1, $2=arg2 during execution
  */
-export const sourceBuiltin: BuiltinHandler = (ctx, args, shell, execute) => sourceAs('source', ctx, args, shell, execute);
+export const sourceBuiltin: BuiltinHandler = (ctx, args, shell, execute, services) => sourceAs('source', ctx, args, shell, execute, services);
 
 /** `source` and `.` are one builtin, which says its errors under the name it was called by. */
 async function sourceAs(
@@ -37,6 +37,7 @@ async function sourceAs(
   args: string[],
   shell: ShellIf,
   execute: (script: string, opts?: { file?: string }) => Promise<number>,
+  services?: BuiltinServices,
 ): Promise<BuiltinResult> {
   const usage = `${command}: usage: ${command} filename [arguments]\n`;
 
@@ -98,6 +99,11 @@ async function sourceAs(
   } catch (error) {
     // A syntax error is 2, as in bash; the script sourcing it carries on
     if (error instanceof BashSyntaxError) {
+      if (services) {
+        await services.reportSyntaxError(error, { file: filename }, content);
+        return { code: 2 };
+      }
+
       return { code: 2, stderr: `${filename}: syntax error: ${error.message.split('\n')[0]}\n` };
     }
 
@@ -151,4 +157,4 @@ function setPositional(ctx: ExecContextIf, values: string[]): void {
  *
  * This is an alias for the source builtin.
  */
-export const dotBuiltin: BuiltinHandler = (ctx, args, shell, execute) => sourceAs('.', ctx, args, shell, execute);
+export const dotBuiltin: BuiltinHandler = (ctx, args, shell, execute, services) => sourceAs('.', ctx, args, shell, execute, services);

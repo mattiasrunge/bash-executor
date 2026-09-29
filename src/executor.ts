@@ -38,6 +38,7 @@ import { assocKeys } from './builtins/variable-listing.ts';
 import type { ErrorPosition } from './errors.ts';
 import { exportedFunctionName, exportedFunctionText, functionEnvName } from './print-command.ts';
 import { singleQuoted } from './quote.ts';
+import { syntaxErrorLines } from './syntax-error.ts';
 import { cpuTime, timeReport } from './timing.ts';
 import { closingBracket, closingQuote, contextVariables, evaluateArithmeticText, subscriptEnd } from './arith.ts';
 import { bracketExpression, globToRegExp, globToRegexSource, posixRegexToSource, quoteGlob, quoteRegex, unquoteGlob } from './pattern.ts';
@@ -200,6 +201,12 @@ export type AstExecutorOptions = {
    * Without it a diagnostic is the message alone.
    */
   lineNumbers?: boolean;
+  /**
+   * A here-document the input ends inside: refused as unclosed (the default),
+   * which lets an interactive host ask for more, or — `'end'` — taken to the
+   * end of the input with bash's warning, as a script runs it.
+   */
+  unterminatedHereDocuments?: 'error' | 'end';
 };
 
 /**
@@ -213,6 +220,9 @@ export class AstExecutor {
   /** See `AstExecutorOptions.lineNumbers` */
   private lineNumbers: boolean;
 
+  /** See `AstExecutorOptions.unterminatedHereDocuments` */
+  private unterminatedHereDocuments: 'error' | 'end';
+
   /**
    * Where the source being run starts, for `$LINENO`: 0 in a script and in a
    * sourced file, the line before its own in an `eval`. The name is the file's
@@ -224,6 +234,7 @@ export class AstExecutor {
     this.shell = shell;
     this.builtins = options?.builtins;
     this.lineNumbers = options?.lineNumbers ?? false;
+    this.unterminatedHereDocuments = options?.unterminatedHereDocuments ?? 'error';
   }
 
   /**
@@ -410,6 +421,7 @@ export class AstExecutor {
     // that is instead done during execution with resolveExpansions.
     const options = {
       insertLOC: true,
+      unterminatedHereDocuments: this.unterminatedHereDocuments,
       // Aliases expand only under `shopt -s expand_aliases`, which an
       // interactive bash turns on and a script has to ask for
       resolveAlias: async (name: string) => ctx.getShellOption('expand_aliases') ? ctx.getAlias(name) : undefined,
@@ -465,9 +477,12 @@ export class AstExecutor {
     const lines = source.split('\n');
     let start = 0;
 
+    // A here-document still open is a chunk to take more lines for, not one to take to the end
+    const strict = { ...options, unterminatedHereDocuments: 'error' as const };
+
     for (let end = 0; end < lines.length; end++) {
       try {
-        await parse(lines.slice(start, end + 1).join('\n'), options);
+        await parse(lines.slice(start, end + 1).join('\n'), strict);
         start = end + 1;
       } catch (err) {
         if (!(err instanceof BashSyntaxError)) {
@@ -880,6 +895,20 @@ export class AstExecutor {
       const target = values[0] || r.file.text;
 
       if (r.heredoc) {
+        // One the input ended in: bash warns, on the input's last line, and takes it as it is
+        const unterminated = r.heredoc.unterminated;
+
+        if (unterminated) {
+          const line = ctx.getParams().LINENO;
+
+          ctx.setParams({ LINENO: String(this.sourceFrame.base + unterminated.endLine) });
+          await this.diagnose(
+            ctx,
+            `warning: here-document at line ${this.sourceFrame.base + unterminated.line} delimited by end-of-file (wanted \`${unterminated.delimiter}')`,
+          );
+          if (line !== undefined) ctx.setParams({ LINENO: line });
+        }
+
         // A here-document: its text, expanded unless the delimiter was quoted, fed in as stdin the
         // way a here-string is.
         const text = r.heredoc.quoted ? r.heredoc.body : await this.expandHereDocument(r.heredoc.body, ctx);
@@ -887,7 +916,9 @@ export class AstExecutor {
 
         temporary.push(pipe);
         handled(this.shell.pipeWrite(pipe, text).then(() => this.shell.pipeClose(pipe)));
-        ctx.redirectStdin(pipe);
+        // `3<<EOF`: another descriptor than stdin
+        if (r.numberIo) ctx.redirectFd(r.numberIo.text, pipe);
+        else ctx.redirectStdin(pipe);
       } else if (r.op.text === '<') {
         await this.assertOpenable(ctx, target, 'read');
         ctx.redirectStdin(target);
@@ -899,7 +930,8 @@ export class AstExecutor {
 
         temporary.push(pipe);
         handled(this.shell.pipeWrite(pipe, `${target}\n`).then(() => this.shell.pipeClose(pipe)));
-        ctx.redirectStdin(pipe);
+        if (r.numberIo) ctx.redirectFd(r.numberIo.text, pipe);
+        else ctx.redirectStdin(pipe);
       } else if (r.op.text === '>' || r.op.text === '>|') {
         // `set -C` refuses to truncate a file that exists; `>|` says do it anyway
         if (r.op.text === '>') {
@@ -1495,7 +1527,10 @@ export class AstExecutor {
           opts.file !== undefined
             ? this.inCallFrame(ctx, 'source', opts.file, () => this.inSourceFrame({ base: 0, name: opts.file }, () => this.executeSource(script, ctx)))
             : this.inSourceFrame({ base: Number(ctx.getParams().LINENO ?? 1) - 1, name: this.sourceFrame.name }, () => this.executeSource(script, ctx));
-        const result = await builtin(ctx, args || [], this.shell, execute, { expandSubscript: (subscript, keyed) => this.arithmeticSubscript(subscript, keyed, ctx) });
+        const result = await builtin(ctx, args || [], this.shell, execute, {
+          expandSubscript: (subscript, keyed) => this.arithmeticSubscript(subscript, keyed, ctx),
+          reportSyntaxError: (err, where, source) => this.reportSyntaxError(ctx, err, where, source),
+        });
 
         code = result.code;
 
@@ -1981,6 +2016,22 @@ export class AstExecutor {
 
   /** How deep in function calls the executor is, for the traps functions do not inherit. */
   private functionDepth = 0;
+
+  /**
+   * A syntax error in eval's string or a sourced file, said as bash says it:
+   * `$0: eval: line N:`, counting from the eval's own line, or `file: line N:`.
+   */
+  private async reportSyntaxError(ctx: ExecContextIf, err: BashSyntaxError, where: { eval: true } | { file: string }, source: string): Promise<void> {
+    const { line, lines } = syntaxErrorLines(err, err.source ?? source);
+    const params = ctx.getParams();
+    const name = this.sourceFrame.name ?? params['0'] ?? 'bash';
+    const at = (n: number) => this.lineNumbers ? `line ${n}: ` : '';
+    // Without line numbers a diagnostic has no place before it, and this one just who said it
+    const shell = this.lineNumbers ? `${name}: ` : '';
+    const prefix = 'eval' in where ? `${shell}eval: ${at(Number(params.LINENO ?? 1) + line - 1)}` : `${where.file}: ${at(line)}`;
+
+    await this.shell.pipeWrite(ctx.getStderr(), lines.map((text) => `${prefix}${text}\n`).join('')).catch(() => {});
+  }
 
   /** Which traps are running now, so one does not set itself off again. */
   private runningTraps = new Set<string>();
@@ -3724,10 +3775,21 @@ export class AstExecutor {
 
     let quoted = '"';
     let depth = 0;
+    // Inside `${ }` quotes are the expansion's, and quote in its word as they would anywhere
+    let braces = 0;
     for (let i = 0; i < body.length; i++) {
       const char = body[i];
       const next = body[i + 1];
-      if (depth === 0 && char === '\\' && next === '"') {
+      if (depth === 0 && char === '$' && next === '{') {
+        braces++;
+        quoted += '${';
+        i++;
+      } else if (depth === 0 && braces > 0 && char === '}') {
+        braces--;
+        quoted += char;
+      } else if (depth === 0 && braces > 0 && (char === '"' || char === "'")) {
+        quoted += char;
+      } else if (depth === 0 && char === '\\' && next === '"') {
         // A literal backslash and quote, which in double quotes are written \\\"
         quoted += '\\\\\\"';
         i++;

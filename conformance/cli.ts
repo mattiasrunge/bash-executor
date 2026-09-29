@@ -20,6 +20,7 @@ import {
   logoutBuiltin,
   SHELL_OPTION_FLAG_MAP,
   SIGNALS,
+  syntaxErrorLines,
 } from '../mod.ts';
 import { logGap, RealShell } from './host-shell.ts';
 
@@ -181,7 +182,7 @@ async function main(): Promise<number> {
 
   builtins.set('logout', logoutBuiltin);
 
-  const executor = new AstExecutor(shell, { builtins, lineNumbers: true });
+  const executor = new AstExecutor(shell, { builtins, lineNumbers: true, unterminatedHereDocuments: 'end' });
   const ctx = new ExecContext();
 
   ctx.setCwd(Deno.cwd());
@@ -230,10 +231,13 @@ async function main(): Promise<number> {
   } catch (err) {
     if (err instanceof BashSyntaxError) {
       // The executor has run the complete commands before the error already
-      const line = err.location?.start?.row;
+      // …and says it as bash does, a `-c` string naming itself so
+      const { line, lines } = syntaxErrorLines(err, source);
+      const prefix = `${inv.name}: ${inv.command !== undefined ? '-c: ' : ''}line ${line}: `;
 
       logGap({ kind: 'syntax-error', name: firstLine(err.message) });
-      console.error(`${inv.name}: ${Number.isFinite(line) ? `line ${line}: ` : ''}syntax error: ${firstLine(err.message)}`);
+
+      for (const text of lines) console.error(prefix + text);
 
       code = 2;
     } else {

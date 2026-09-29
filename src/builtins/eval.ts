@@ -6,7 +6,7 @@
 
 import { BashSyntaxError } from '../errors.ts';
 import type { ExecContextIf, ShellIf } from '../types.ts';
-import type { BuiltinHandler, BuiltinResult } from './types.ts';
+import type { BuiltinHandler, BuiltinResult, BuiltinServices } from './types.ts';
 
 /**
  * The eval builtin command.
@@ -24,6 +24,7 @@ export const evalBuiltin: BuiltinHandler = async (
   args: string[],
   _shell: ShellIf,
   execute: (script: string) => Promise<number>,
+  services?: BuiltinServices,
 ): Promise<BuiltinResult> => {
   // eval takes no options, but says so of one
   if (args[0] === '--') {
@@ -46,6 +47,11 @@ export const evalBuiltin: BuiltinHandler = async (
     return { code: await execute(script) };
   } catch (err) {
     if (err instanceof BashSyntaxError) {
+      if (services) {
+        await services.reportSyntaxError(err, { eval: true }, script);
+        return { code: 2 };
+      }
+
       return { code: 2, stderr: `eval: syntax error: ${err.message.split('\n')[0]}\n` };
     }
 

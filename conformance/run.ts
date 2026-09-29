@@ -309,7 +309,8 @@ async function parseTier(): Promise<ParseResult> {
 
   for (const name of names.sort()) {
     try {
-      await parse(decoder.decode(await Deno.readFile(join(TESTS, name))));
+      // As a script is parsed: a here-document it ends inside is taken to the end, with a warning
+      await parse(decoder.decode(await Deno.readFile(join(TESTS, name))), { unterminatedHereDocuments: 'end' });
       result[name] = true;
     } catch (err) {
       result[name] = (err instanceof Error ? err.message : String(err)).split('\n')[0].slice(0, 160);

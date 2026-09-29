@@ -7,3 +7,4 @@ export * from './src/types.ts';
 export * from './src/builtins/mod.ts';
 export * from './src/bytes.ts';
 export * from './src/print-command.ts';
+export * from './src/syntax-error.ts';

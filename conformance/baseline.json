@@ -91,10 +91,10 @@
     "casemod.tests": true,
     "complete.tests": true,
     "comsub-eof.tests": true,
-    "comsub-eof0.sub": false,
+    "comsub-eof0.sub": true,
     "comsub-eof1.sub": true,
-    "comsub-eof2.sub": false,
-    "comsub-eof3.sub": false,
+    "comsub-eof2.sub": true,
+    "comsub-eof3.sub": true,
     "comsub-eof4.sub": true,
     "comsub-eof5.sub": true,
     "comsub-eof6.sub": true,
@@ -236,14 +236,14 @@
     "globstar1.sub": true,
     "globstar2.sub": true,
     "globstar3.sub": true,
-    "heredoc.tests": false,
+    "heredoc.tests": true,
     "heredoc1.sub": true,
     "heredoc2.sub": true,
     "heredoc3.sub": false,
     "heredoc4.sub": true,
     "heredoc5.sub": true,
     "heredoc6.sub": true,
-    "heredoc7.sub": false,
+    "heredoc7.sub": true,
     "herestr.tests": true,
     "herestr1.sub": true,
     "histexp.tests": true,
@@ -475,7 +475,7 @@
   },
   "tests": {
     "run-alias": {
-      "upstream": 0.087,
+      "upstream": 0.086,
       "pass": false,
       "stdout": 0.093,
       "reference": "pass"
@@ -499,7 +499,7 @@
       "reference": "pass"
     },
     "run-array": {
-      "upstream": 0.801,
+      "upstream": 0.803,
       "pass": false,
       "stdout": 0.835,
       "reference": "pass"
@@ -511,7 +511,7 @@
       "reference": "pass"
     },
     "run-assoc": {
-      "upstream": 0.616,
+      "upstream": 0.615,
       "pass": false,
       "stdout": 0.734,
       "reference": "pass"
@@ -553,19 +553,19 @@
       "reference": "pass"
     },
     "run-comsub": {
-      "upstream": 0.811,
+      "upstream": 0.8,
       "pass": false,
       "stdout": 0.859,
       "reference": "pass"
     },
     "run-comsub-eof": {
-      "upstream": 0.385,
+      "upstream": 0.706,
       "pass": false,
-      "stdout": 0.769,
+      "stdout": 0.875,
       "reference": "pass"
     },
     "run-comsub-posix": {
-      "upstream": 0.86,
+      "upstream": 0.985,
       "pass": false,
       "stdout": 0.988,
       "reference": "pass"
@@ -619,7 +619,7 @@
       "reference": "pass"
     },
     "run-errors": {
-      "upstream": 0.968,
+      "upstream": 0.983,
       "pass": false,
       "stdout": 1,
       "reference": "pass"
@@ -685,9 +685,9 @@
       "reference": "pass"
     },
     "run-heredoc": {
-      "upstream": 0.774,
+      "upstream": 0.926,
       "pass": false,
-      "stdout": 0.853,
+      "stdout": 0.992,
       "reference": "env"
     },
     "run-herestr": {
@@ -818,21 +818,21 @@
       "reference": "pass"
     },
     "run-parser": {
-      "upstream": 0.69,
-      "pass": false,
+      "upstream": 1,
+      "pass": true,
       "stdout": 1,
       "reference": "pass"
     },
     "run-posix2": {
-      "upstream": 0.571,
-      "pass": false,
+      "upstream": 1,
+      "pass": true,
       "stdout": 1,
       "reference": "pass"
     },
     "run-posixexp": {
-      "upstream": 0.76,
+      "upstream": 0.762,
       "pass": false,
-      "stdout": 0.775,
+      "stdout": 0.779,
       "reference": "pass"
     },
     "run-posixexp2": {
@@ -872,7 +872,7 @@
       "reference": "pass"
     },
     "run-quote": {
-      "upstream": 0.94,
+      "upstream": 0.937,
       "pass": false,
       "stdout": 0.942,
       "reference": "pass"
@@ -970,9 +970,9 @@
       "reference": "pass"
     },
     "run-vredir": {
-      "upstream": 0.652,
+      "upstream": 0.674,
       "pass": false,
-      "stdout": 0.693,
+      "stdout": 0.715,
       "reference": "env"
     }
   }

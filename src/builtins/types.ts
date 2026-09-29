@@ -1,3 +1,4 @@
+import type { BashSyntaxError } from '@ein/bash-parser';
 import type { ExecContextIf, ShellIf } from '../types.ts';
 
 /**
@@ -44,6 +45,12 @@ export type BuiltinServices = {
    * `declare -i n='a[$i]'` need it.
    */
   expandSubscript: (subscript: string, keyed: boolean) => Promise<string>;
+  /**
+   * Say a syntax error in text the builtin ran as bash says it, and on the
+   * shell's stderr: `$0: eval: line N: …` for eval's string, `file: line N: …`
+   * for a sourced file.
+   */
+  reportSyntaxError: (err: BashSyntaxError, where: { eval: true } | { file: string }, source: string) => Promise<void>;
 };
 
 /**

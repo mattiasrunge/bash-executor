@@ -5,10 +5,10 @@ see [README.md](README.md) for what the scores mean.
 
 | Measure | Result |
 | --- | --- |
-| Test files that parse | 455 / 471 |
-| `run-*` scripts passing | 24 / 83 (real bash here: 74) |
-| Mean upstream score | 75% |
-| Mean stdout score | 78% |
+| Test files that parse | 460 / 471 |
+| `run-*` scripts passing | 26 / 83 (real bash here: 74) |
+| Mean upstream score | 77% |
+| Mean stdout score | 79% |
 
 ## Gaps
 
@@ -19,12 +19,11 @@ that command, while the parser here takes the whole file at once. Some files hol
 
 | Error | Files | Count |
 | --- | --- | --- |
-| Unclosed here-document | comsub-eof0.sub, comsub-eof2.sub, comsub-eof3.sub, heredoc.tests, heredoc3.sub, heredoc7.sub | 6 |
 | Unexpected 'CONTINUE' | assoc5.sub, posixexp.tests, quote1.sub | 3 |
+| Unexpected 'EOF' | comsub-posix1.sub, heredoc3.sub | 2 |
 | Unexpected 'CLOSE_PAREN' | comsub5.sub, comsub6.sub | 2 |
 | Unexpected 'In' | alias4.sub | 1 |
 | Unexpected 'OPEN_PAREN' | array2.sub | 1 |
-| Unexpected 'EOF' | comsub-posix1.sub | 1 |
 | Unclosed " | posixexp2.tests | 1 |
 | Unexpected 'WORD' | vredir2.sub | 1 |
 
@@ -55,12 +54,11 @@ What bash-ts refused to parse as it ran: test scripts, the `.sub` files and `-c`
 | Name | Tests | Times hit |
 | --- | --- | --- |
 | Unexpected 'CONTINUE' | assoc, comsub-eof, posixexp, quote | 4 |
-| Unclosed here-document | comsub-eof, exportfunc, heredoc | 7 |
+| Unexpected 'EOF' | comsub-posix, errors, heredoc | 3 |
 | Unexpected 'Done' | comsub-posix, errors | 5 |
 | Unexpected 'CLOSE_PAREN' | comsub, parser | 3 |
 | Unexpected 'In' | alias, comsub-posix | 2 |
 | Unexpected 'OPEN_PAREN' | array, parser | 2 |
-| Unexpected 'EOF' | comsub-posix, errors | 2 |
 | Unexpected 'WORD' | parser, vredir | 2 |
 | Unexpected 'Esac' | comsub-posix | 2 |
 | for (( … )) takes three expressions separated by ';', got " i=0; "i &lt; 3" " | arith-for | 1 |
@@ -87,12 +85,10 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 
 | Message | Tests |
 | --- | --- |
-| syntax error: Unexpected 'CONTINUE' | assoc, comsub-eof, posixexp, quote |
-| foo: command not found | alias, comsub, nquote |
+| foo: command not found | alias, comsub, heredoc, nquote |
 | fooN: command not found | alias, builtins, comsub |
+| '#   This program is free software: you can redistribute it and/or modify' | assoc, posixexp, quote |
 | ulimit: command not found | procsub, redir, vredir |
-| syntax error: Unexpected 'In' | alias, comsub-posix |
-| syntax error: Unexpected 'OPEN_PAREN' | array, parser |
 | printf: 'A[	]': not a valid identifier | array, quotearray |
 | printf: 'A[ ]': not a valid identifier | array, quotearray |
 | printf: 'A[*]': not a valid identifier | array, quotearray |
@@ -101,19 +97,14 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | foo: : must use subscript when assigning associative array | array, assoc |
 | foo: : must use subscript when assigning associative array | array, assoc |
 | foo: : must use subscript when assigning associative array | array, assoc |
-| syntax error: Unexpected 'CLOSE_PAREN' | comsub, parser |
-| syntax error: Unclosed here-document | comsub-eof, heredoc |
-| syntax error: Unexpected 'EOF' | comsub-posix, errors |
-| syntax error: Unexpected 'Done' | comsub-posix, errors |
+| syntax error near unexpected token ''' | assoc, quote |
 | @: syntax error: operand expected (error token is "@") | assoc, varenv |
 | the test suite should not be run as root | execscript, glob-test |
 | return: can only 'return' from a function or sourced script | execscript, posixexp |
-| N: No such file or directory | heredoc, vredir |
 | history: command not found | histexpand, history |
 | !!: command not found | histexpand, history |
 | !e: command not found | histexpand, history |
 | ${#:-foo}: bad substitution | more-exp, new-exp |
-| syntax error: Unexpected 'WORD' | parser, vredir |
 | ((: == N : syntax error: operand expected (error token is "== N ") | new-exp, test |
 | [N] N | jobs, trap |
 | /dev/tty: No such device or address (os error N): open '/dev/tty' | read, test |
@@ -121,12 +112,19 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | x=newvalue: command not found | alias |
 | a: command not found | alias |
 | ever: command not found | alias |
+| syntax error near unexpected token 'in' | alias |
+| 'alias long_comment='# for x in '' | alias |
 | myalias: command not found | alias |
 | aN: command not found | alias |
 | ﷑second): command not found | array |
 | *: syntax error: operand expected (error token is "*") | array |
 | c: readonly variable | array |
 | let: a=(N﷑+﷑N): syntax error: invalid arithmetic operator (error token is "﷑+﷑N)") | array |
+| ﷑[N]=: No such file or directory | array |
+| foo: [version[agent]]=version.agent: must use subscript when assigning associative array | array |
+| foo: [ab]]=bar: must use subscript when assigning associative array | array |
+| $(echo total N): syntax error: operand expected (error token is "$(echo total N)") | array |
+| c: N: must use subscript when assigning associative array | array |
 
 ## Per test
 
@@ -134,10 +132,10 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 
 | Test | ref | pass | upstream | stdout | First difference (upstream) |
 | --- | --- | --- | --- | --- | --- |
-| alias | pass | no | 9% | 9% | 4,24c4,45 ⏎ &lt; ./alias.tests: line 48: foo: command not found ⏎ &lt; ./alias.tests: line 56: foo: command not found |
+| alias | pass | no | 9% | 9% | 4,25c4,45 ⏎ &lt; ./alias.tests: line 48: foo: command not found ⏎ &lt; ./alias.tests: line 56: foo: command not found |
 | appendop | pass | yes | 100% | 100% |  |
 | arith | pass | no | 98% | 97% | 196,198d195 ⏎ &lt;  ⏎ &lt; 1 |
-| arith-for | pass | no | 97% | 97% | 67c67,68 ⏎ &lt; bash: syntax error: for (( … )) takes three expressions separated by ';', got " i=0; "i &lt; 3" " ⏎ --- |
+| arith-for | pass | no | 97% | 97% | 67c67,68 ⏎ &lt; bash: -c: line 1: syntax error: for (( … )) takes three expressions separated by ';', got " i=0; "i &lt; 3" " ⏎ --- |
 | array | pass | no | 80% | 84% | 2,3c2,4 ⏎ &lt; ./array.tests: line 28: ﷑second): command not found ⏎ &lt; 127 |
 | array2 | pass | yes | 100% | 100% |  |
 | assoc | pass | no | 62% | 73% | 78c78 ⏎ &lt; 1 ⏎ --- |
@@ -147,9 +145,9 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | case | pass | yes | 100% | 100% |  |
 | casemod | pass | yes | 100% | 100% |  |
 | complete | pass | no | 0% | 0% | 1,37c1,63 ⏎ &lt; ./complete.tests: line 19: complete: command not found ⏎ &lt; ./complete.tests: line 22: complete: command not found |
-| comsub | pass | no | 81% | 86% | 1c1 ⏎ &lt; ./comsub.tests: line 18: hijkl: command not found ⏎ --- |
-| comsub-eof | pass | no | 39% | 77% | 1c1 ⏎ &lt; ./comsub-eof0.sub: syntax error: Unclosed here-document ⏎ --- |
-| comsub-posix | pass | no | 86% | 99% | 62c62,63 ⏎ &lt; ./comsub-posix1.sub: line 1: syntax error: Parse error on line 1: Unexpected 'EOF' ⏎ --- |
+| comsub | pass | no | 80% | 86% | 1c1 ⏎ &lt; ./comsub.tests: line 18: hijkl: command not found ⏎ --- |
+| comsub-eof | pass | no | 71% | 88% | 2,3d1 ⏎ &lt; hi EOF ⏎ &lt; ./comsub-eof1.sub: line 3: warning: here-document at line 1 delimited by end-of-file (wanted 'EOF') |
+| comsub-posix | pass | no | 99% | 99% | 93,94c93 ⏎ &lt; redirlist: line 2: {fd}: command not found ⏎ &lt; bad 3 |
 | cond | pass | no | 99% | 99% | 82a83 ⏎ &gt; ok 4a ⏎ 89a91 |
 | coproc | pass | yes | 100% | 100% |  |
 | cprint | pass | yes | 100% | 100% |  |
@@ -158,10 +156,10 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | dirstack | pass | no | 40% | 45% | 4,7c4,11 ⏎ &lt; ./dstack.tests: line 26: pushd: no other directory ⏎ &lt; ./dstack.tests: line 27: popd: directory stack empty |
 | dollars | pass | no | 85% | 85% | 2,3d1 ⏎ &lt; ./dollar-at-star: line 37: *: invalid indirect expansion ⏎ &lt; ./dollar-at-star: line 38: @: invalid indirect expansion |
 | dynvar | pass | yes | 100% | 100% |  |
-| errors | pass | no | 97% | 100% | 57,58c57,60 ⏎ &lt; comsub: line 1: syntax error: Parse error on line 1: Unexpected 'EOF' ⏎ &lt; comsub: line 1: syntax error: Parse error on line 1: Unexpected 'Done' |
+| errors | pass | no | 98% | 100% | 118c118 ⏎ &lt; ./errors4.sub: line 29: break: x: numeric argument required ⏎ --- |
 | execscript | env | no | 84% | 91% | 1d0 ⏎ &lt; execscript: the test suite should not be run as root ⏎ 11c10 |
 | exp-tests | pass | no | 51% | 57% | 41,42c41 ⏎ &lt; argv[1] = &lt;&gt; ⏎ &lt; argv[1] = &lt;"Hello world!"&gt; |
-| exportfunc | pass | no | 86% | 93% | 4c4 ⏎ &lt; ./exportfunc.tests: line 42: eval: syntax error: Parse error on line 1: Unexpected 'EOF' ⏎ --- |
+| exportfunc | pass | no | 86% | 93% | 4c4 ⏎ &lt; ./exportfunc.tests: eval: line 43: syntax error: unexpected end of file ⏎ --- |
 | extglob | pass | no | 84% | 86% | 44c44 ⏎ &lt; @(*) ⏎ --- |
 | extglob2 | pass | yes | 100% | 100% |  |
 | extglob3 | pass | yes | 100% | 100% |  |
@@ -169,7 +167,7 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | getopts | pass | yes | 100% | 100% |  |
 | glob-test | env | no | 72% | 73% | 2,3d1 ⏎ &lt; glob2.sub: warning: you do not have the zh_HK.big5hkscs locale installed; ⏎ &lt; glob2.sub: warning: that will cause some of these tests to fail. |
 | globstar | pass | no | 39% | 39% | 0a1,26 ⏎ &gt; lib/glob/glob.o ⏎ &gt; lib/glob/smatch.o |
-| heredoc | env | no | 77% | 85% | 10,15c10,12 ⏎ &lt; ./heredoc.tests: 3: No such file or directory ⏎ &lt; alpha - |
+| heredoc | env | no | 93% | 99% | 92a93 ⏎ &gt; ./heredoc3.sub: line 98: warning: here-document at line 96 delimited by end-of-file (wanted 'EOF') ⏎ 102,105d102 |
 | herestr | pass | no | 87% | 87% | 6,7c6,7 ⏎ &lt; "$empty" ⏎ &lt; $empty |
 | histexpand | pass | no | 33% | 44% | 1,27c1,51 ⏎ &lt; ./histexp.tests: line 23: history: command not found ⏎ &lt; ./histexp.tests: line 34: history: command not found |
 | history | pass | no | 29% | 39% | 1,17c1,36 ⏎ &lt; ./history.tests: line 17: history: command not found ⏎ &lt; ./history.tests: line 19: history: command not found |
@@ -191,8 +189,8 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | nquote3 | pass | yes | 100% | 100% |  |
 | nquote4 | pass | no | 11% | 11% | 1,2c1 ⏎ &lt; argv[1] = &lt;abx{}cd&gt; ⏎ &lt; argv[1] = &lt;abx{41}cd&gt; |
 | nquote5 | pass | yes | 100% | 100% |  |
-| parser | pass | no | 69% | 100% | 7c7,8 ⏎ &lt; bash5: line 1: syntax error: Parse error on line 1: Unexpected 'CLOSE_PAREN' ⏎ --- |
-| posix2 | pass | no | 57% | 100% | 2c2,3 ⏎ &lt; ./posix2.tests: line 199: eval: syntax error: Parse error on line 1: Unexpected 'CLOSE_PAREN' ⏎ --- |
+| parser | pass | yes | 100% | 100% |  |
+| posix2 | pass | yes | 100% | 100% |  |
 | posixexp | pass | no | 76% | 78% | 9c9 ⏎ &lt; argv[1] = &lt;a b&gt; ⏎ --- |
 | posixexp2 | pass | no | 0% | 0% | 1,3c1,40 ⏎ &lt; 1 ⏎ &lt; 2  |
 | posixpat | pass | yes | 100% | 100% |  |
@@ -208,7 +206,7 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | rsh | pass | no | 17% | 0% | 1,13c1,14 ⏎ &lt; ./rsh1.sub: line 20: set: -r: invalid option ⏎ &lt; set: usage: set [-abefhkmnptuvxBCEHPT] [-o option-name] [--] [-] [arg ...] |
 | set-e | pass | yes | 100% | 100% |  |
 | set-x | pass | no | 76% | 83% | 0a1,2 ⏎ &gt; + (( i=0 )) ⏎ &gt; + (( i&lt;=5 )) |
-| shopt | pass | no | 84% | 84% | 307,335c307,309 ⏎ &lt; /home/mattias/m/git/bash-executor-conformance/conformance/.cache/work/ours/run-shopt/tmp/tmp.n3gRvPNn0D: 1: shopt: not found ⏎ &lt; 0a1,57 |
+| shopt | pass | no | 84% | 84% | 307,335c307,309 ⏎ &lt; /home/mattias/m/git/bash-executor-conformance/conformance/.cache/work/ours/run-shopt/tmp/tmp.Ueh1NEtLkR: 1: shopt: not found ⏎ &lt; 0a1,57 |
 | strip | pass | yes | 100% | 100% |  |
 | test | env | timeout | 88% | 91% | timeout |
 | tilde | pass | no | 64% | 64% | 2c2 ⏎ &lt; /home/mattias/foo ⏎ --- |
@@ -216,4 +214,4 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | trap | pass | no | 71% | 77% | 8c8 ⏎ &lt; [1] debug ⏎ --- |
 | type | pass | no | 98% | 98% | 43,44c43,44 ⏎ &lt; /tmp/bash-ts ⏎ &lt; bash-ts is hashed (/tmp/bash-ts) |
 | varenv | pass | no | 78% | 81% | 2,5c2,3 ⏎ &lt; ./varenv.tests: line 42: c=7: command not found ⏎ &lt; 3 4 3 4 5 |
-| vredir | env | no | 65% | 69% | 8c8 ⏎ &lt;     exec {v} &gt; $TMPFILE; ⏎ --- |
+| vredir | env | no | 67% | 72% | 8c8 ⏎ &lt;     exec {v} &gt; $TMPFILE; ⏎ --- |
