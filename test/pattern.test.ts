@@ -42,3 +42,32 @@ Deno.test('POSIX regular expressions', () => {
   assertEquals(new RegExp(posixRegexToSource('^[[:alpha:]]+[^[:space:]]$')).test('ab1'), true);
   assertEquals(new RegExp(posixRegexToSource('[]x]')).test(']'), true);
 });
+
+Deno.test('patterns as bash matches them', async (t) => {
+  await t.step('!(…) is any stretch its alternatives do not match whole', () => {
+    for (
+      const [text, pattern, expected] of [
+        ['foo', '!(foo)*', true],
+        ['foobar', '!(foo)*', true],
+        ['foo', '!(foo)', false],
+        ['foo', '*(!(foo))', true],
+        ['x.c', '!(*.h)', true],
+        ['x.h', '!(*.h)', false],
+      ] as const
+    ) {
+      assertEquals(globToRegExp(pattern).test(text), expected, `${text} ${pattern}`);
+    }
+  });
+
+  await t.step('a backwards range matches nothing, and the rest of the class still does', () => {
+    assertEquals(globToRegExp('[a-Za]').test('a'), true);
+    assertEquals(globToRegExp('[a-Za]').test('Q'), false);
+  });
+
+  await t.step('collating symbols by name, and the ascii class', () => {
+    assertEquals(globToRegExp('[[.hyphen.]-9]').test('5'), true);
+    assertEquals(globToRegExp('[[.space.][.tab.]]').test('\t'), true);
+    assertEquals(globToRegExp('[[.cb.]a]').test('a'), true);
+    assertEquals(globToRegExp('[[:ascii:]]').test('~'), true);
+  });
+});

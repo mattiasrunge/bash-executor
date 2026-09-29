@@ -368,3 +368,22 @@ Deno.test('Quoting and Expansion', async (t) => {
     assertEquals(result.stdout, 'var=$VAR\n');
   });
 });
+
+// Found running bash's own test suite: each case is what bash does
+Deno.test('Expansions as bash has them', async (t) => {
+  const run = async (script: string) => (await new TestShell().runAndCapture(script)).stdout;
+
+  await t.step('substring offsets and lengths are arithmetic, and may count from the end', async () => {
+    assertEquals(
+      await run('x=abcdef; i=2; n=3; echo "${x:0:0}|${x:i:n}|${x:$i:$n}|${x: -2}|${x:1+1:2*1}|${x:(-3):2}|${x:2:-1}|${x:7}|"'),
+      '|cde|cde|ef|cd|de|cde||\n',
+    );
+    assertEquals(await run('set -- a b c d; echo "${@:2}|${@: -1}|${*:2:2}|${@:1:0}"; arr=(p q r s); echo "${arr[@]:1:2}|${arr[@]: -1}"'), 'b c d|d|b c|\nq r|s\n');
+  });
+
+  await t.step('a quoted word in ${x-word} stays quoted', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('for w in ${u-"a b"} ${u-""} ${u-a b}; do echo "[$w]"; done');
+    assertEquals(result.stdout, '[a b]\n[]\n[a]\n[b]\n');
+  });
+});

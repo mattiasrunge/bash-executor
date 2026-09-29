@@ -146,8 +146,15 @@ export const printfBuiltin: BuiltinHandler = async (
     do {
       const round = values.slice(offset, offset + perRound);
 
-      output += sprintf(format, ...convertValues(format, round));
+      // %b and %q are bash's: the value is made here and printed as a %s
+      output += sprintf(format.replace(/%([-+#0 ]*\d*\.?\d*)[bq]/g, '%$1s'), ...convertValues(format, round));
       offset += perRound;
+
+      // `\c` in a %b argument: no more output at all
+      if (output.includes(STOP_OUTPUT)) {
+        output = output.slice(0, output.indexOf(STOP_OUTPUT));
+        break;
+      }
     } while (perRound > 0 && offset < values.length);
 
     if (target !== undefined) {
@@ -165,6 +172,9 @@ export const printfBuiltin: BuiltinHandler = async (
     };
   }
 };
+
+/** Stands where a %b argument said `\c`, for the output to end there. */
+const STOP_OUTPUT = '\x00\x03';
 
 const SPECIFIER = /%[-+#0 ]*\d*\.?\d*[diouxXeEfFgGcsbq%]/g;
 
@@ -205,7 +215,7 @@ function convertValues(format: string, values: string[]): unknown[] {
       case 'x':
       case 'X':
         // Integer types
-        result.push(Number.parseInt(value, 10) || 0);
+        result.push(integerArgument(value));
         break;
       case 'e':
       case 'E':
@@ -214,14 +224,25 @@ function convertValues(format: string, values: string[]): unknown[] {
       case 'g':
       case 'G':
         // Float types
-        result.push(Number.parseFloat(value) || 0);
+        result.push(/^['"]/.test(value) ? integerArgument(value) : Number.parseFloat(value) || 0);
         break;
       case 'c':
         // Character - @std/fmt expects char code, not string
         result.push(value.charCodeAt(0) || 0);
         break;
-      case 's':
+      case 'b':
+        // The argument's backslash escapes, as echo -e has them
+        {
+          const stop = value.search(/(?<!\\)(\\\\)*\\c/);
+          const text = stop === -1 ? value : value.slice(0, stop + value.slice(stop).indexOf('\\c'));
+
+          result.push(processEscapes(text.replace(/\\0([0-7]{1,3})/g, '\\$1')) + (stop === -1 ? '' : STOP_OUTPUT));
+        }
+        break;
       case 'q':
+        result.push(shellQuote(value));
+        break;
+      case 's':
       default:
         // String types
         result.push(value);
@@ -230,4 +251,38 @@ function convertValues(format: string, values: string[]): unknown[] {
   }
 
   return result;
+}
+
+/**
+ * A number as printf reads one: decimal, `0x` hex, a leading 0 octal, or — after
+ * a quote — the code of the character that follows it, `'A` being 65.
+ */
+function integerArgument(value: string): number {
+  if (/^['"]/.test(value)) {
+    return value.codePointAt(1) ?? 0;
+  }
+
+  const text = value.trim();
+
+  if (/^[+-]?0x[0-9a-f]+$/i.test(text)) return Number.parseInt(text, 16);
+  if (/^[+-]?0[0-7]+$/.test(text)) return Number.parseInt(text, 8);
+
+  return Number.parseInt(text, 10) || 0;
+}
+
+/**
+ * `%q`: the value quoted so the shell reads it back as itself — as bash writes
+ * it, a backslash before each special character, or `$'…'` when it holds a
+ * control character.
+ */
+function shellQuote(value: string): string {
+  if (value === '') return "''";
+
+  if (/[\x00-\x1f\x7f]/.test(value)) {
+    const escapes: Record<string, string> = { '\n': '\\n', '\t': '\\t', '\r': '\\r', '\x1b': '\\E', '\\': '\\\\', "'": "\\'" };
+
+    return `$'${[...value].map((c) => escapes[c] ?? (/[\x00-\x1f\x7f]/.test(c) ? `\\${c.charCodeAt(0).toString(8).padStart(3, '0')}` : c)).join('')}'`;
+  }
+
+  return value.replace(/[^A-Za-z0-9_./,:@%+=^-]/g, '\\$&').replace(/^~/, '\\~');
 }

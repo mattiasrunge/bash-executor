@@ -223,3 +223,19 @@ Deno.test('printf -v assigns instead of printing', async (t) => {
     assertEquals(result.code, 2);
   });
 });
+
+Deno.test('printf as bash has it', async (t) => {
+  const printf = async (...args: string[]) => (await printfBuiltin(new ExecContext(), args, mockShell, noopExecute)).stdout;
+
+  await t.step("numbers: hex, octal, and a quote for a character's code", async () => {
+    assertEquals(await printf('%d %d %d %#x', "'A", '0x1f', '010', "'\x7f"), '65 31 8 0x7f');
+  });
+
+  await t.step('%b expands escapes, and \\c ends all output', async () => {
+    assertEquals(await printf('%b|', 'a\\tb', 'x\\cy', 'z'), 'a\tb|x');
+  });
+
+  await t.step('%q quotes to read back', async () => {
+    assertEquals(await printf('%q|%q|%q|%q', 'a b', "it's", '', 'x\ty'), "a\\ b|it\\'s|''|$'x\\ty'");
+  });
+});

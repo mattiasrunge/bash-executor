@@ -23,7 +23,98 @@ const POSIX_CLASSES: Record<string, string> = {
   cntrl: '\\x00-\\x1f\\x7f',
   print: '\\x20-\\x7e',
   graph: '\\x21-\\x7e',
+  ascii: '\\x00-\\x7f',
 };
+
+/**
+ * POSIX's names for the characters a collating symbol, `[.hyphen.]`, may
+ * name — the ones bash's own table has that are not the character itself.
+ */
+const COLLATING_NAMES: Record<string, string> = {
+  NUL: '\0',
+  SOH: '\x01',
+  STX: '\x02',
+  ETX: '\x03',
+  EOT: '\x04',
+  ENQ: '\x05',
+  ACK: '\x06',
+  alert: '\x07',
+  BEL: '\x07',
+  backspace: '\b',
+  BS: '\b',
+  tab: '\t',
+  HT: '\t',
+  newline: '\n',
+  LF: '\n',
+  'vertical-tab': '\v',
+  VT: '\v',
+  'form-feed': '\f',
+  FF: '\f',
+  'carriage-return': '\r',
+  CR: '\r',
+  ESC: '\x1b',
+  IS4: '\x1c',
+  IS3: '\x1d',
+  IS2: '\x1e',
+  IS1: '\x1f',
+  space: ' ',
+  'exclamation-mark': '!',
+  'quotation-mark': '"',
+  'number-sign': '#',
+  'dollar-sign': '$',
+  'percent-sign': '%',
+  ampersand: '&',
+  apostrophe: "'",
+  'left-parenthesis': '(',
+  'right-parenthesis': ')',
+  asterisk: '*',
+  'plus-sign': '+',
+  comma: ',',
+  hyphen: '-',
+  'hyphen-minus': '-',
+  period: '.',
+  'full-stop': '.',
+  slash: '/',
+  solidus: '/',
+  zero: '0',
+  one: '1',
+  two: '2',
+  three: '3',
+  four: '4',
+  five: '5',
+  six: '6',
+  seven: '7',
+  eight: '8',
+  nine: '9',
+  colon: ':',
+  semicolon: ';',
+  'less-than-sign': '<',
+  'equals-sign': '=',
+  'greater-than-sign': '>',
+  'question-mark': '?',
+  'commercial-at': '@',
+  'left-square-bracket': '[',
+  backslash: '\\',
+  'reverse-solidus': '\\',
+  'right-square-bracket': ']',
+  circumflex: '^',
+  'circumflex-accent': '^',
+  underscore: '_',
+  'low-line': '_',
+  'grave-accent': '`',
+  'left-brace': '{',
+  'left-curly-bracket': '{',
+  'vertical-line': '|',
+  'right-brace': '}',
+  'right-curly-bracket': '}',
+  tilde: '~',
+  DEL: '\x7f',
+};
+
+/** A collating symbol's character: its name, or the character itself; a name bash does not know is no character. */
+function collatingElement(name: string): string {
+  return COLLATING_NAMES[name] ?? ([...name].length === 1 ? name : '');
+}
 
 /**
  * A bracket expression, `[...]`, as a JavaScript character class.
@@ -40,15 +131,17 @@ const POSIX_CLASSES: Record<string, string> = {
  */
 export function bracketExpression(pattern: string, open: number, backslashQuotes = true): { source: string; end: number } | undefined {
   let i = open + 1;
-  let out = '[';
+  let negate = false;
+  // The members: a character, which may start or end a range, or a class's contents
+  const members: ({ char: string } | { raw: string } | { hyphen: true })[] = [];
 
   if (pattern[i] === '!' || pattern[i] === '^') {
-    out += '^';
+    negate = true;
     i++;
   }
 
   if (pattern[i] === ']') {
-    out += '\\]';
+    members.push({ char: ']' });
     i++;
   }
 
@@ -56,7 +149,9 @@ export function bracketExpression(pattern: string, open: number, backslashQuotes
     const c = pattern[i];
 
     if (c === ']') {
-      return { source: out === '[' ? '(?!)' : out === '[^' ? '[\\s\\S]' : out + ']', end: i };
+      const body = classBody(members);
+
+      return { source: body === '' ? (negate ? '[\\s\\S]' : '(?!)') : `[${negate ? '^' : ''}${body}]`, end: i };
     }
 
     if (c === '[' && ':=.'.includes(pattern[i + 1])) {
@@ -66,25 +161,63 @@ export function bracketExpression(pattern: string, open: number, backslashQuotes
       if (close !== -1) {
         const name = pattern.slice(i + 2, close);
 
-        out += kind === ':' ? POSIX_CLASSES[name] ?? '' : escapeClassChar(name);
+        if (kind === ':') {
+          members.push({ raw: POSIX_CLASSES[name] ?? '' });
+        } else {
+          const element = kind === '.' ? collatingElement(name) : name;
+
+          // A name bash does not know is no member at all
+          if (element) members.push({ char: element });
+        }
+
         i = close + 1;
         continue;
       }
     }
 
     if (c === '\\' && backslashQuotes && i + 1 < pattern.length) {
-      out += escapeClassChar(pattern[++i]);
+      members.push({ char: pattern[++i] });
       continue;
     }
 
-    out += c === '-' ? '-' : escapeClassChar(c);
+    members.push(c === '-' ? { hyphen: true } : { char: c });
   }
 
   return undefined;
 }
 
+/**
+ * A bracket expression's members as a JavaScript class's contents. A `-`
+ * between two characters is a range — one whose end comes before its start
+ * matches nothing, as in bash, rather than being the syntax error it is to
+ * JavaScript — and anywhere else it is itself.
+ */
+function classBody(members: ({ char: string } | { raw: string } | { hyphen: true })[]): string {
+  let out = '';
+
+  for (let i = 0; i < members.length; i++) {
+    const member = members[i];
+    const next = members[i + 1];
+    const end = members[i + 2];
+
+    if ('char' in member && next && 'hyphen' in next && end && 'char' in end) {
+      if (member.char <= end.char) {
+        out += `${escapeClassChar(member.char)}-${escapeClassChar(end.char)}`;
+      }
+
+      i += 2;
+    } else if ('raw' in member) {
+      out += member.raw;
+    } else {
+      out += escapeClassChar('char' in member ? member.char : '-');
+    }
+  }
+
+  return out;
+}
+
 function escapeClassChar(text: string): string {
-  return text.replace(/[\\\]\[^]/g, '\\$&');
+  return text.replace(/[\\\]\[^-]/g, '\\$&');
 }
 
 function escapeRegexChar(c: string): string {
@@ -200,8 +333,133 @@ export function globToRegexSource(pattern: string): string {
   return out;
 }
 
+/** One piece of a parsed pattern, for the matcher `!(…)` needs. */
+type Piece =
+  | { regex: RegExp }
+  | { star: true }
+  | { group: string; alternatives: Piece[][] };
+
+/** A pattern as pieces: extended groups, `*`, and a one-character regex for anything else. */
+function pieces(pattern: string): Piece[] {
+  const out: Piece[] = [];
+
+  for (let i = 0; i < pattern.length; i++) {
+    const c = pattern[i];
+
+    if ('@*+?!'.includes(c) && pattern[i + 1] === '(') {
+      const close = groupEnd(pattern, i + 1);
+
+      if (close !== -1) {
+        out.push({ group: c, alternatives: alternatives(pattern.slice(i + 2, close)).map(pieces) });
+        i = close;
+        continue;
+      }
+    }
+
+    if (c === '*') {
+      out.push({ star: true });
+    } else if (c === '?') {
+      out.push({ regex: /^[\s\S]$/ });
+    } else if (c === '[' && bracketExpression(pattern, i)) {
+      const bracket = bracketExpression(pattern, i)!;
+
+      out.push({ regex: new RegExp(`^${bracket.source}$`) });
+      i = bracket.end;
+    } else if (c === '\\' && i + 1 < pattern.length) {
+      out.push({ regex: new RegExp(`^${escapeRegexChar(pattern[++i])}$`) });
+    } else {
+      out.push({ regex: new RegExp(`^${escapeRegexChar(c)}$`) });
+    }
+  }
+
+  return out;
+}
+
+/**
+ * Whether `text` from `at` on matches the pieces from `index` on. Backtracking,
+ * which is what `!(…)` needs: it matches any stretch of text that none of its
+ * alternatives match whole, and only trying each stretch can tell.
+ */
+function matchPieces(list: Piece[], index: number, text: string, at: number): boolean {
+  if (index === list.length) {
+    return at === text.length;
+  }
+
+  const piece = list[index];
+  const rest = (end: number) => matchPieces(list, index + 1, text, end);
+  const whole = (alternative: Piece[], from: number, to: number) => matchPieces(alternative, 0, text.slice(from, to), 0);
+
+  if ('regex' in piece) {
+    return at < text.length && piece.regex.test(text[at]) && rest(at + 1);
+  }
+
+  if ('star' in piece) {
+    for (let end = at; end <= text.length; end++) {
+      if (rest(end)) return true;
+    }
+
+    return false;
+  }
+
+  const one = (from: number, to: number) => piece.alternatives.some((alternative) => whole(alternative, from, to));
+
+  switch (piece.group) {
+    case '!':
+      for (let end = at; end <= text.length; end++) {
+        if (!one(at, end) && rest(end)) return true;
+      }
+
+      return false;
+    case '@':
+    case '?':
+      if (piece.group === '?' && rest(at)) return true;
+
+      for (let end = at; end <= text.length; end++) {
+        if (one(at, end) && rest(end)) return true;
+      }
+
+      return false;
+    default: {
+      // `*(…)` and `+(…)`: repeats, each taking at least one character
+      const repeat = (from: number, count: number): boolean => {
+        if ((count > 0 || piece.group === '*') && rest(from)) return true;
+
+        for (let end = from + 1; end <= text.length; end++) {
+          if (one(from, end) && repeat(end, count + 1)) return true;
+        }
+
+        return false;
+      };
+
+      return repeat(at, 0);
+    }
+  }
+}
+
+/**
+ * A pattern with `!(…)` as a RegExp whose `test` matches it: a regular
+ * expression cannot say "this stretch is not that", which `!(foo)*` needs.
+ */
+class NegatedPatternRegExp extends RegExp {
+  constructor(source: string, private readonly list: Piece[]) {
+    super(source);
+  }
+
+  override test(text: string): boolean {
+    return matchPieces(this.list, 0, text, 0);
+  }
+}
+
 /** A whole-string matcher for a shell pattern; an unusable one matches only itself. */
 export function globToRegExp(pattern: string): RegExp {
+  if (/(^|[^\\])!\(/.test(pattern)) {
+    try {
+      return new NegatedPatternRegExp(`^${globToRegexSource(pattern)}$`, pieces(pattern));
+    } catch {
+      // Unusable as a regular expression: fall through to the literal
+    }
+  }
+
   try {
     return new RegExp(`^${globToRegexSource(pattern)}$`);
   } catch {

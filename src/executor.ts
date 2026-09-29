@@ -3054,11 +3054,11 @@ export class AstExecutor {
         return this.changeCase(value, String(xp.pattern ?? '?'), xp.case === 'upper', Boolean(xp.globally));
 
       case 'substring': {
-        // ${var:offset:length}
-        const offset = Number(xp.offset) || 0;
-        const length = xp.length != null ? Number(xp.length) : undefined;
+        // ${var:offset:length}, counted in characters
+        const chars = [...value];
+        const bounds = await this.substringBounds(xp, chars.length, ctx);
 
-        return length != null ? value.slice(offset, offset + length) : value.slice(offset);
+        return bounds ? chars.slice(bounds.start, bounds.end).join('') : '';
       }
 
       default:
@@ -3067,11 +3067,49 @@ export class AstExecutor {
   }
 
   /**
+   * Where `${x:offset:length}` starts and ends in something `size` long. Both
+   * are arithmetic; a negative offset counts from the end, and so does a
+   * negative length, which then says where to stop. Undefined when the offset
+   * is past either end, which leaves nothing.
+   */
+  private async substringBounds(
+    xp: Record<string, unknown>,
+    size: number,
+    ctx: ExecContextIf,
+    positional = false,
+  ): Promise<{ start: number; end: number } | undefined> {
+    const evaluate = async (expression: unknown, number: unknown) =>
+      typeof expression === 'string' && expression.trim() !== '' && !/^\s*-?\d+\s*$/.test(expression)
+        ? await this.arithmeticValue({ expression }, ctx)
+        : Number(expression ?? number) || 0;
+
+    let start = await evaluate(xp.offsetExpression, xp.offset);
+
+    // `${@: -1}` counts back from the last parameter, not from $0
+    if (start < 0) {
+      start += size;
+
+      if (start < (positional ? 1 : 0)) return undefined;
+    }
+
+    if (start > size) return undefined;
+
+    if (xp.lengthExpression === undefined && xp.length == null) {
+      return { start, end: size };
+    }
+
+    const length = await evaluate(xp.lengthExpression, xp.length);
+    const end = length < 0 ? size + length : start + length;
+
+    return { start, end: Math.max(start, end) };
+  }
+
+  /**
    * `${v^pattern}` / `${v,,pattern}` — convert the characters matching pattern.
    * Without the doubled operator only the first character is considered.
    */
   protected changeCase(value: string, pattern: string, upper: boolean, globally: boolean): string {
-    const matches = new RegExp(`^${this.globToRegexStr(pattern)}$`);
+    const matches = globToRegExp(pattern);
     const convert = (char: string) => upper ? char.toUpperCase() : char.toLowerCase();
 
     if (!globally) {
@@ -3196,15 +3234,13 @@ export class AstExecutor {
           // An operator on a list applies to each element in turn, except
           // ${a[@]:x:y}, which slices the list itself
           if (xp.op === 'substring') {
-            const xpAny = xp as Record<string, unknown>;
-            const length = xpAny.length != null ? Number(xpAny.length) : undefined;
-
             // `${a[@]:1}` counts from the first element, `${@:1}` from the first
-            // positional parameter — offset 0 there is $0, which is not in the list
+            // positional parameter — offset 0 there is $0
             const positional = xp.parameter === '@' || xp.parameter === '*';
-            const offset = Math.max(0, (Number(xpAny.offset) || 0) - (positional ? 1 : 0));
+            const values = positional ? [params['0'] ?? '', ...list.values] : list.values;
+            const bounds = await this.substringBounds(xp as Record<string, unknown>, values.length, ctx, positional);
 
-            list.values = length != null ? list.values.slice(offset, offset + length) : list.values.slice(offset);
+            list.values = bounds ? values.slice(bounds.start, bounds.end) : [];
           } else if (xp.op) {
             const xpAny = xp as Record<string, unknown>;
 
@@ -3235,6 +3271,30 @@ export class AstExecutor {
           const isSet = await this.isParameterSet(xp.parameter!, ctx, params);
 
           let resolved: string;
+
+          // ${x-word} and its kin, taking the word, outside double quotes: its
+          // quotes still quote — `${u-"a b"}` is one field, `${u-""}` an empty
+          // one — so it goes in as written, with only its expansions protected
+          const takesWord = xpAny.op === 'useDefaultValue'
+            ? !paramValue
+            : xpAny.op === 'useDefaultValueIfUnset'
+            ? !isSet
+            : xpAny.op === 'useAlternativeValue'
+            ? Boolean(paramValue)
+            : xpAny.op === 'useAlternativeValueIfUnset'
+            ? isSet
+            : false;
+
+          if (takesWord && xpAny.word && !isDoubleQuotedAt(node.text, xp.loc!.start)) {
+            const word = xpAny.word as AstNodeWord;
+            const inner = word.expansion?.length
+              ? await this.substituteExpansions(word, ctx, subs, opts)
+              : { text: String(xpAny.wordSource ?? word.text), protectedRanges: [], status: 0 };
+
+            status = inner.status || status;
+            rValue.replaceWithRanges(xp.loc!.start, xp.loc!.end + 1, inner.text, inner.protectedRanges);
+            continue;
+          }
 
           const transformed = await this.applyValueOperator(xpAny, paramValue, ctx);
 
@@ -3392,7 +3452,7 @@ export class AstExecutor {
   }
 
   private removePrefix(value: string, pattern: string, greedy: boolean): string {
-    const re = new RegExp('^' + this.globToRegexStr(pattern) + '$');
+    const re = globToRegExp(pattern);
     if (greedy) {
       for (let i = value.length; i >= 0; i--) {
         if (re.test(value.slice(0, i))) return value.slice(i);
@@ -3406,7 +3466,7 @@ export class AstExecutor {
   }
 
   private removeSuffix(value: string, pattern: string, greedy: boolean): string {
-    const re = new RegExp('^' + this.globToRegexStr(pattern) + '$');
+    const re = globToRegExp(pattern);
     if (greedy) {
       for (let i = 0; i <= value.length; i++) {
         if (re.test(value.slice(i))) return value.slice(0, i);
