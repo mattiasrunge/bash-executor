@@ -41,6 +41,9 @@ import { ArithmeticSyntaxError, NoClobberError, UnboundVariableError, UnknownNod
 import type { ExecContextIf, ExecSyncResult, ExecuteAndCaptureOptions, ShellIf } from './types.ts';
 
 // The special parameters, which are set even when nothing has assigned to them
+/** POSIX's special builtins: in POSIX mode an assignment before one outlasts it. */
+const SPECIAL_BUILTINS = new Set(['break', ':', '.', 'continue', 'eval', 'exec', 'exit', 'export', 'readonly', 'return', 'set', 'shift', 'times', 'trap', 'unset']);
+
 const ALWAYS_SET_PARAMS = new Set(['?', '#', '$', '!', '0', '-', '_', '@', '*']);
 
 // What bash exits with when an expansion fails in a non-interactive shell
@@ -79,9 +82,48 @@ const DECLARATION_COMMANDS = new Set(['declare', 'typeset', 'local', 'export', '
  * Attaching a no-op catch marks the promise handled without consuming it: the
  * reference kept in the array still rejects normally for the Promise.all.
  */
+/**
+ * A value as a word that reads back as itself, the way `${x@Q}` and `declare -p`
+ * write it: in single quotes, or as `$'…'` when it holds control characters.
+ */
+function shellQuote(value: string): string {
+  if (!/[\x00-\x1f\x7f]/.test(value)) {
+    return `'${value.replaceAll("'", "'\\''")}'`;
+  }
+
+  const escapes: Record<string, string> = { '\n': '\\n', '\t': '\\t', '\r': '\\r', '\x1b': '\\E', '\\': '\\\\', "'": "\\'" };
+
+  return `$'${[...value].map((c) => escapes[c] ?? (/[\x00-\x1f\x7f]/.test(c) ? `\\${c.charCodeAt(0).toString(8).padStart(3, '0')}` : c)).join('')}'`;
+}
+
 function handled<T>(promise: Promise<T>): Promise<T> {
   promise.catch(() => {});
   return promise;
+}
+
+/**
+ * Whether `pos` in a word's text is inside double quotes: what `"$*"` and `$*`
+ * differ by. Single quotes and backslashes are stepped over; an expansion's own
+ * quotes, `${x:-"a"}`, open and close within it.
+ */
+function isDoubleQuotedAt(text: string, pos: number): boolean {
+  let inDouble = false;
+
+  for (let i = 0; i < pos && i < text.length; i++) {
+    const c = text[i];
+
+    if (c === '\\') {
+      i++;
+    } else if (c === "'" && !inDouble) {
+      const close = text.indexOf("'", i + 1);
+
+      i = close === -1 ? text.length : close;
+    } else if (c === '"') {
+      inDouble = !inDouble;
+    }
+  }
+
+  return inDouble;
 }
 
 /**
@@ -420,6 +462,23 @@ export class AstExecutor {
 
     if (node.async && node.type !== 'Command' && this.shell.executeBackground) {
       return this.executeInBackground(node, ctx);
+    }
+
+    // `! ( … )`, `! { …; }`, `! if …`: a command and a pipeline negate their
+    // own status; any other command is negated here. `set -e` does not act on
+    // a negated command, so it runs with errexit held off
+    if ((node as { bang?: boolean }).bang && node.type !== 'Command' && node.type !== 'Pipeline') {
+      const inner = ctx.spawnContext();
+
+      inner.setErrexitSuppressed(true);
+
+      const code = await this.executeNode({ ...node, bang: false } as AstNode, inner);
+
+      if (isExitSignal(code) || isReturnSignal(code) || code === BREAK_CODE || code === CONTINUE_CODE) {
+        return code;
+      }
+
+      return code === 0 ? 1 : 0;
     }
 
     switch (node.type) {
@@ -900,23 +959,28 @@ export class AstExecutor {
     // so `x=$(false)` sets x to that command's output and leaves $? at 1.
     let assignStatus = 0;
 
-    const assignments: Assignment[] = [];
+    // Assignments are made left to right, each expanded with the ones before it
+    // in effect: `a=1 b=$a` gives b 1. Before a command they come after its
+    // words and redirections are expanded — `x=new echo $x` prints the old x —
+    // and last only the command sees them, except, in POSIX mode, before a
+    // special builtin, where they persist
+    const special = ctx.getShellOption('posix') && node.name && !node.name.expansion?.length && SPECIAL_BUILTINS.has(node.name.text);
+    const assign = async () => {
+      for (const arg of node.prefix?.filter((arg) => arg.type === 'AssignmentWord') || []) {
+        const assignment = await this.resolveAssignment(arg, ctx);
 
-    for (const arg of node.prefix?.filter((arg) => arg.type === 'AssignmentWord') || []) {
-      const assignment = await this.resolveAssignment(arg, ctx);
+        if (!assignment) {
+          continue;
+        }
 
-      if (!assignment) {
-        continue;
+        assignStatus = assignment.status;
+        await this.trace(parentCtx, this.traceAssignment(assignment));
+        await this.applyAssignment(assignment, special ? parentCtx : ctx, Boolean(node?.name) && !special);
       }
+    };
 
-      assignStatus = assignment.status;
-      assignments.push(assignment);
-    }
-
-    // Bare assignments (no command) persist in shell, prefix assignments are scoped to the command
-    for (const assignment of assignments) {
-      await this.trace(parentCtx, this.traceAssignment(assignment));
-      await this.applyAssignment(assignment, ctx, Boolean(node?.name));
+    if (!node.name) {
+      await assign();
     }
 
     // Redirections may stand before the name as well as after it: `>out echo hi`,
@@ -966,6 +1030,8 @@ export class AstExecutor {
 
     // Apply IO redirections
     const redirectPipes = await this.applyRedirections(ctx, redirects, subs);
+
+    await assign();
 
     // A name that expands to nothing leaves the next word to be the command, and
     // one that expands to several makes the rest arguments: `$empty echo hi` runs
@@ -2326,29 +2392,11 @@ export class AstExecutor {
       return utils.unquoteSingleWord(word.text);
     }
 
-    const rValue = new utils.ReplaceString(word.text);
+    // Every expansion a word can have, `${x:-y}`, `${a[1]}` and `${#s}` too; no
+    // splitting and no globbing, so what comes out is one string
+    const { values } = await this.resolveExpansions(word as unknown as AstNodeWord, ctx, undefined, { split: false, glob: false });
 
-    for (const xp of word.expansion) {
-      if (xp.resolved) continue;
-
-      if (xp.type === 'ParameterExpansion') {
-        const params = { ...ctx.getEnv(), ...ctx.getParams() };
-        rValue.replace(
-          xp.loc!.start,
-          xp.loc!.end + 1,
-          params[xp.parameter!] || '',
-        );
-      } else if (xp.type === 'CommandExpansion') {
-        const { output } = await this.substitute(xp.commandAST, ctx);
-        rValue.replace(xp.loc!.start, xp.loc!.end + 1, output.trimEnd());
-      } else if (xp.type === 'ArithmeticExpansion') {
-        const result = await this.arithmeticValue({ expression: xp.expression ?? '', arithmeticAST: xp.arithmeticAST }, ctx);
-        rValue.replace(xp.loc!.start, xp.loc!.end + 1, String(result));
-      }
-      // Note: PathExpansion is NOT applied in [[ ]] - patterns are used literally
-    }
-
-    return utils.unquoteSingleWord(rValue.text);
+    return values.join(' ');
   }
 
   /**
@@ -2651,9 +2699,12 @@ export class AstExecutor {
     }
 
     if (local) {
+      // Before a command it is in that command's environment too, exported for it alone
       ctx.setLocalParams({ [name]: assigned });
-    } else if (ctx.getShellOption('allexport')) {
-      // `set -a` makes a plain assignment an exported one, so a child sees it
+      ctx.setLocalEnv({ [name]: assigned });
+    } else if (ctx.getShellOption('allexport') || (ctx.getParams()[name] === undefined && name in ctx.getEnv())) {
+      // `set -a` makes a plain assignment an exported one, so a child sees it;
+      // so does assigning a variable that is exported already
       ctx.setEnv({ [name]: assigned });
     } else {
       ctx.setParams({ [name]: assigned });
@@ -2841,8 +2892,9 @@ export class AstExecutor {
     const { name, subscript } = this.splitSubscript(parameter);
 
     if (subscript === undefined) {
-      // `$a` on an array is its first element, as in bash
-      return params[name] ?? ctx.getArray(name)?.[0] ?? '';
+      // `$a` on an array is its first element, as in bash; on an associative
+      // array, the one whose key is 0
+      return params[name] ?? ctx.getArray(name)?.[0] ?? ctx.getAssoc(name)?.['0'] ?? '';
     }
 
     if (subscript === '@' || subscript === '*') {
@@ -2919,6 +2971,47 @@ export class AstExecutor {
   }
 
   /**
+   * `${x@Q}` and the rest of the `@` operators: the value quoted to be read
+   * back in (Q), its backslash escapes expanded (E), as a prompt (P), the
+   * assignment that recreates it (A), its attributes (a), in upper case (U),
+   * with the first letter upper (u), in lower case (L), as keys and values (K, k).
+   */
+  private transformValue(letter: string, parameter: string, value: string, ctx: ExecContextIf): string {
+    const name = this.splitSubscript(parameter).name;
+    const attributes = () =>
+      (ctx.getAssoc(name) ? 'A' : ctx.getArray(name) ? 'a' : '') +
+      (ctx.isIntegerVar(name) ? 'i' : '') +
+      (ctx.isReadonlyVar(name) ? 'r' : '') +
+      (name in ctx.getEnv() && ctx.getParams()[name] === undefined ? 'x' : '');
+
+    switch (letter) {
+      case 'Q':
+      case 'K':
+      case 'k':
+        return shellQuote(value);
+      case 'E':
+        return utils.unquoteWord(`$'${value.replaceAll("'", "\\'")}'`).values[0] ?? '';
+      case 'P':
+        return value;
+      case 'A': {
+        const flags = attributes();
+
+        return flags ? `declare -${flags} ${name}=${shellQuote(value)}` : `${name}=${shellQuote(value)}`;
+      }
+      case 'a':
+        return attributes();
+      case 'U':
+        return value.toUpperCase();
+      case 'u':
+        return value.charAt(0).toUpperCase() + value.slice(1);
+      case 'L':
+        return value.toLowerCase();
+      default:
+        return value;
+    }
+  }
+
+  /**
    * Apply an operator that transforms a value, or return null when the operator
    * is not one of those (the `${x-word}` family needs to know whether the
    * parameter is set, and `${#x}` is about the parameter, not its value).
@@ -2928,6 +3021,9 @@ export class AstExecutor {
    */
   protected async applyValueOperator(xp: Record<string, unknown>, value: string, ctx: ExecContextIf): Promise<string | null> {
     switch (xp.op) {
+      case 'transformation':
+        return this.transformValue(String(xp.transform ?? ''), String(xp.parameter ?? ''), value, ctx);
+
       case 'stringReplace': {
         // ${var/pattern/string}
         const pattern = String(xp.substitute ?? '');
@@ -3057,6 +3153,7 @@ export class AstExecutor {
     node: AstNodeWord | AstNodeAssignmentWord,
     ctx: ExecContextIf,
     subs?: ProcessSubstitutions,
+    opts: { noSplit?: boolean } = {},
   ): Promise<{ text: string; protectedRanges: ProtectedRange[]; status: number; emptyList: boolean }> {
     const rValue = new utils.ReplaceString(node.text);
 
@@ -3081,12 +3178,20 @@ export class AstExecutor {
 
         // $@ and ${arr[@]} produce one field per element even inside quotes,
         // which a single substituted string cannot express — so the elements go
-        // in joined by a marker that the field splitter always breaks on. $* and
-        // ${arr[*]} instead join on the first character of IFS.
+        // in joined by a marker that the field splitter always breaks on. "$*"
+        // and "${arr[*]}" instead join on the first character of IFS; unquoted,
+        // they are fields as $@ is, whatever IFS holds. Where no splitting
+        // follows — an assignment, `[[ ]]`, `case` — both are one string, $@
+        // joined with spaces.
         const list = this.expandListParameter(xp, ctx, params);
 
         if (list) {
-          const separator = list.join === 'field' ? utils.FIELD_MARKER : (this.getIfs(ctx)[0] ?? '');
+          const ifsFirst = this.getIfs(ctx)[0] ?? '';
+          const separator = opts.noSplit
+            ? (list.join === 'field' ? ' ' : ifsFirst)
+            : list.join === 'field' || !isDoubleQuotedAt(node.text, xp.loc!.start)
+            ? utils.FIELD_MARKER
+            : ifsFirst;
 
           // An operator on a list applies to each element in turn, except
           // ${a[@]:x:y}, which slices the list itself
@@ -3106,9 +3211,17 @@ export class AstExecutor {
             list.values = await Promise.all(list.values.map(async (value) => await this.applyValueOperator(xpAny, value, ctx) ?? value));
           }
 
+          // Unquoted, an empty element is no word at all — except at either end,
+          // where it may be joined to the rest of the word: `x$@` with "" first
+          if (separator === utils.FIELD_MARKER && !isDoubleQuotedAt(node.text, xp.loc!.start)) {
+            const alone = node.text.slice(0, xp.loc!.start) + node.text.slice(xp.loc!.end + 1) === '';
+
+            list.values = list.values.filter((value, i) => value !== '' || (!alone && (i === 0 || i === list.values.length - 1)));
+          }
+
           // An empty list in a word of its own expands to no word at all, not to
           // one empty word: `f "$@"` with no arguments passes nothing.
-          if (list.values.length === 0 && list.join === 'field') {
+          if (list.values.length === 0 && separator === utils.FIELD_MARKER) {
             const rest = node.text.slice(0, xp.loc!.start) + node.text.slice(xp.loc!.end + 1);
             if (rest.replace(/"/g, '') === '') {
               emptyList = true;
@@ -3158,7 +3271,12 @@ export class AstExecutor {
 
             this.assertParameterSet(xp.parameter!, isSet, ctx);
 
-            resolved = subscript === '@' || subscript === '*' ? String(this.arrayElements(name, ctx, params).length) : String(paramValue.length);
+            if (name === '@' || name === '*') {
+              // ${#@} and ${#*}: the number of positional parameters, as $#
+              resolved = params['#'] ?? '0';
+            } else {
+              resolved = subscript === '@' || subscript === '*' ? String(this.arrayElements(name, ctx, params).length) : String(paramValue.length);
+            }
           } else {
             this.assertParameterSet(xp.parameter!, isSet, ctx);
 
@@ -3222,7 +3340,9 @@ export class AstExecutor {
       return { values: [node.text], status: 0 };
     }
 
-    const { text: value, protectedRanges, status, emptyList } = await this.substituteExpansions(node, ctx, subs);
+    const { text: value, protectedRanges, status, emptyList } = await this.substituteExpansions(node, ctx, subs, {
+      noSplit: opts.split === false || node.type === 'AssignmentWord',
+    });
 
     if (emptyList) {
       return { values: [], status };

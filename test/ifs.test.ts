@@ -84,3 +84,19 @@ Deno.test('IFS field splitting', async (t) => {
     assertEquals(result.stdout, '[  spaced  ]\n');
   });
 });
+
+Deno.test('$* and $@ as bash splits and joins them', async (t) => {
+  const run = async (script: string) => (await new TestShell().runAndCapture(script)).stdout;
+
+  await t.step('unquoted $* is one field per parameter, whatever IFS holds', async () => {
+    assertEquals(await run('set -- a "b c" d; IFS=""; for w in $*; do echo "[$w]"; done; echo "[$*]"'), '[a]\n[b c]\n[d]\n[ab cd]\n');
+  });
+
+  await t.step('where no splitting follows, $@ joins with spaces and $* with IFS', async () => {
+    assertEquals(await run('set -- a b; IFS=:; x=$@; y=$*; echo "$x|$y"; [[ $@ == "a b" ]] && echo c'), 'a b|a:b\nc\n');
+  });
+
+  await t.step('an unquoted empty parameter is no word', async () => {
+    assertEquals(await run('set -- a "" b; for w in $@; do echo "[$w]"; done'), '[a]\n[b]\n');
+  });
+});

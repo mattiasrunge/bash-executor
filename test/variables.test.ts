@@ -141,3 +141,61 @@ Deno.test('assigning to a declare -i variable evaluates the value', async () => 
   const result = await shell.runAndCapture('declare -i x; x=1+2; echo $x; x+=4; echo $x; b=5; x=b*2; echo $x');
   assertEquals(result.stdout, '3\n7\n10\n');
 });
+
+// Found running bash's own test suite: each case is what bash does
+Deno.test('Variables as bash scopes and exports them', async (t) => {
+  const run = async (script: string) => (await new TestShell().runAndCapture(script)).stdout;
+
+  await t.step('the operators work on positional and special parameters', async () => {
+    assertEquals(
+      await run('set -- hello; echo "${1:1:3}|${1:-d}|${2:-d}|${1#h}|${1%o}|${1/l/L}|${1^}|${#1}|${?:-x}|${#@}"'),
+      'ell|hello|d|ello|hell|heLlo|Hello|5|0|1\n',
+    );
+  });
+
+  await t.step('the @ transformations', async () => {
+    assertEquals(await run(`x="it's"; y=hello; echo \${x@Q} \${y@U} \${y@u} \${y@A}`), `'it'\\''s' HELLO Hello y='hello'\n`);
+  });
+
+  await t.step('declare in a function is local, and exports nothing', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('f() { declare y=2; declare -g G=g; echo "in=$y"; }; f; echo "out=$y G=$G"; declare x=1');
+    assertEquals(result.stdout, 'in=2\nout= G=g\n');
+    assertEquals(shell.getEnv()['x'], undefined);
+    assertEquals(shell.getParams()['x'], '1');
+  });
+
+  await t.step('declare -i evaluates arithmetic', async () => {
+    assertEquals(await run('declare -i n=5+3; echo $n; n+=2; echo $n'), '8\n10\n');
+  });
+
+  await t.step("local inside a block of a function is still the function's", async () => {
+    assertEquals(await run('f() { if true; then local a=1; fi; echo "a=$a"; }; f; echo "out=$a"'), 'a=1\nout=\n');
+  });
+
+  await t.step('declare in a block at the top is global', async () => {
+    assertEquals(await run('if true; then declare q=1; fi; { declare w=2; }; echo "$q $w"'), '1 2\n');
+  });
+
+  await t.step('assigning an exported variable changes what a command sees', async () => {
+    const shell = new TestShell();
+    await shell.runAndCapture('export X=1; X=2');
+    assertEquals(shell.getEnv()['X'], '2');
+  });
+
+  await t.step("prefix assignments: left to right, after the words, in the command's environment", async () => {
+    const shell = new TestShell();
+    let seen: string | undefined;
+    shell.mockCommand('show', async (ctx) => {
+      seen = ctx.getEnv()['Z'];
+      return { code: 0 };
+    });
+    const result = await shell.runAndCapture('x=old; x=new echo $x; Y=1 Z=$Y show; echo "Z=$Z"');
+    assertEquals(result.stdout, 'old\nZ=\n');
+    assertEquals(seen, '1');
+  });
+
+  await t.step('in POSIX mode an assignment before a special builtin persists', async () => {
+    assertEquals(await run('Y=1 :; echo "Y=$Y"; set -o posix; Z=1 :; echo "Z=$Z"'), 'Y=\nZ=1\n');
+  });
+});

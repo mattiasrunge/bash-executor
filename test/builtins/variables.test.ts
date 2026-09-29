@@ -14,7 +14,8 @@ Deno.test('export builtin', async (t) => {
     const result = await exportBuiltin(ctx, ['FOO=bar'], mockShell, noopExecute);
     assertEquals(result.code, 0);
     assertEquals(ctx.getEnv()['FOO'], 'bar');
-    assertEquals(ctx.getParams()['FOO'], 'bar');
+    // Exported variables live in the environment alone
+    assertEquals(ctx.getParams()['FOO'], undefined);
   });
 
   await t.step('exports multiple variables', async () => {

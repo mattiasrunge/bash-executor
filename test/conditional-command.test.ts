@@ -307,3 +307,11 @@ Deno.test('[[ ]] patterns and regular expressions as bash reads them', async (t)
     assertEquals(await run('[[ 1a =~ ^[[:digit:]]+[^[:space:]]$ ]] && echo y'), 'y\n');
   });
 });
+
+Deno.test('[[ ]] expands its words fully', async () => {
+  const shell = new TestShell();
+  const result = await shell.runAndCapture(
+    'a=(x y); s=abc; [[ ${u:-d} == d ]] && echo 1; [[ ${a[1]} == y ]] && echo 2; [[ ${#s} == 3 ]] && echo 3; [[ ${s#a} == bc ]] && echo 4; [[ "${a[*]}" == "x y" ]] && echo 5',
+  );
+  assertEquals(result.stdout, '1\n2\n3\n4\n5\n');
+});

@@ -782,6 +782,12 @@ export interface ExecContextIf {
   getParent: () => ExecContextIf | undefined;
 
   /**
+   * The context of the function this one runs in — where `local` and `declare`
+   * put a variable — or undefined outside any function.
+   */
+  getFunctionScope: () => ExecContextIf | undefined;
+
+  /**
    * Gets the target for an arbitrary file descriptor (0-2 map to stdin/stdout/stderr).
    * @param {string} fd - The file descriptor number.
    * @returns {string | undefined} The target pipe/file name or undefined if not set.

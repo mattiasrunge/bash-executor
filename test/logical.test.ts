@@ -169,3 +169,9 @@ Deno.test('Logical Operators in Scripts', async (t) => {
     assertEquals(result.stdout, 'found\n');
   });
 });
+
+Deno.test('! negates a compound command too', async () => {
+  const shell = new TestShell();
+  const result = await shell.runAndCapture('! (true | false); echo $?; ! (false); echo $?; ! { true; }; echo $?; set -e; ! (false); echo survived');
+  assertEquals(result.stdout, '0\n0\n1\nsurvived\n');
+});

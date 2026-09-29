@@ -35,16 +35,18 @@ Deno.test('declare builtin', async (t) => {
     const ctx = setup();
     const result = await declareBuiltin(ctx, ['x=5'], mockShell, noopExecute);
     assertEquals(result.code, 0);
-    assertEquals(ctx.getEnv()['x'], '5');
+    assertEquals(ctx.getParams()['x'], '5');
+    // Declared, not exported
+    assertEquals(ctx.getEnv()['x'], undefined);
   });
 
   await t.step('declares multiple variables', async () => {
     const ctx = setup();
     const result = await declareBuiltin(ctx, ['a=1', 'b=2', 'c=3'], mockShell, noopExecute);
     assertEquals(result.code, 0);
-    assertEquals(ctx.getEnv()['a'], '1');
-    assertEquals(ctx.getEnv()['b'], '2');
-    assertEquals(ctx.getEnv()['c'], '3');
+    assertEquals(ctx.getParams()['a'], '1');
+    assertEquals(ctx.getParams()['b'], '2');
+    assertEquals(ctx.getParams()['c'], '3');
   });
 
   await t.step('invalid identifier returns error', async () => {
@@ -79,7 +81,7 @@ Deno.test('declare builtin', async (t) => {
     // First declare the variable
     let result = await declareBuiltin(ctx, ['-r', 'CONST=10'], mockShell, noopExecute);
     assertEquals(result.code, 0);
-    assertEquals(ctx.getEnv()['CONST'], '10');
+    assertEquals(ctx.getParams()['CONST'], '10');
 
     // Try to modify it
     result = await declareBuiltin(ctx, ['CONST=20'], mockShell, noopExecute);
@@ -91,14 +93,14 @@ Deno.test('declare builtin', async (t) => {
     const ctx = setup();
     const result = await declareBuiltin(ctx, ['-i', 'num=42'], mockShell, noopExecute);
     assertEquals(result.code, 0);
-    assertEquals(ctx.getEnv()['num'], '42');
+    assertEquals(ctx.getParams()['num'], '42');
   });
 
   await t.step('-i with non-numeric value defaults to 0', async () => {
     const ctx = setup();
     const result = await declareBuiltin(ctx, ['-i', 'num=abc'], mockShell, noopExecute);
     assertEquals(result.code, 0);
-    assertEquals(ctx.getEnv()['num'], '0');
+    assertEquals(ctx.getParams()['num'], '0');
   });
 
   await t.step('-f shows functions', async () => {
@@ -120,6 +122,6 @@ Deno.test('typeset builtin', async (t) => {
     const ctx = setup();
     const result = await typesetBuiltin(ctx, ['x=5'], mockShell, noopExecute);
     assertEquals(result.code, 0);
-    assertEquals(ctx.getEnv()['x'], '5');
+    assertEquals(ctx.getParams()['x'], '5');
   });
 });

@@ -85,8 +85,11 @@ export const exportBuiltin: BuiltinHandler = async (ctx, args) => {
     if (arg === '-n') {
       removeExport = true;
     } else if (arg === '-p') {
-      // Print exports - not implemented yet
-      return { code: 0 };
+      // What is exported, as the commands that export it again
+      const env = ctx.getEnv();
+      const stdout = Object.keys(env).sort().map((name) => `declare -x ${name}="${env[name].replace(/(["\\$`])/g, '\\$1')}"\n`).join('');
+
+      return { code: 0, stdout };
     } else if (arg === '--') {
       continue;
     } else {
@@ -107,19 +110,22 @@ export const exportBuiltin: BuiltinHandler = async (ctx, args) => {
         ctx.setEnv({ [name]: null });
         ctx.setParams({ [name]: value });
       } else {
-        // Export and set value
+        // An exported variable lives in the environment and only there, so
+        // that assigning it later updates what a child sees
+        ctx.setParams({ [name]: null });
         ctx.setEnv({ [name]: value });
-        ctx.setParams({ [name]: value });
       }
     } else {
       // name only form - export existing variable
       const name = arg;
       const params = ctx.getParams();
-      const value = params[name] ?? '';
+      const value = params[name] ?? ctx.getEnv()[name] ?? '';
 
       if (removeExport) {
         ctx.setEnv({ [name]: null });
+        ctx.setParams({ [name]: value });
       } else {
+        ctx.setParams({ [name]: null });
         ctx.setEnv({ [name]: value });
       }
     }
@@ -202,7 +208,7 @@ export const localBuiltin: BuiltinHandler = async (cmdCtx, args) => {
   // returns — a local set there would be gone before the next command in the
   // function body ran. The enclosing context is the function's, which is the
   // scope `local` is about.
-  const ctx = cmdCtx.getParent() ?? cmdCtx;
+  const ctx = cmdCtx.getFunctionScope() ?? cmdCtx.getParent() ?? cmdCtx;
 
   let array = false;
   let assoc = false;

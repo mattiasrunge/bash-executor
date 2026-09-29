@@ -4,6 +4,8 @@
  * Declares variables and/or gives them attributes.
  */
 
+import { parseArithmetic } from '@ein/bash-parser';
+import { evaluateArithmetic } from '../arithmetic-eval.ts';
 import type { ExecContextIf, ShellIf } from '../types.ts';
 import type { BuiltinHandler, BuiltinResult } from './types.ts';
 import { assignArrayArg } from './variables.ts';
@@ -93,6 +95,7 @@ export const declareBuiltin: BuiltinHandler = async (
   let unsetExport = false;
   let showFunctions = false;
   let showFunctionNames = false;
+  let global = false;
 
   const varArgs: string[] = [];
 
@@ -127,6 +130,9 @@ export const declareBuiltin: BuiltinHandler = async (
             break;
           case 'F':
             showFunctionNames = true;
+            break;
+          case 'g':
+            global = true;
             break;
         }
       }
@@ -183,6 +189,10 @@ export const declareBuiltin: BuiltinHandler = async (
     // No args and no -p: just return success
     return { code: 0 };
   }
+
+  // In a function, what declare sets is the function's own, as with local
+  const scope = global ? undefined : ctx.getFunctionScope();
+  const attributesOnly = setReadonly || setExport || setInteger || unsetReadonly || unsetExport;
 
   // Process variable arguments
   let hasError = false;
@@ -286,24 +296,32 @@ export const declareBuiltin: BuiltinHandler = async (
     if (value !== undefined) {
       let finalValue = value;
 
-      // For integer variables, evaluate as arithmetic
+      // An integer's value is arithmetic: `declare -i n=5+3` is 8
       if (ctx.isIntegerVar(name) || setInteger) {
         try {
-          // Simple integer evaluation
-          const num = Number.parseInt(value, 10);
-          finalValue = Number.isNaN(num) ? '0' : String(num);
+          finalValue = String(await evaluateArithmetic(parseArithmetic(value || '0'), ctx, { useEnvForAssignment: true }));
         } catch {
           finalValue = '0';
         }
       }
 
-      if (setExport) {
-        // Export to environment
+      const exported = setExport || (ctx.getParams()[name] === undefined && name in ctx.getEnv());
+
+      if (scope) {
+        // In a function, declare makes the variable the function's own, as local does
+        scope.setLocalParams({ [name]: exported ? null : finalValue });
+
+        if (exported) {
+          scope.setLocalEnv({ [name]: finalValue });
+        }
+      } else if (exported) {
         ctx.setEnv({ [name]: finalValue });
       } else {
-        // Set as local parameter
-        ctx.setEnv({ [name]: finalValue });
+        ctx.setParams({ [name]: finalValue });
       }
+    } else if (scope && !printMode && !attributesOnly && !ctx.getArray(name) && !ctx.getAssoc(name)) {
+      // `declare x` in a function: a local of its own, empty until assigned
+      scope.setLocalParams({ [name]: '' });
     } else if (setExport) {
       // Export existing variable
       const env = ctx.getEnv();
