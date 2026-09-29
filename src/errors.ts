@@ -179,6 +179,21 @@ export class UnboundVariableError extends BashExecutorError {
 }
 
 /**
+ * An arithmetic expression that is not one once expanded: `$(( 1 + ))`,
+ * `(( a b ))`. Bash checks arithmetic only when it runs, so this is a run-time
+ * failure of the one command, status 1, with the shell carrying on.
+ */
+export class ArithmeticSyntaxError extends BashExecutorError {
+  readonly expression: string;
+
+  constructor(expression: string, detail: string) {
+    super(`${expression}: syntax error: ${detail}`, { code: 'E_ARITHMETIC_SYNTAX' });
+    this.name = 'ArithmeticSyntaxError';
+    this.expression = expression;
+  }
+}
+
+/**
  * Error thrown when `set -C` refuses to let `>` truncate a file that is there.
  *
  * Like `UnboundVariableError` this is a diagnostic rather than a defect: the

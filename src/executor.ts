@@ -1,5 +1,6 @@
 import {
   type AstArithmeticExpression,
+  type AstArithmeticIdentifier,
   type AstConditionalBinaryExpression,
   type AstConditionalExpression,
   type AstConditionalLogicalExpression,
@@ -33,7 +34,7 @@ import {
 import { getExitCode, getReturnCode, isExitSignal, isReturnSignal, makeExitSignal } from './builtins/exit.ts';
 import type { BuiltinRegistry } from './builtins/types.ts';
 import type { ErrorPosition } from './errors.ts';
-import { NoClobberError, UnboundVariableError, UnknownNodeTypeError, UnsupportedArithmeticNodeError, UnsupportedOperatorError } from './errors.ts';
+import { ArithmeticSyntaxError, NoClobberError, UnboundVariableError, UnknownNodeTypeError, UnsupportedArithmeticNodeError, UnsupportedOperatorError } from './errors.ts';
 import type { ExecContextIf, ExecSyncResult, ExecuteAndCaptureOptions, ShellIf } from './types.ts';
 
 // The special parameters, which are set even when nothing has assigned to them
@@ -627,6 +628,13 @@ export class AstExecutor {
     try {
       return await this.runCommand(node, parentCtx);
     } catch (err) {
+      // An arithmetic expansion that is no expression fails this command the same way
+      if (err instanceof ArithmeticSyntaxError) {
+        await this.shell.pipeWrite(parentCtx.getStderr(), `${err.message}\n`).catch(() => {});
+
+        return this.applyErrexit(1, parentCtx);
+      }
+
       // `set -C` refusing a redirection fails this command and nothing else —
       // the shell carries on, and errexit gets its say like any other failure
       return await this.noClobberStatus(err, parentCtx);
@@ -1438,11 +1446,11 @@ export class AstExecutor {
    */
   protected async executeArithmeticFor(node: AstNodeArithmeticFor, parentCtx: ExecContextIf): Promise<number> {
     return this.withCompoundRedirections(node, parentCtx, async (ctx) => {
-      if (node.init) await this.evaluateArithmetic(node.init.arithmeticAST, ctx);
+      if (node.init) await this.arithmeticValue(node.init, ctx);
 
       let last = 0;
 
-      while (!node.test || await this.evaluateArithmetic(node.test.arithmeticAST, ctx) !== 0) {
+      while (!node.test || await this.arithmeticValue(node.test, ctx) !== 0) {
         const { stop, code } = await this.runLoopBody(node.do, ctx);
         last = code;
 
@@ -1450,11 +1458,11 @@ export class AstExecutor {
           return code;
         }
 
-        if (node.update) await this.evaluateArithmetic(node.update.arithmeticAST, ctx);
+        if (node.update) await this.arithmeticValue(node.update, ctx);
       }
 
       return last;
-    });
+    }).catch((err) => this.arithmeticCommandStatus(err, parentCtx));
   }
 
   protected async executeCase(node: AstNodeCase, parentCtx: ExecContextIf): Promise<number> {
@@ -1719,9 +1727,50 @@ export class AstExecutor {
   }
 
   protected async executeArithmeticCommand(node: AstNodeArithmeticCommand, ctx: ExecContextIf): Promise<number> {
-    const result = await this.evaluateArithmetic(node.arithmeticAST, ctx);
-    // In bash, (( expr )) returns 0 (success) if expr is non-zero, 1 (failure) if expr is zero
-    return this.applyErrexit(result !== 0 ? 0 : 1, ctx);
+    try {
+      const result = await this.arithmeticValue(node, ctx);
+      // In bash, (( expr )) returns 0 (success) if expr is non-zero, 1 (failure) if expr is zero
+      return this.applyErrexit(result !== 0 ? 0 : 1, ctx);
+    } catch (err) {
+      return await this.arithmeticCommandStatus(err, ctx);
+    }
+  }
+
+  /** `((` and `for ((` report a bad expression as bash does, `((: 1 + : syntax error: …`, and fail with 1. */
+  private async arithmeticCommandStatus(err: unknown, ctx: ExecContextIf): Promise<number> {
+    if (!(err instanceof ArithmeticSyntaxError)) {
+      throw err;
+    }
+
+    await this.shell.pipeWrite(ctx.getStderr(), `((: ${err.message}\n`).catch(() => {});
+
+    return this.applyErrexit(1, ctx);
+  }
+
+  /**
+   * The value of an arithmetic expression. The parser hands over an AST when
+   * the text was arithmetic as written; otherwise — `a[i]`, `16#ff`, `$#`, or
+   * something that is not arithmetic at all — the text is expanded, as bash
+   * always does first, and parsed now.
+   */
+  protected async arithmeticValue(part: { expression: string; arithmeticAST?: AstArithmeticExpression }, ctx: ExecContextIf): Promise<number> {
+    if (part.arithmeticAST) {
+      return await this.evaluateArithmetic(part.arithmeticAST, ctx);
+    }
+
+    // Parameters, command substitutions and quote removal, as in double quotes
+    const expanded = (await this.expandHereDocument(part.expression, ctx)).replace(/(?<!\\)"/g, '');
+    let ast: AstArithmeticExpression;
+
+    try {
+      ast = parseArithmetic(expanded);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message.split('\n')[0] : String(err);
+
+      throw new ArithmeticSyntaxError(expanded, detail);
+    }
+
+    return await this.evaluateArithmetic(ast, ctx);
   }
 
   /**
@@ -1949,7 +1998,7 @@ export class AstExecutor {
         const { output } = await this.substitute(xp.commandAST, ctx);
         rValue.replace(xp.loc!.start, xp.loc!.end + 1, output.trimEnd());
       } else if (xp.type === 'ArithmeticExpansion') {
-        const result = await this.evaluateArithmetic(xp.arithmeticAST, ctx);
+        const result = await this.arithmeticValue({ expression: xp.expression ?? '', arithmeticAST: xp.arithmeticAST }, ctx);
         rValue.replace(xp.loc!.start, xp.loc!.end + 1, String(result));
       }
       // Note: PathExpansion is NOT applied in [[ ]] - patterns are used literally
@@ -2740,7 +2789,7 @@ export class AstExecutor {
           output.replace(/\n+$/, ''), // Strip trailing newlines for command expansion (POSIX)
         );
       } else if (xp.type === 'ArithmeticExpansion') {
-        const result = await this.evaluateArithmetic(xp.arithmeticAST, ctx);
+        const result = await this.arithmeticValue({ expression: xp.expression ?? '', arithmeticAST: xp.arithmeticAST }, ctx);
 
         rValue.replace(
           xp.loc!.start,
@@ -2858,6 +2907,92 @@ export class AstExecutor {
    * @param ctx - The execution context for variable resolution
    * @returns The numeric result of the arithmetic expression
    */
+  /** How deep variables that hold expressions have sent the evaluation; bash stops at 1024. */
+  private arithmeticDepth = 0;
+
+  /**
+   * An arithmetic variable's value. A value that is not a plain number is an
+   * expression in its own right, as in bash: with `b='1+2'`, `$(( b * 2 ))` is
+   * 6, and `x=010` is 8. Unset or empty is 0.
+   */
+  private async readArithmeticVariable(node: AstArithmeticIdentifier, ctx: ExecContextIf): Promise<number> {
+    const text = (await this.arithmeticVariableText(node, ctx)).trim();
+
+    if (text === '') {
+      return 0;
+    }
+
+    if (/^[+-]?(0|[1-9]\d*)$/.test(text)) {
+      return Number.parseInt(text, 10);
+    }
+
+    if (++this.arithmeticDepth > 1024) {
+      this.arithmeticDepth = 0;
+      throw new ArithmeticSyntaxError(text, 'expression recursion level exceeded');
+    }
+
+    try {
+      let ast: AstArithmeticExpression;
+
+      try {
+        ast = parseArithmetic(text);
+      } catch (err) {
+        throw new ArithmeticSyntaxError(text, err instanceof Error ? err.message.split('\n')[0] : String(err));
+      }
+
+      return await this.evaluateArithmetic(ast, ctx);
+    } finally {
+      this.arithmeticDepth = Math.max(0, this.arithmeticDepth - 1);
+    }
+  }
+
+  /** The text of a scalar, or of one element of an indexed or associative array. */
+  private async arithmeticVariableText(node: AstArithmeticIdentifier, ctx: ExecContextIf): Promise<string> {
+    if (node.subscript === undefined) {
+      return ctx.getParams()[node.name] ?? ctx.getEnv()[node.name] ?? '';
+    }
+
+    const assoc = ctx.getAssoc(node.name);
+
+    if (assoc) {
+      return assoc[await this.arithmeticKey(node, ctx)] ?? '';
+    }
+
+    const array = ctx.getArray(node.name);
+    const index = await this.arithmeticIndex(node, array?.length ?? 1, ctx);
+
+    // A scalar is element 0 of itself
+    return array ? array[index] ?? '' : index === 0 ? ctx.getParams()[node.name] ?? ctx.getEnv()[node.name] ?? '' : '';
+  }
+
+  private async writeArithmeticVariable(node: AstArithmeticIdentifier, value: number, ctx: ExecContextIf): Promise<void> {
+    if (node.subscript === undefined) {
+      ctx.setParams({ [node.name]: String(value) });
+      return;
+    }
+
+    if (ctx.getAssoc(node.name)) {
+      ctx.setAssocElement(node.name, await this.arithmeticKey(node, ctx), String(value));
+      return;
+    }
+
+    const array = ctx.getArray(node.name);
+
+    ctx.setArrayElement(node.name, await this.arithmeticIndex(node, array?.length ?? 0, ctx), String(value));
+  }
+
+  /** An associative subscript is a key: expanded, not evaluated. */
+  private async arithmeticKey(node: AstArithmeticIdentifier, ctx: ExecContextIf): Promise<string> {
+    return (await this.expandHereDocument(node.subscript ?? '', ctx)).replace(/(?<!\\)"/g, '');
+  }
+
+  /** An indexed subscript is arithmetic; a negative one counts from the end. */
+  private async arithmeticIndex(node: AstArithmeticIdentifier, length: number, ctx: ExecContextIf): Promise<number> {
+    const index = await this.arithmeticValue({ expression: node.subscript ?? '', arithmeticAST: node.index }, ctx);
+
+    return index < 0 ? length + index : index;
+  }
+
   protected async evaluateArithmetic(node: AstArithmeticExpression | { type: 'CommandSubstitution'; commandAST: AstNode }, ctx: ExecContextIf): Promise<number> {
     if (!node) {
       return 0;
@@ -2867,14 +3002,8 @@ export class AstExecutor {
       case 'NumericLiteral':
         return node.value;
 
-      case 'Identifier': {
-        const params = {
-          ...await ctx.getEnv(),
-          ...await ctx.getParams(),
-        };
-        const value = params[node.name] || '0';
-        return Number.parseInt(value, 10) || 0;
-      }
+      case 'Identifier':
+        return await this.readArithmeticVariable(node, ctx);
 
       case 'UnaryExpression': {
         const arg = await this.evaluateArithmetic(node.argument, ctx);
@@ -2959,7 +3088,6 @@ export class AstExecutor {
       }
 
       case 'AssignmentExpression': {
-        const varName = node.left.name;
         let value: number;
 
         if (node.operator === '=') {
@@ -3003,15 +3131,14 @@ export class AstExecutor {
           }
         }
 
-        ctx.setParams({ [varName]: String(value) });
+        await this.writeArithmeticVariable(node.left, value, ctx);
         return value;
       }
 
       case 'UpdateExpression': {
-        const varName = node.argument.name;
         const currentValue = await this.evaluateArithmetic(node.argument, ctx);
         const newValue = node.operator === '++' ? currentValue + 1 : currentValue - 1;
-        ctx.setParams({ [varName]: String(newValue) });
+        await this.writeArithmeticVariable(node.argument, newValue, ctx);
         return node.prefix ? newValue : currentValue;
       }
 

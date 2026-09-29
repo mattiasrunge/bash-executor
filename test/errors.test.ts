@@ -114,62 +114,34 @@ echo hello |`;
   });
 });
 
-Deno.test('Arithmetic Error Context', async (t) => {
-  await t.step('arithmetic error includes full source', async () => {
+Deno.test('Arithmetic errors happen at run time, as in bash', async (t) => {
+  // bash checks arithmetic only after expansion: a bad expression fails its
+  // command with 1 and a message, and the script carries on
+
+  await t.step('$(( )) fails the command it is in, and the next one runs', async () => {
     const shell = new TestShell();
-    const source = 'echo $((1 + ))';
-    try {
-      await shell.run(source);
-      throw new Error('Should have thrown');
-    } catch (e) {
-      assertInstanceOf(e, BashSyntaxError);
-      // Source should be the full script, not just the arithmetic expression
-      assertEquals(e.source, source);
-    }
+    const result = await shell.runAndCapture('echo a $((1 + )); echo "s=$?"');
+    assertEquals(result.stdout, 's=1\n');
+    assertEquals(result.stderr.includes('1 + : syntax error'), true);
   });
 
-  await t.step('arithmetic error has row and col computed from char', async () => {
+  await t.step('(( )) reports with its prefix', async () => {
     const shell = new TestShell();
-    const source = 'echo $((1 + ))';
-    try {
-      await shell.run(source);
-      throw new Error('Should have thrown');
-    } catch (e) {
-      assertInstanceOf(e, BashSyntaxError);
-      // Should have row computed (arithmetic errors originally only have char)
-      assertEquals(e.location?.start?.row, 1);
-      assertEquals(typeof e.location?.start?.col, 'number');
-    }
+    const result = await shell.runAndCapture('(( a + * b )); echo "s=$?"');
+    assertEquals(result.stdout, 's=1\n');
+    assertEquals(result.stderr.startsWith('((: a + * b: syntax error'), true);
   });
 
-  await t.step('multiline arithmetic error has correct row', async () => {
+  await t.step('an assignment from a bad expression is not made', async () => {
     const shell = new TestShell();
-    const source = `x=1
-echo $((x + ))`;
-    try {
-      await shell.run(source);
-      throw new Error('Should have thrown');
-    } catch (e) {
-      assertInstanceOf(e, BashSyntaxError);
-      assertEquals(e.source, source);
-      // Error is on line 2
-      assertEquals(e.location?.start?.row, 2);
-    }
+    const result = await shell.runAndCapture('x=1\nx=$((x + )); echo "x=$x s=$?"');
+    assertEquals(result.stdout, 'x=1 s=1\n');
   });
 
-  await t.step('getCodeSnippet works for arithmetic errors', async () => {
+  await t.step('what the parser could not read ahead is read after expansion', async () => {
     const shell = new TestShell();
-    const source = 'result=$((a + * b))';
-    try {
-      await shell.run(source);
-      throw new Error('Should have thrown');
-    } catch (e) {
-      assertInstanceOf(e, BashSyntaxError);
-      const snippet = e.getCodeSnippet();
-      assertEquals(typeof snippet, 'string');
-      // Should contain the full source line
-      assertEquals(snippet!.includes('result=$((a + * b))'), true);
-    }
+    const result = await shell.runAndCapture('set -- a b; a=(1 2 3); echo $(( $# + a[2] + 16#10 ))');
+    assertEquals(result.stdout, '21\n');
   });
 });
 
