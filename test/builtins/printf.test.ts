@@ -187,3 +187,39 @@ Deno.test('printf builtin', async (t) => {
     assertEquals(result.stdout, 'first and ');
   });
 });
+
+Deno.test('printf reuses the format for extra arguments', async (t) => {
+  await t.step('one specifier, three arguments', async () => {
+    const result = await printfBuiltin(new ExecContext(), ['%s-', 'a', 'b', 'c'], mockShell, noopExecute);
+    assertEquals(result.stdout, 'a-b-c-');
+  });
+
+  await t.step('a last round short of arguments fills in empty', async () => {
+    const result = await printfBuiltin(new ExecContext(), ['[%s %s]', 'a', 'b', 'c'], mockShell, noopExecute);
+    assertEquals(result.stdout, '[a b][c ]');
+  });
+
+  await t.step('a format without specifiers runs once', async () => {
+    const result = await printfBuiltin(new ExecContext(), ['x\\n', 'a', 'b'], mockShell, noopExecute);
+    assertEquals(result.stdout, 'x\n');
+  });
+
+  await t.step('%% does not consume an argument', async () => {
+    const result = await printfBuiltin(new ExecContext(), ['%d%%\\n', '1', '2'], mockShell, noopExecute);
+    assertEquals(result.stdout, '1%\n2%\n');
+  });
+});
+
+Deno.test('printf -v assigns instead of printing', async (t) => {
+  await t.step('sets the variable, prints nothing', async () => {
+    const ctx = new ExecContext();
+    const result = await printfBuiltin(ctx, ['-v', 'out', '%05d', '42'], mockShell, noopExecute);
+    assertEquals(result.stdout, undefined);
+    assertEquals(ctx.getParams().out, '00042');
+  });
+
+  await t.step('an invalid name is an error', async () => {
+    const result = await printfBuiltin(new ExecContext(), ['-v', '1x', '%s', 'a'], mockShell, noopExecute);
+    assertEquals(result.code, 2);
+  });
+});

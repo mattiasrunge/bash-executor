@@ -99,12 +99,29 @@ function processEscapes(str: string): string {
  * printf "Hello %s\n" "World"
  * printf "%d + %d = %d\n" 2 3 5
  * printf "%-10s %5d\n" "name" 42
+ * printf "%s\n" a b c        # the format is reused until the arguments run out
+ * printf -v line "%05d" 42   # into a variable instead of stdout
  */
 export const printfBuiltin: BuiltinHandler = async (
-  _ctx: ExecContextIf,
+  ctx: ExecContextIf,
   args: string[],
   _shell: ShellIf,
 ): Promise<BuiltinResult> => {
+  let target: string | undefined;
+
+  if (args[0] === '-v') {
+    target = args[1];
+    args = args.slice(2);
+
+    if (!target || !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(target)) {
+      return { code: 2, stderr: `printf: \`${target ?? ''}': not a valid identifier\n` };
+    }
+  }
+
+  if (args[0] === '--') {
+    args = args.slice(1);
+  }
+
   if (args.length === 0) {
     return {
       code: 1,
@@ -120,9 +137,25 @@ export const printfBuiltin: BuiltinHandler = async (
     let format = processEscapes(rawFormat);
     // Replace %i with %d since @std/fmt doesn't support %i
     format = format.replace(/%(-?\d*\.?\d*)i/g, '%$1d');
-    // Convert values to appropriate types based on format specifiers
-    const typedValues = convertValues(format, values);
-    const output = sprintf(format, ...typedValues);
+    // bash reuses the format as often as it takes to consume every argument,
+    // and runs it once with none; a format that takes no arguments runs once
+    const perRound = countConsumers(format);
+    let output = '';
+    let offset = 0;
+
+    do {
+      const round = values.slice(offset, offset + perRound);
+
+      output += sprintf(format, ...convertValues(format, round));
+      offset += perRound;
+    } while (perRound > 0 && offset < values.length);
+
+    if (target !== undefined) {
+      ctx.setParams({ [target]: output });
+
+      return { code: 0 };
+    }
+
     return { code: 0, stdout: output };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -133,6 +166,13 @@ export const printfBuiltin: BuiltinHandler = async (
   }
 };
 
+const SPECIFIER = /%[-+#0 ]*\d*\.?\d*[diouxXeEfFgGcsbq%]/g;
+
+/** How many arguments one pass over the format consumes. */
+function countConsumers(format: string): number {
+  return [...format.matchAll(SPECIFIER)].filter((m) => !m[0].endsWith('%')).length;
+}
+
 /**
  * Convert string values to appropriate types based on format specifiers.
  * This is needed because sprintf expects typed arguments.
@@ -142,7 +182,7 @@ function convertValues(format: string, values: string[]): unknown[] {
   let valueIndex = 0;
 
   // Find format specifiers and convert corresponding values
-  const specifierRegex = /%[-+#0 ]*\d*\.?\d*[diouxXeEfFgGcsbq%]/g;
+  const specifierRegex = new RegExp(SPECIFIER);
   let match;
 
   while ((match = specifierRegex.exec(format)) !== null) {
