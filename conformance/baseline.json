@@ -4,7 +4,7 @@
     "alias.tests": true,
     "alias1.sub": true,
     "alias2.sub": true,
-    "alias3.sub": false,
+    "alias3.sub": true,
     "alias4.sub": false,
     "alias5.sub": true,
     "alias6.sub": true,
@@ -12,7 +12,7 @@
     "appendop1.sub": true,
     "appendop2.sub": true,
     "arith-for.tests": true,
-    "arith.tests": false,
+    "arith.tests": true,
     "arith1.sub": true,
     "arith2.sub": true,
     "arith3.sub": true,
@@ -83,11 +83,11 @@
     "builtins5.sub": true,
     "builtins6.sub": true,
     "builtins7.sub": true,
-    "case.tests": false,
+    "case.tests": true,
     "case1.sub": true,
     "case2.sub": true,
     "case3.sub": true,
-    "case4.sub": false,
+    "case4.sub": true,
     "casemod.tests": true,
     "complete.tests": true,
     "comsub-eof.tests": true,
@@ -98,11 +98,11 @@
     "comsub-eof4.sub": true,
     "comsub-eof5.sub": true,
     "comsub-eof6.sub": true,
-    "comsub-posix.tests": false,
+    "comsub-posix.tests": true,
     "comsub-posix1.sub": false,
     "comsub-posix2.sub": true,
     "comsub-posix3.sub": true,
-    "comsub-posix5.sub": false,
+    "comsub-posix5.sub": true,
     "comsub-posix6.sub": true,
     "comsub.tests": true,
     "comsub1.sub": true,
@@ -342,7 +342,7 @@
     "nquote5.tests": true,
     "parser.tests": true,
     "parser1.sub": true,
-    "posix2.tests": false,
+    "posix2.tests": true,
     "posix2syntax.sub": true,
     "posixexp.tests": false,
     "posixexp1.sub": true,
@@ -396,7 +396,7 @@
     "redir6.sub": true,
     "redir7.sub": true,
     "redir8.sub": true,
-    "redir9.sub": false,
+    "redir9.sub": true,
     "rhs-exp.tests": true,
     "rhs-exp1.sub": true,
     "rsh.tests": true,
@@ -417,7 +417,7 @@
     "source4.sub": true,
     "source5.sub": true,
     "source6.sub": true,
-    "source7.sub": false,
+    "source7.sub": true,
     "strip.tests": true,
     "test.tests": true,
     "test1.sub": true,
@@ -438,7 +438,7 @@
     "type3.sub": true,
     "type4.sub": false,
     "unicode1.sub": false,
-    "unicode2.sub": false,
+    "unicode2.sub": true,
     "unicode3.sub": true,
     "varenv.tests": true,
     "varenv1.sub": true,
@@ -475,7 +475,7 @@
   },
   "tests": {
     "run-alias": {
-      "upstream": 0.06,
+      "upstream": 0.061,
       "pass": false,
       "stdout": 0.093,
       "reference": "pass"
@@ -487,9 +487,9 @@
       "reference": "pass"
     },
     "run-arith": {
-      "upstream": 0,
+      "upstream": 0.703,
       "pass": false,
-      "stdout": 0,
+      "stdout": 0.81,
       "reference": "pass"
     },
     "run-arith-for": {
@@ -535,9 +535,9 @@
       "reference": "pass"
     },
     "run-case": {
-      "upstream": 0,
+      "upstream": 0.837,
       "pass": false,
-      "stdout": 0,
+      "stdout": 0.857,
       "reference": "pass"
     },
     "run-casemod": {
@@ -565,9 +565,9 @@
       "reference": "pass"
     },
     "run-comsub-posix": {
-      "upstream": 0,
+      "upstream": 0.771,
       "pass": false,
-      "stdout": 0,
+      "stdout": 0.896,
       "reference": "pass"
     },
     "run-cond": {
@@ -818,15 +818,15 @@
       "reference": "pass"
     },
     "run-parser": {
-      "upstream": 0.571,
+      "upstream": 0.621,
       "pass": false,
-      "stdout": 0.941,
+      "stdout": 1,
       "reference": "pass"
     },
     "run-posix2": {
-      "upstream": 0,
+      "upstream": 0.182,
       "pass": false,
-      "stdout": 0,
+      "stdout": 0.286,
       "reference": "pass"
     },
     "run-posixexp": {
@@ -891,9 +891,9 @@
       "timeout": true
     },
     "run-redir": {
-      "upstream": 0.476,
+      "upstream": 0.55,
       "pass": false,
-      "stdout": 0.541,
+      "stdout": 0.599,
       "reference": "pass"
     },
     "run-rhs-exp": {
