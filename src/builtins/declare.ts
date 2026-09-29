@@ -5,10 +5,11 @@
  */
 
 import { contextVariables, evaluateArithmeticText } from '../arith.ts';
+import { functionEnvName, functionText } from '../print-command.ts';
 import { doubleQuoted } from '../quote.ts';
 import type { ExecContextIf, ShellIf } from '../types.ts';
 import type { BuiltinHandler, BuiltinResult } from './types.ts';
-import { assignArrayArg } from './variables.ts';
+import { assignArrayArg, exportFunctions } from './variables.ts';
 
 /**
  * A variable's attributes as `declare -p` writes them, in bash's order:
@@ -155,20 +156,36 @@ export const declareBuiltin: BuiltinHandler = async (
     }
   }
 
-  // Handle -f or -F (show functions)
+  // -f prints functions as bash would read them back, -F only their names:
+  // the ones named, or all of them sorted. A name that is no function fails quietly.
   if (showFunctions || showFunctionNames) {
-    const functions = ctx.getFunctions();
-    let output = '';
+    // `declare -fx name` exports it, as `export -f name` does
+    if (varArgs.length && (setExport || unsetExport)) return await exportFunctions(ctx, varArgs, unsetExport);
 
-    for (const [name] of Object.entries(functions)) {
-      if (showFunctionNames) {
-        output += `declare -f ${name}\n`;
+    const functions = ctx.getFunctions();
+    const env = ctx.getEnv();
+    const exported = (name: string) => functionEnvName(name) in env;
+    // `declare -xF` lists the exported ones only
+    const names = varArgs.length ? varArgs : Object.keys(functions).sort().filter((name) => !setExport || exported(name));
+    let output = '';
+    let code = 0;
+
+    for (const name of names) {
+      const fn = functions[name];
+      const listing = varArgs.length === 0;
+      const declaration = `declare -f${exported(name) ? 'x' : ''} ${name}\n`;
+
+      if (!fn) {
+        code = 1;
+      } else if (showFunctionNames) {
+        output += listing ? declaration : `${name}\n`;
       } else {
-        output += `${name} ()\n{\n    # function body\n}\n`;
+        output += `${await functionText(fn, ctx.getShellOption('posix'))}\n`;
+        if (listing && exported(name)) output += declaration;
       }
     }
 
-    return { code: 0, stdout: output };
+    return { code, stdout: output };
   }
 
   // No variable arguments - display variables

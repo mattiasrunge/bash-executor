@@ -6,3 +6,4 @@ export * from './src/jobs.ts';
 export * from './src/types.ts';
 export * from './src/builtins/mod.ts';
 export * from './src/bytes.ts';
+export * from './src/print-command.ts';

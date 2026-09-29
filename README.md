@@ -117,6 +117,12 @@ find commands with the `lookupCommand` callback (falling back to running `which
 what it creates; and `exec -a`/`-c` hand `argv0` and `clearEnv` to `execute` in
 its options.
 
+`type`, `declare -f` and `set` print a function as bash does (`printFunction`),
+from the source it was defined in. `export -f name` hands it to the commands the
+shell runs as `BASH_FUNC_name%%`, the variable bash reads it back from; a host
+starting a shell calls `importFunctions(ctx)` to define what its environment
+carries.
+
 ## Contributing
 
 Contributions are welcome! Please see the [`CONTRIBUTING.md`](./CONTRIBUTING.md) file for guidelines on how to contribute to this project.

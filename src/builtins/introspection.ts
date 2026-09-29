@@ -7,6 +7,7 @@
  */
 
 import { hashedCommand } from '../command-hash.ts';
+import { functionText } from '../print-command.ts';
 import { singleQuoted } from '../quote.ts';
 import type { ExecContextIf, ShellIf } from '../types.ts';
 import type { BuiltinHandler, BuiltinRegistry, BuiltinResult } from './types.ts';
@@ -123,7 +124,9 @@ async function describeCommand(
 
     if (KEYWORDS.has(name) && say('keyword', `${name} is a shell keyword`, name)) return true;
 
-    if (!flags.noFuncs && ctx.getFunction(name) && say('function', `${name} is a function`, name)) return true;
+    const fn = flags.noFuncs ? null : ctx.getFunction(name);
+
+    if (fn && say('function', `${name} is a function\n${flags.short ? await functionText(fn, ctx.getShellOption('posix')) : ''}`.trimEnd(), name)) return true;
 
     if (registry.has(name) && say('builtin', `${name} is a shell builtin`, name)) return true;
   }

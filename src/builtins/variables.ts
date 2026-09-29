@@ -1,4 +1,5 @@
 import { utils } from '@ein/bash-parser';
+import { exportedFunctionText, functionEnvName } from '../print-command.ts';
 import type { ExecContextIf } from '../types.ts';
 import type { BuiltinHandler } from './types.ts';
 
@@ -71,6 +72,34 @@ export const assignArrayArg = (ctx: ExecContextIf, arg: string, local: boolean):
  *   -n    Remove the export property from each name
  *   -p    Display all exported variables (not implemented)
  */
+/**
+ * `export -f name`: the function goes to the commands the shell runs as
+ * `BASH_FUNC_name%%`, which a bash among them defines again; `-n` takes it back.
+ * A name no command could be looked up by — with `=` or `/` in it — cannot go.
+ */
+export async function exportFunctions(ctx: ExecContextIf, names: string[], remove: boolean) {
+  let stderr = '';
+  let code = 0;
+
+  for (const name of names) {
+    const fn = ctx.getFunction(name);
+
+    if (!fn) {
+      stderr += `export: ${name}: not a function\n`;
+      code = 1;
+    } else if (remove) {
+      ctx.setEnv({ [functionEnvName(name)]: null });
+    } else if (/[=/]/.test(name)) {
+      stderr += `export: ${name}: cannot export\n`;
+      code = 1;
+    } else {
+      ctx.setEnv({ [functionEnvName(name)]: await exportedFunctionText(fn) });
+    }
+  }
+
+  return { code, stderr };
+}
+
 export const exportBuiltin: BuiltinHandler = async (ctx, args) => {
   if (args.length === 0) {
     // With no arguments, list all exported variables
@@ -79,11 +108,13 @@ export const exportBuiltin: BuiltinHandler = async (ctx, args) => {
   }
 
   let removeExport = false;
+  let functions = false;
   const varArgs: string[] = [];
 
   for (const arg of args) {
-    if (arg === '-n') {
-      removeExport = true;
+    if (/^-[fn]+$/.test(arg)) {
+      removeExport ||= arg.includes('n');
+      functions ||= arg.includes('f');
     } else if (arg === '-p') {
       // What is exported, as the commands that export it again
       const env = ctx.getEnv();
@@ -96,6 +127,8 @@ export const exportBuiltin: BuiltinHandler = async (ctx, args) => {
       varArgs.push(arg);
     }
   }
+
+  if (functions) return await exportFunctions(ctx, varArgs, removeExport);
 
   for (const arg of varArgs) {
     const eqIdx = arg.indexOf('=');
@@ -166,6 +199,7 @@ export const unsetBuiltin: BuiltinHandler = async (ctx, args) => {
   for (const name of names) {
     if (unsetFunctions) {
       ctx.unsetFunction(name);
+      ctx.setEnv({ [functionEnvName(name)]: null });
       continue;
     }
 

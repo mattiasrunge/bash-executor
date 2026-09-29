@@ -172,6 +172,7 @@ async function main(): Promise<number> {
   ctx.setCwd(Deno.cwd());
   ctx.setUmask(Deno.umask());
   ctx.setEnv(Object.fromEntries(Object.entries(Deno.env.toObject()).filter(([name]) => !name.startsWith('BASH_TS_'))));
+  await executor.importFunctions(ctx);
 
   const positional: Record<string, string> = { '0': inv.name, '#': String(inv.args.length) };
 

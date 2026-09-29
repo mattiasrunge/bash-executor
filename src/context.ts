@@ -1,4 +1,5 @@
 import type { AstNodeCompoundList } from '@ein/bash-parser';
+import type { FunctionDefinition } from './print-command.ts';
 import { JobTable } from './jobs.ts';
 import { DEFAULT_SHELL_OPTIONS, DEFAULT_SHOPT_OPTIONS, type ExecContextIf, type FunctionDef, type GetoptsState, type IO } from './types.ts';
 
@@ -90,7 +91,7 @@ export class ExecContext implements ExecContextIf {
     ctx.redirectStderr(this.getStderr());
 
     for (const fn of Object.values(this.getFunctions())) {
-      ctx.setFunction(fn.name, fn.body, fn.ctx);
+      ctx.setFunction(fn.name, fn.body, fn.ctx, fn.definition);
     }
 
     for (const [name, args] of Object.entries(this.getAliases())) {
@@ -497,15 +498,17 @@ export class ExecContext implements ExecContextIf {
     name: string,
     body: AstNodeCompoundList,
     ctx: ExecContextIf,
+    definition?: FunctionDefinition,
   ): void {
     if (this.parent) {
-      return this.parent.setFunction(name, body, ctx);
+      return this.parent.setFunction(name, body, ctx, definition);
     }
 
     this.fns[name] = {
       name,
       body,
       ctx,
+      definition,
     };
   }
 

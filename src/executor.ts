@@ -34,6 +34,7 @@ import { getExitCode, getReturnCode, isExitSignal, isReturnSignal, makeExitSigna
 import { JOB_BUILTINS } from './builtins/jobs.ts';
 import { type BuiltinRegistry, SPECIAL_BUILTINS } from './builtins/types.ts';
 import type { ErrorPosition } from './errors.ts';
+import { exportedFunctionName, exportedFunctionText, functionEnvName } from './print-command.ts';
 import { singleQuoted } from './quote.ts';
 import { contextVariables, evaluateArithmeticText } from './arith.ts';
 import { bracketExpression, globToRegExp, globToRegexSource, posixRegexToSource, quoteGlob, quoteRegex } from './pattern.ts';
@@ -1349,6 +1350,13 @@ export class AstExecutor {
       '*': args.join(' '),
     });
 
+    // FUNCNEST caps how deep functions may call: going deeper aborts the whole command
+    const funcnest = Number.parseInt(ctx.getParams().FUNCNEST ?? ctx.getEnv().FUNCNEST ?? '', 10);
+
+    if (funcnest > 0 && this.functionDepth >= funcnest) {
+      throw new CommandAbortError(`${fn.name}: maximum function nesting level exceeded (${funcnest})`, { code: 'E_FUNCNEST' });
+    }
+
     const returnTrap = ctx.getTrap('RETURN');
     const getopts = ctx.getGetoptsState();
     // A function is in no loop of its own, whatever loop it was called from
@@ -1908,10 +1916,51 @@ export class AstExecutor {
     }
   }
 
+  /**
+   * The functions a parent bash exported, `BASH_FUNC_name%%='() { … }'` in the
+   * environment, defined in `ctx` as bash does when it starts.
+   *
+   * The value has to be one function definition and nothing else, or it is
+   * ignored: bash 4.3's fix for Shellshock, which ran what followed it.
+   */
+  async importFunctions(ctx: ExecContextIf): Promise<void> {
+    for (const [variable, value] of Object.entries(ctx.getEnv())) {
+      const name = exportedFunctionName(variable);
+
+      if (!name || !value.startsWith('() {') || /[\s/=$`'"\\]/.test(name)) continue;
+
+      const source = `${name} ${value}`;
+
+      try {
+        const ast = await parse(source, { insertLOC: true });
+        const [node, ...rest] = ast.commands;
+
+        if (rest.length || node?.type !== 'Function' || (node as AstNodeFunction).name.text !== name) continue;
+
+        const previous = this.currentSource;
+        this.currentSource = source;
+
+        try {
+          await this.registerFunction(node as AstNodeFunction, ctx);
+        } finally {
+          this.currentSource = previous;
+        }
+      } catch {
+        // Not a function definition: left alone, as bash does
+      }
+    }
+  }
+
   protected async registerFunction(node: AstNodeFunction, parentCtx: ExecContextIf): Promise<number> {
     const ctx = parentCtx.spawnContext();
     await this.applyRedirections(ctx, node.redirections);
-    parentCtx.setFunction(node.name.text, node.body, ctx);
+    parentCtx.setFunction(node.name.text, node.body, ctx, { node, source: this.currentSource });
+
+    // An exported function stays exported when it is defined again, as the new definition
+    const variable = functionEnvName(node.name.text);
+    const fn = parentCtx.getFunction(node.name.text);
+
+    if (variable in parentCtx.getEnv() && fn) parentCtx.setEnv({ [variable]: await exportedFunctionText(fn) });
     this.functionSources.set(node.body, this.currentFile(parentCtx));
 
     return 0;
@@ -2879,6 +2928,9 @@ export class AstExecutor {
   protected async applyAssignment(assignment: Assignment, ctx: ExecContextIf, local: boolean): Promise<void> {
     const { name, subscript, append, values, list } = assignment;
 
+    // The call stack is the shell's to keep: assigning FUNCNAME does nothing, as in bash
+    if (name === 'FUNCNAME') return;
+
     // A readonly variable cannot be assigned. Before a command that is said and
     // the command runs without it, as in bash; anywhere else the command ends
     if (ctx.isReadonlyVar(name)) {
@@ -3619,6 +3671,23 @@ export class AstExecutor {
           } else if (xpAny.op === 'useAlternativeValueIfUnset') {
             // ${var+word} — use word if var is set
             resolved = isSet ? await this.resolveWordValue(xpAny.word, ctx) : '';
+          } else if (xpAny.op === 'assignDefaultValue' || xpAny.op === 'assignDefaultValueIfUnset') {
+            // ${var:=word} / ${var=word} — when var is empty (or unset), it is assigned word, and
+            // expands to it. Only a variable can be: `${1:=x}` is refused.
+            const missing = xpAny.op === 'assignDefaultValue' ? !paramValue : !isSet;
+
+            if (missing) {
+              const { name, subscript } = this.splitSubscript(xp.parameter!);
+
+              if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+                throw new CommandAbortError(`$${xp.parameter}: cannot assign in this way`, { code: 'E_BAD_ASSIGNMENT' });
+              }
+
+              resolved = await this.resolveWordValue(xpAny.word, ctx);
+              await this.applyAssignment({ name, subscript, append: false, values: [resolved], list: false, status: 0 }, ctx, false);
+            } else {
+              resolved = paramValue;
+            }
           } else if (xpAny.op === 'indicateErrorIfUnset' || xpAny.op === 'indicateErrorIfNull') {
             // ${var?word} / ${var:?word} — complain and leave, with word as the
             // message. This is the same diagnostic `set -u` raises, so it takes

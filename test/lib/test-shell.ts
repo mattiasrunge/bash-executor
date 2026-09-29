@@ -328,6 +328,11 @@ export class TestShell implements ShellIf {
     };
   }
 
+  /** Define the functions exported in the environment, as a shell does when it starts. */
+  async importFunctions(): Promise<void> {
+    await this.executor.importFunctions(this.ctx);
+  }
+
   /**
    * Run a script using executeAndCapture (captures via pipes)
    */

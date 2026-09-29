@@ -5,6 +5,7 @@
  */
 
 import { DEFAULT_SHELL_OPTIONS, type ExecContextIf, SHELL_OPTION_FLAG_MAP, type ShellIf } from '../types.ts';
+import { functionText } from '../print-command.ts';
 import { doubleQuoted, quotedIfNeeded } from '../quote.ts';
 import type { BuiltinHandler, BuiltinResult } from './types.ts';
 
@@ -56,8 +57,16 @@ export const setBuiltin: BuiltinHandler = async (
     }
 
     const names = Object.keys(lines).filter((name) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name)).sort();
+    let stdout = names.map((name) => `${lines[name]}\n`).join('');
 
-    return { code: 0, stdout: names.map((name) => `${lines[name]}\n`).join('') };
+    // Then the functions, as declare -f prints them; posix mode leaves them out
+    if (!ctx.getShellOption('posix')) {
+      const functions = ctx.getFunctions();
+
+      for (const name of Object.keys(functions).sort()) stdout += `${await functionText(functions[name])}\n`;
+    }
+
+    return { code: 0, stdout };
   }
 
   let i = 0;

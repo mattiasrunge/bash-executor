@@ -1,5 +1,6 @@
 import type { JobHostIf, JobTable } from './jobs.ts';
 import type { AstNodeCompoundList } from '@ein/bash-parser';
+import type { FunctionDefinition } from './print-command.ts';
 
 /**
  * Represents a function definition in the execution context.
@@ -7,11 +8,13 @@ import type { AstNodeCompoundList } from '@ein/bash-parser';
  * @property {string} name - The name of the function.
  * @property {AstNodeCompoundList} body - The body of the function.
  * @property {ExecContextIf} ctx - The execution context of the function.
+ * @property {FunctionDefinition} [definition] - Where it was defined, for printing it back.
  */
 export type FunctionDef = {
   name: string;
   body: AstNodeCompoundList;
   ctx: ExecContextIf;
+  definition?: FunctionDefinition;
 };
 
 /**
@@ -617,11 +620,13 @@ export interface ExecContextIf {
    * @param {string} name - The name of the function.
    * @param {AstNodeCompoundList} body - The body of the function.
    * @param {ExecContextIf} ctx - The execution context of the function.
+   * @param {FunctionDefinition} [definition] - The definition as parsed, which `type` and `declare -f` print.
    */
   setFunction: (
     name: string,
     body: AstNodeCompoundList,
     ctx: ExecContextIf,
+    definition?: FunctionDefinition,
   ) => void;
 
   /**

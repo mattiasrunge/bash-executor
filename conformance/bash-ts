@@ -1,6 +1,10 @@
-#!/bin/sh
+#!/bin/bash -p
 # bash-ts: bash's command line around bash-parser and bash-executor, for use as
 # THIS_SH in bash's own test suite. Uses the compiled binary when run.ts built one.
+#
+# bash, not sh: dash drops the variables whose names are no identifiers, and an
+# exported function is one, BASH_FUNC_name%%. -p keeps bash from defining those
+# functions itself; it hands them on as they are.
 
 # Through a symlink, as execscript's /tmp/bash, it is still itself
 SELF=$(readlink -f "$0")
