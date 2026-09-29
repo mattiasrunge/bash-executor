@@ -96,7 +96,7 @@
     "comsub-eof2.sub": false,
     "comsub-eof3.sub": false,
     "comsub-eof4.sub": true,
-    "comsub-eof5.sub": false,
+    "comsub-eof5.sub": true,
     "comsub-eof6.sub": true,
     "comsub-posix.tests": false,
     "comsub-posix1.sub": false,
@@ -105,9 +105,9 @@
     "comsub-posix5.sub": false,
     "comsub-posix6.sub": true,
     "comsub.tests": false,
-    "comsub1.sub": false,
+    "comsub1.sub": true,
     "comsub2.sub": true,
-    "comsub3.sub": false,
+    "comsub3.sub": true,
     "comsub4.sub": true,
     "comsub5.sub": false,
     "comsub6.sub": false,
@@ -359,7 +359,7 @@
     "precedence.tests": true,
     "printf.tests": false,
     "printf1.sub": true,
-    "printf2.sub": false,
+    "printf2.sub": true,
     "printf3.sub": true,
     "printf4.sub": true,
     "procsub.tests": true,
@@ -559,9 +559,9 @@
       "reference": "pass"
     },
     "run-comsub-eof": {
-      "upstream": 0.167,
+      "upstream": 0.385,
       "pass": false,
-      "stdout": 0.4,
+      "stdout": 0.769,
       "reference": "pass"
     },
     "run-comsub-posix": {

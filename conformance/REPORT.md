@@ -5,7 +5,7 @@ see [README.md](README.md) for what the scores mean.
 
 | Measure | Result |
 | --- | --- |
-| Test files that parse | 411 / 471 |
+| Test files that parse | 415 / 471 |
 | `run-*` scripts passing | 3 / 83 (real bash here: 74) |
 | Mean upstream score | 37% |
 | Mean stdout score | 39% |
@@ -20,17 +20,16 @@ that command, while the parser here takes the whole file at once. Some files hol
 | Error | Files | Count |
 | --- | --- | --- |
 | Unexpected 'OPEN_PAREN' | array2.sub, array28.sub, errors6.sub, extglob.tests, extglob1.sub, extglob1a.sub, extglob3.sub, extglob4.sub, extglob6.sub, extglob7.sub, histexp5.sub, printf.tests, varenv19.sub | 13 |
-| Unexpected 'Rbrace' | braces.tests, coproc.tests, dbg-support.tests, dollar-at-star8.sub, nameref18.sub, nameref8.sub, type4.sub, unicode1.sub, varenv5.sub | 9 |
-| Unclosed here-document | comsub-eof0.sub, comsub-eof2.sub, comsub-eof3.sub, comsub-eof5.sub, heredoc.tests, heredoc3.sub, heredoc7.sub | 7 |
-| Unexpected 'WORD' | arith-for.tests, comsub-posix5.sub, comsub1.sub, comsub3.sub, errors.tests, vredir2.sub | 6 |
-| Unexpected 'CLOSE_PAREN' | arith.tests, case.tests, comsub5.sub, comsub6.sub, printf2.sub, quote.tests | 6 |
+| Unexpected 'Rbrace' | braces.tests, coproc.tests, dbg-support.tests, dollar-at-star8.sub, more-exp.tests, nameref18.sub, nameref8.sub, type4.sub, unicode1.sub, varenv5.sub | 10 |
 | Unexpected 'CONTINUE' | assoc5.sub, comsub.tests, new-exp.tests, posixexp.tests, posixexp2.tests, quote1.sub | 6 |
+| Unclosed here-document | comsub-eof0.sub, comsub-eof2.sub, comsub-eof3.sub, heredoc.tests, heredoc3.sub, heredoc7.sub | 6 |
+| Unexpected 'CLOSE_PAREN' | arith.tests, case.tests, comsub5.sub, comsub6.sub, quote.tests | 5 |
+| Unexpected 'WORD' | arith-for.tests, comsub-posix5.sub, errors.tests, vredir2.sub | 4 |
 | Unexpected 'SEPARATOR_OP' | posix2syntax.sub, redir9.sub, source7.sub | 3 |
 | Unexpected 'LINEBREAK_IN' | alias3.sub, case4.sub | 2 |
 | Unexpected 'In' | alias4.sub | 1 |
 | undefined is not iterable (cannot read property Symbol(Symbol.iterator)) | comsub-posix.tests | 1 |
 | Unexpected 'EOF' | comsub-posix1.sub | 1 |
-| Unclosed " | more-exp.tests | 1 |
 | Unexpected 'Do' | nameref11.sub | 1 |
 | Unexpected 'Esac' | posix2.tests | 1 |
 | Unexpected 'NEWLINE_LIST' | posixpipe.tests | 1 |
@@ -73,18 +72,17 @@ What bash-ts refused to parse as it ran: test scripts, the `.sub` files and `-c`
 
 | Name | Tests | Times hit |
 | --- | --- | --- |
-| Unexpected 'Rbrace' | braces, coproc, dbg-support, dollars, nameref, type, varenv | 9 |
+| Unexpected 'Rbrace' | braces, coproc, dbg-support, dollars, more-exp, nameref, type, varenv | 10 |
 | Unexpected 'CONTINUE' | assoc, comsub, comsub-eof, new-exp, posixexp, posixexp2 | 6 |
 | Unexpected 'OPEN_PAREN' | extglob, histexpand, printf, varenv | 4 |
 | Unexpected 'WORD' | arith-for, errors, vredir | 3 |
 | Unexpected 'CLOSE_PAREN' | arith, case, quote | 3 |
-| Unclosed here-document | comsub-eof, heredoc | 5 |
+| Unclosed here-document | comsub-eof, heredoc | 4 |
 | Unexpected 'SEPARATOR_OP' | parser, redir | 2 |
 | Unexpected 'LINEBREAK_IN' | alias | 1 |
 | Unexpected 'In' | alias | 1 |
 | undefined is not iterable (cannot read property Symbol(Symbol.iterator)) | comsub-posix | 1 |
 | Unexpected 'EOF' | exportfunc | 1 |
-| Unclosed " | more-exp | 1 |
 | Unexpected 'Do' | nameref | 1 |
 | Unexpected 'Esac' | posix2 | 1 |
 | Unexpected 'NEWLINE_LIST' | posixpipe | 1 |
@@ -110,14 +108,14 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | Message | Tests |
 | --- | --- |
 | trap: command not found | dbg-support2, execscript, glob-test, histexpand, history, mapfile, redir, set-x, test, trap, varenv |
-| syntax error: Unexpected 'Rbrace' | braces, coproc, dbg-support, dollars, nameref, type, varenv |
+| syntax error: Unexpected 'Rbrace' | braces, coproc, dbg-support, dollars, more-exp, nameref, type, varenv |
 | syntax error: Unexpected 'CONTINUE' | assoc, comsub, comsub-eof, new-exp, posixexp, posixexp2 |
 | wait: command not found | assoc, execscript, func, procsub, redir, trap |
 | foo: command not found | alias, execscript, exportfunc, nameref, nquote |
 | hash: command not found | assoc, builtins, execscript, rsh, type |
 | syntax error: Unexpected 'OPEN_PAREN' | extglob, histexpand, printf, varenv |
-| syntax error: Unexpected 'CLOSE_PAREN' | arith, case, quote |
 | syntax error: Unexpected 'WORD' | arith-for, errors, vredir |
+| syntax error: Unexpected 'CLOSE_PAREN' | arith, case, quote |
 | the test suite should not be run as root | execscript, glob-test, test |
 | compgen: command not found | func, herestr, shopt |
 | ulimit: command not found | procsub, redir, vredir |
@@ -170,7 +168,7 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | casemod | pass | no | 72% | 72% | 16,23c16,23 ⏎ &lt; Acknowledgement Oenophile ⏎ &lt; ACKNOWLEDGEMENT OENOPHILE |
 | complete | pass | no | 0% | 0% | 1,37c1,63 ⏎ &lt; ./complete.tests: complete: command not found ⏎ &lt; ./complete.tests: complete: command not found |
 | comsub | pass | no | 0% | 0% | 1c1,79 ⏎ &lt; ./comsub.tests: syntax error: Parse error on line 1: Unexpected 'CONTINUE' ⏎ --- |
-| comsub-eof | pass | no | 17% | 40% | 1c1 ⏎ &lt; ./comsub-eof0.sub: syntax error: Unclosed here-document ⏎ --- |
+| comsub-eof | pass | no | 39% | 77% | 1c1 ⏎ &lt; ./comsub-eof0.sub: syntax error: Unclosed here-document ⏎ --- |
 | comsub-posix | pass | no | 0% | 0% | 1c1,100 ⏎ &lt; ./comsub-posix.tests: syntax error: undefined is not iterable (cannot read property Symbol(Symbol.iterator)) ⏎ --- |
 | cond | pass | no | 85% | 85% | 28a29,30 ⏎ &gt; returns: 0 ⏎ &gt; ./cond.tests: line 122: [[: 4+: syntax error: operand expected (error token is "+") |
 | coproc | pass | no | 0% | 0% | 1c1,10 ⏎ &lt; ./coproc.tests: line 17: syntax error: Parse error on line 17: Unexpected 'Rbrace' ⏎ --- |
@@ -204,7 +202,7 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | jobs | env | timeout | 0% | 4% | timeout |
 | lastpipe | pass | yes | 100% | 100% |  |
 | mapfile | pass | no | 61% | 62% | 16a17,32 ⏎ &gt; a[0] Abcdefghijklmnop ⏎ &gt; [1] aBcdefghijklmnop |
-| more-exp | pass | no | 0% | 0% | 1c1,214 ⏎ &lt; ./more-exp.tests: line 1: syntax error: Unclosed " ⏎ --- |
+| more-exp | pass | no | 0% | 0% | 1c1,214 ⏎ &lt; ./more-exp.tests: line 345: syntax error: Parse error on line 345: Unexpected 'Rbrace' ⏎ --- |
 | nameref | pass | no | 15% | 20% | 1,3c1,5 ⏎ &lt; bar ⏎ &lt; flow |
 | new-exp | pass | no | 0% | 0% | 1c1,795 ⏎ &lt; ./new-exp.tests: line 1: syntax error: Parse error on line 1: Unexpected 'CONTINUE' ⏎ --- |
 | nquote | pass | no | 71% | 77% | 7,10c7,10 ⏎ &lt; argv[1] = &lt;$hello,&gt; ⏎ &lt; argv[2] = &lt;$world&gt; |

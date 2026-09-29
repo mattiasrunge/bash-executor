@@ -23,13 +23,18 @@ const BASH_PRELUDE = 'shopt -s extglob\n';
 async function bashAccepts(source: string): Promise<'ok' | 'incomplete' | 'error'> {
   const out = await new Deno.Command('/bin/bash', { args: ['-n', '-c', BASH_PRELUDE + source], stderr: 'piped', stdout: 'null' }).output();
 
+  const stderr = new TextDecoder().decode(out.stderr);
+
+  // An unfinished here-document is only a warning to bash -n, and it exits 0
+  if (/here-document .* delimited by end-of-file/.test(stderr)) {
+    return 'incomplete';
+  }
+
   if (out.code === 0) {
     return 'ok';
   }
 
-  const stderr = new TextDecoder().decode(out.stderr);
-
-  return /unexpected end of file|here-document .* delimited by end-of-file|unexpected EOF while looking/.test(stderr) ? 'incomplete' : 'error';
+  return /unexpected end of file|unexpected EOF while looking/.test(stderr) ? 'incomplete' : 'error';
 }
 
 async function parses(source: string): Promise<string | null> {
