@@ -269,3 +269,40 @@ echo "hello`;
     }
   });
 });
+
+Deno.test('a syntax error stops the script where bash stops it', async (t) => {
+  await t.step('the complete lines before it run, then the error is thrown', async () => {
+    const shell = new TestShell();
+    let thrown: unknown;
+    try {
+      await shell.run('echo a\nif true; then echo b; fi\n)\necho c');
+    } catch (err) {
+      thrown = err;
+    }
+    assertInstanceOf(thrown, BashSyntaxError);
+    assertEquals(shell.getStdout(), 'a\nb\n');
+  });
+
+  await t.step('nothing runs from the line with the error', async () => {
+    const shell = new TestShell();
+    try {
+      await shell.run('echo a; )');
+    } catch {
+      // expected
+    }
+    assertEquals(shell.getStdout(), '');
+  });
+
+  await t.step('an exit before the error ends the script without it', async () => {
+    const shell = new TestShell();
+    const code = await shell.run('echo a\nexit 3\n)');
+    assertEquals(code, 3);
+  });
+
+  await t.step('eval and source fail with 2 and the script goes on', async () => {
+    const shell = new TestShell();
+    shell.setFile('/tmp/bad.sh', 'echo s1\n)\necho s2\n');
+    const result = await shell.runAndCapture('eval "echo e1\n)"; echo "eval=$?"; . /tmp/bad.sh; echo "source=$?"');
+    assertEquals(result.stdout, 'e1\neval=2\ns1\nsource=2\n');
+  });
+});

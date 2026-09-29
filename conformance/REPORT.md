@@ -7,8 +7,8 @@ see [README.md](README.md) for what the scores mean.
 | --- | --- |
 | Test files that parse | 451 / 471 |
 | `run-*` scripts passing | 4 / 83 (real bash here: 74) |
-| Mean upstream score | 48% |
-| Mean stdout score | 52% |
+| Mean upstream score | 49% |
+| Mean stdout score | 53% |
 
 ## Gaps
 
@@ -69,16 +69,16 @@ What bash-ts refused to parse as it ran: test scripts, the `.sub` files and `-c`
 | Name | Tests | Times hit |
 | --- | --- | --- |
 | Unexpected 'CONTINUE' | assoc, comsub-eof, posixexp, quote | 4 |
-| Unexpected 'Rbrace' | coproc, nameref, type | 5 |
-| Unexpected 'CLOSE_PAREN' | comsub, parser, posix2 | 4 |
-| Unclosed here-document | comsub-eof, heredoc | 6 |
+| Unclosed here-document | comsub-eof, exportfunc, heredoc | 7 |
+| Unexpected 'Rbrace' | coproc, nameref, type | 4 |
+| Unexpected 'CLOSE_PAREN' | comsub, parser | 3 |
 | Unexpected 'In' | alias, comsub-posix | 2 |
-| Unexpected 'EOF' | comsub-posix, exportfunc | 2 |
 | Unexpected 'WORD' | parser, vredir | 2 |
 | Unexpected 'Done' | comsub-posix | 4 |
 | Unexpected 'Esac' | comsub-posix | 2 |
 | for (( … )) takes three expressions separated by ';', got "i=0; i &lt; 3" | arith-for | 1 |
 | for (( … )) takes three expressions separated by ';', got "i=0; i &lt; 3; i++; 7" | arith-for | 1 |
+| Unexpected 'EOF' | comsub-posix | 1 |
 | Unexpected 'OPEN_PAREN' | parser | 1 |
 | Unclosed " | posixexp2 | 1 |
 
@@ -121,10 +121,10 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | syntax error: Unexpected 'EOF' | comsub-posix, exportfunc |
 | a: not found | exp-tests, nameref |
 | getopts: command not found | getopts, posix2 |
-| N: No such file or directory | heredoc, vredir |
 | history: command not found | histexpand, history |
 | !!: command not found | histexpand, history |
 | !e: command not found | histexpand, history |
+| N: No such file or directory | heredoc, vredir |
 | 'A[]]': not a valid identifier | assoc, quotearray |
 | foo: not found | nameref, varenv |
 | syntax error: Unexpected 'WORD' | parser, vredir |
@@ -163,7 +163,7 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | casemod | pass | no | 72% | 72% | 16,23c16,23 ⏎ &lt; Acknowledgement Oenophile ⏎ &lt; ACKNOWLEDGEMENT OENOPHILE |
 | complete | pass | no | 0% | 0% | 1,37c1,63 ⏎ &lt; ./complete.tests: complete: command not found ⏎ &lt; ./complete.tests: complete: command not found |
 | comsub | pass | no | 79% | 84% | 1c1 ⏎ &lt; ./comsub.tests: hijkl: command not found ⏎ --- |
-| comsub-eof | pass | no | 39% | 77% | 1c1 ⏎ &lt; ./comsub-eof0.sub: line 7: syntax error: Unclosed here-document ⏎ --- |
+| comsub-eof | pass | no | 39% | 77% | 1c1 ⏎ &lt; ./comsub-eof0.sub: syntax error: Unclosed here-document ⏎ --- |
 | comsub-posix | pass | no | 77% | 90% | 62c62,63 ⏎ &lt; ./comsub-posix1.sub: line 1: syntax error: Parse error on line 1: Unexpected 'EOF' ⏎ --- |
 | cond | pass | no | 85% | 85% | 28a29,30 ⏎ &gt; returns: 0 ⏎ &gt; ./cond.tests: line 122: [[: 4+: syntax error: operand expected (error token is "+") |
 | coproc | pass | no | 0% | 0% | 1c1,10 ⏎ &lt; ./coproc.tests: line 17: syntax error: Parse error on line 17: Unexpected 'Rbrace' ⏎ --- |
@@ -176,7 +176,7 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | errors | pass | no | 0% | 0% | 1,23c1,208 ⏎ &lt; alias: -x: not found ⏎ &lt; alias: hoowah: not found |
 | execscript | env | no | 64% | 80% | 1d0 ⏎ &lt; execscript: the test suite should not be run as root ⏎ 9c8 |
 | exp-tests | pass | no | 28% | 35% | 41,42c41 ⏎ &lt; argv[1] = &lt;&gt; ⏎ &lt; argv[1] = &lt;"Hello world!"&gt; |
-| exportfunc | pass | no | 0% | 0% | 1,4c1,14 ⏎ &lt; bash: foo: command not found ⏎ &lt; bash: foo-a: command not found |
+| exportfunc | pass | no | 30% | 57% | 1,7c1,7 ⏎ &lt; bash: foo: command not found ⏎ &lt; bash: foo-a: command not found |
 | extglob | pass | no | 83% | 85% | 44c44 ⏎ &lt; @(*) ⏎ --- |
 | extglob2 | pass | no | 90% | 90% | 45,46c45 ⏎ &lt; 1:  [[ foo = !(foo)* ]] ⏎ &lt; Test failed:  [[ foo = !(foo)* ]] |
 | extglob3 | pass | yes | 100% | 100% |  |
@@ -207,7 +207,7 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | nquote4 | pass | no | 11% | 11% | 1,2c1 ⏎ &lt; argv[1] = &lt;abx{}cd&gt; ⏎ &lt; argv[1] = &lt;abx{41}cd&gt; |
 | nquote5 | pass | yes | 100% | 100% |  |
 | parser | pass | no | 62% | 100% | 2c2 ⏎ &lt; 'invalid-name': not a valid identifier ⏎ --- |
-| posix2 | pass | no | 18% | 29% | 2,7c2,4 ⏎ &lt; OPTIND initial value test failed ⏎ &lt; ./posix2.tests: getopts: command not found |
+| posix2 | pass | no | 17% | 25% | 2,8c2,4 ⏎ &lt; OPTIND initial value test failed ⏎ &lt; ./posix2.tests: getopts: command not found |
 | posixexp | pass | no | 5% | 5% | 1,4c1,9 ⏎ &lt;  ⏎ &lt;  |
 | posixexp2 | pass | no | 0% | 0% | 1,3c1,40 ⏎ &lt; 1 ⏎ &lt; 2  |
 | posixpat | pass | no | 94% | 94% | 24a25 ⏎ &gt; ok 2 ⏎ 26a28 |

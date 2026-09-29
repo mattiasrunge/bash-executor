@@ -4,6 +4,7 @@
  * Reads and executes commands from a file in the current shell environment.
  */
 
+import { BashSyntaxError } from '../errors.ts';
 import type { ExecContextIf, ShellIf } from '../types.ts';
 import type { BuiltinHandler, BuiltinResult } from './types.ts';
 
@@ -56,7 +57,13 @@ export const sourceBuiltin: BuiltinHandler = async (
 
     return { code };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = error instanceof Error ? error.message.split('\n')[0] : String(error);
+
+    // A syntax error is 2, as in bash; the script sourcing it carries on
+    if (error instanceof BashSyntaxError) {
+      return { code: 2, stderr: `${filename}: syntax error: ${message}\n` };
+    }
+
     return {
       code: 1,
       stderr: `source: ${filename}: ${message}\n`,

@@ -4,6 +4,7 @@
  * Concatenates arguments and executes them as a shell command.
  */
 
+import { BashSyntaxError } from '../errors.ts';
 import type { ExecContextIf, ShellIf } from '../types.ts';
 import type { BuiltinHandler, BuiltinResult } from './types.ts';
 
@@ -32,8 +33,15 @@ export const evalBuiltin: BuiltinHandler = async (
   // Concatenate all arguments with spaces
   const script = args.join(' ');
 
-  // Execute the script
-  const code = await execute(script);
+  // A syntax error fails the eval with 2, after what came before it ran; the
+  // shell around it carries on, as in bash
+  try {
+    return { code: await execute(script) };
+  } catch (err) {
+    if (err instanceof BashSyntaxError) {
+      return { code: 2, stderr: `eval: syntax error: ${err.message.split('\n')[0]}\n` };
+    }
 
-  return { code };
+    throw err;
+  }
 };

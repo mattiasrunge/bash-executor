@@ -405,6 +405,17 @@ export class TestShell implements ShellIf {
     this.files.set(path, content);
   }
 
+  /** `source` reads the virtual files. */
+  async readFile(_ctx: ExecContextIf, path: string): Promise<string> {
+    const content = this.files.get(path);
+
+    if (content === undefined) {
+      throw new Error('No such file or directory');
+    }
+
+    return await content;
+  }
+
   /**
    * Only EXISTS is answered, which is all `set -C` asks about.
    */

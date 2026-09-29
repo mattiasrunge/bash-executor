@@ -196,16 +196,43 @@ export class AstExecutor {
     const previous = this.currentSource;
 
     this.currentSource = source;
-    try {
-      // Resolvers given here will be evaluated at parse time.
-      // Most things we want to evaluate at execution time and
-      // that is instead done during execution with resolveExpansions.
-      const ast = await parse(source, {
-        insertLOC: true,
-        resolveAlias: async (name: string) => ctx.getAlias(name),
 
-        resolveHomeUser: this.shell.resolveHomeUser ? (async (username: string | null) => this.shell.resolveHomeUser!(ctx, username)) : undefined,
-      });
+    // Resolvers given here will be evaluated at parse time.
+    // Most things we want to evaluate at execution time and
+    // that is instead done during execution with resolveExpansions.
+    const options = {
+      insertLOC: true,
+      resolveAlias: async (name: string) => ctx.getAlias(name),
+
+      resolveHomeUser: this.shell.resolveHomeUser ? (async (username: string | null) => this.shell.resolveHomeUser!(ctx, username)) : undefined,
+    };
+
+    try {
+      let ast: AstNode;
+
+      try {
+        ast = await parse(source, options);
+      } catch (err) {
+        if (!(err instanceof BashSyntaxError)) {
+          throw err;
+        }
+
+        // bash reads a script, `eval` and `source` a line at a time: the complete
+        // commands before a syntax error run, and only then does the error stop
+        // it — unless they `exit` first. Nothing runs from the error's own line.
+        const prefix = await this.completeCommandsBefore(source, options);
+
+        if (prefix.trim()) {
+          const exited = { value: false };
+          const code = await this.executeScript(await parse(prefix, options), ctx, exited);
+
+          if (exited.value || isReturnSignal(code)) {
+            return code;
+          }
+        }
+
+        throw err;
+      }
 
       return await this.executeNode(ast, ctx);
     } catch (err) {
@@ -217,6 +244,36 @@ export class AstExecutor {
     } finally {
       this.currentSource = previous;
     }
+  }
+
+  /**
+   * The lines of `source` that hold complete commands before its first syntax
+   * error. Lines are added to a chunk until it parses; a chunk that is merely
+   * unfinished — an open `if`, a here-document still to come — takes more, and
+   * the first that fails for good is where the error is.
+   */
+  private async completeCommandsBefore(source: string, options: Parameters<typeof parse>[1]): Promise<string> {
+    const lines = source.split('\n');
+    let start = 0;
+
+    for (let end = 0; end < lines.length; end++) {
+      try {
+        await parse(lines.slice(start, end + 1).join('\n'), options);
+        start = end + 1;
+      } catch (err) {
+        if (!(err instanceof BashSyntaxError)) {
+          throw err;
+        }
+
+        const unfinished = /Unclosed|'EOF'|CONTINUE|end of/i.test(err.message);
+
+        if (!unfinished || end === lines.length - 1) {
+          break;
+        }
+      }
+    }
+
+    return lines.slice(0, start).join('\n');
   }
 
   /**
@@ -571,9 +628,14 @@ export class AstExecutor {
     }
   }
 
-  protected async executeScript(node: AstNodeScript, ctx: ExecContextIf): Promise<number> {
+  /**
+   * @param exited - Set when the script ended in `exit`, which the status alone
+   *                 does not tell: the caller of a script cut short by a syntax
+   *                 error needs to know whether it got that far.
+   */
+  protected async executeScript(node: AstNodeScript, ctx: ExecContextIf, exited?: { value: boolean }): Promise<number> {
     try {
-      return await this.runScriptCommands(node, ctx);
+      return await this.runScriptCommands(node, ctx, exited);
     } catch (err) {
       // An unset parameter under `set -u` ends this shell, and a command
       // substitution is a shell of its own — it parses to its own Script, so
@@ -595,7 +657,7 @@ export class AstExecutor {
     }
   }
 
-  private async runScriptCommands(node: AstNodeScript, ctx: ExecContextIf): Promise<number> {
+  private async runScriptCommands(node: AstNodeScript, ctx: ExecContextIf, exited?: { value: boolean }): Promise<number> {
     let lastCode = 0;
 
     for (const command of node.commands) {
@@ -613,6 +675,11 @@ export class AstExecutor {
       if (isExitSignal(lastCode)) {
         const exitCode = getExitCode(lastCode);
         ctx.setParams({ '?': String(exitCode) });
+
+        if (exited) {
+          exited.value = true;
+        }
+
         return exitCode;
       }
 

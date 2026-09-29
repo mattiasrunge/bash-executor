@@ -637,9 +637,9 @@
       "reference": "pass"
     },
     "run-exportfunc": {
-      "upstream": 0,
+      "upstream": 0.296,
       "pass": false,
-      "stdout": 0,
+      "stdout": 0.571,
       "reference": "pass"
     },
     "run-extglob": {
@@ -824,9 +824,9 @@
       "reference": "pass"
     },
     "run-posix2": {
-      "upstream": 0.182,
+      "upstream": 0.167,
       "pass": false,
-      "stdout": 0.286,
+      "stdout": 0.25,
       "reference": "pass"
     },
     "run-posixexp": {
@@ -957,9 +957,9 @@
       "reference": "pass"
     },
     "run-type": {
-      "upstream": 0.326,
+      "upstream": 0.325,
       "pass": false,
-      "stdout": 0.349,
+      "stdout": 0.347,
       "reference": "pass"
     },
     "run-varenv": {
