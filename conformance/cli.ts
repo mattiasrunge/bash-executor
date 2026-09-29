@@ -201,6 +201,8 @@ async function main(): Promise<number> {
     BASH_VERSION,
     OPTIND: '1',
     OPTERR: '1',
+    // Set, as bash sets it at startup, whatever the environment says: `${IFS+x}` is x
+    IFS: ' \t\n',
   });
   ctx.setArray('BASH_VERSINFO', ['5', '2', '21', '1', 'release', 'x86_64-pc-linux-gnu']);
 

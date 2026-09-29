@@ -94,7 +94,12 @@ export const mapfileBuiltin: BuiltinHandler = async (
     return { code: 1, stderr: 'mapfile: reading line by line is not supported by this shell\n' };
   }
 
-  const fd = options.fd || ctx.getStdin();
+  // A descriptor the command or the shell opened is the context's to name; one `exec` opened, the host's
+  const fd = options.fd ? (ctx.getFd(options.fd) ?? options.fd) : ctx.getStdin();
+
+  if (options.fd && ctx.getFd(options.fd) === undefined && !shell.isPipe(options.fd)) {
+    return { code: 1, stderr: `mapfile: ${options.fd}: invalid file descriptor: Bad file descriptor\n` };
+  }
   const values = options.truncate ? [] : (ctx.getArray(options.arrayName) ?? []).slice(0, options.origin);
 
   let read = 0;

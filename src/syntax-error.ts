@@ -12,7 +12,8 @@ import type { BashSyntaxError } from '@ein/bash-parser';
  * no detail for is told in its own words.
  */
 export function syntaxErrorLines(err: BashSyntaxError, source: string): { line: number; lines: string[] } {
-  const row = err.location?.start?.row ?? 1;
+  // A text parsed without locations, or one mapped from inside a substitution, may have none
+  const row = Number.isFinite(err.location?.start?.row) ? err.location!.start!.row! : 1;
   const detail = err.detail;
   // The end of the input: one line past the last, whether or not it ends in a newline
   const newlines = source.match(/\n/g)?.length ?? 0;

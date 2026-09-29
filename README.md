@@ -140,6 +140,14 @@ runs the command as a job with a pipe each way, the shell's ends under high
 descriptors in `NAME[0]` (read) and `NAME[1]` (write): closing `NAME[1]`, or the
 shell ending, is the end of the command's input.
 
+A script is read as bash reads one, a command at a time: an `alias` or `set -o
+posix` applies from the next line on, and the complete commands before a
+syntax error run before it is reported.
+
+`cmd 3<file` opens descriptor 3 for that command alone; `exec 3<file` for the
+shell. `{name}<file` picks a free descriptor from 10 up, puts its number in
+`name` and leaves it open, as bash does; `{name}>&-` closes it.
+
 `type`, `declare -f` and `set` print a function as bash does (`printFunction`),
 from the source it was defined in. `export -f name` hands it to the commands the
 shell runs as `BASH_FUNC_name%%`, the variable bash reads it back from; a host

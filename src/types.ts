@@ -949,11 +949,17 @@ export interface ExecContextIf {
    * @param {string} fd - The file descriptor number.
    * @param {string} target - The target pipe/file name.
    */
-  redirectFd: (fd: string, target: string) => void;
+  /**
+   * Point descriptor `fd` at `target`. A descriptor above 2 is the shell's, and
+   * outlives the context, unless `local`: then it is this context's own, as
+   * `cmd 3<file` opens one for the command alone.
+   */
+  redirectFd: (fd: string, target: string, local?: boolean) => void;
 
   /**
    * Closes an arbitrary file descriptor by removing it from the context.
    * @param {string} fd - The file descriptor number.
+   * @param {boolean} local - Closed for this context alone, `cmd 3>&-`, and open again after it
    */
-  closeFd: (fd: string) => void;
+  closeFd: (fd: string, local?: boolean) => void;
 }

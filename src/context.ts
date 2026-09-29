@@ -171,8 +171,8 @@ export class ExecContext implements ExecContextIf {
       ctx.pushDirStack(dir);
     }
 
-    // Copy arbitrary file descriptors, which the shell's root context holds
-    ctx.fds = { ...this.rootFds() };
+    // The descriptors above 2 the subshell starts with, the shell's and its command's own
+    ctx.fds = this.visibleFds();
 
     // A subshell inherits the shell's options and cannot write them back
     ctx.options = { ...this.getShellOptions() };
@@ -1063,12 +1063,12 @@ export class ExecContext implements ExecContextIf {
     if (fd === '0') return this.getStdin();
     if (fd === '1') return this.getStdout();
     if (fd === '2') return this.getStderr();
-    if (this.fds[fd]) return this.fds[fd];
+    if (fd in this.fds) return this.fds[fd] || undefined;
     if (this.parent) return this.parent.getFd(fd);
     return undefined;
   }
 
-  redirectFd(fd: string, target: string): void {
+  redirectFd(fd: string, target: string, local = false): void {
     if (fd === '0') {
       this.redirectStdin(target);
       return;
@@ -1081,19 +1081,35 @@ export class ExecContext implements ExecContextIf {
       this.redirectStderr(target);
       return;
     }
+    // One command's own, `cmd 3<file`, is gone with the command's context;
+    // any other is the shell's, `exec 3<file`, and nothing in between hides it
+    if (local && this.parent) {
+      this.fds[fd] = target;
+      return;
+    }
     if (this.parent) {
+      delete this.fds[fd];
       this.parent.redirectFd(fd, target);
       return;
     }
     this.fds[fd] = target;
   }
 
-  private rootFds(): Record<string, string> {
-    return this.parent ? this.parent.rootFds() : this.fds;
+  /** The descriptors above 2 as this context sees them: the shell's, under the ones its commands opened or closed. */
+  private visibleFds(): Record<string, string> {
+    const fds = { ...this.parent?.visibleFds(), ...this.fds };
+
+    return Object.fromEntries(Object.entries(fds).filter(([, target]) => target));
   }
 
-  closeFd(fd: string): void {
+  closeFd(fd: string, local = false): void {
+    // Closed for one command, `cmd 3>&-`: hidden from it, and open again after
+    if (local && this.parent) {
+      this.fds[fd] = '';
+      return;
+    }
     if (this.parent) {
+      delete this.fds[fd];
       this.parent.closeFd(fd);
       return;
     }

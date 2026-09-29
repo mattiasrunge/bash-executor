@@ -242,6 +242,9 @@ export class AstExecutor {
    * `$0: line N: message`, each line of it.
    */
   protected async diagnose(ctx: ExecContextIf, message: string): Promise<void> {
+    // Said already, where it happened: an abort that carries no message
+    if (!message) return;
+
     const params = ctx.getParams();
     const prefix = this.lineNumbers ? `${this.sourceFrame.name ?? params['0'] ?? 'bash'}: line ${params.LINENO ?? 0}: ` : '';
     const text = message.endsWith('\n') ? message : `${message}\n`;
@@ -360,7 +363,12 @@ export class AstExecutor {
       location = { start: pos, end: location.end };
     }
 
-    return new BashSyntaxError(err.message, fullSource, location, err.cause);
+    const enhanced = new BashSyntaxError(err.message, fullSource, location, err.cause);
+
+    // What went wrong, for the message bash would give
+    enhanced.detail = err.detail;
+
+    return enhanced;
   }
 
   /**
@@ -430,32 +438,7 @@ export class AstExecutor {
     };
 
     try {
-      let ast: AstNode;
-
-      try {
-        ast = await parse(source, options);
-      } catch (err) {
-        if (!(err instanceof BashSyntaxError)) {
-          throw err;
-        }
-
-        // bash reads a script, `eval` and `source` a line at a time: the complete
-        // commands before a syntax error run, and only then does the error stop
-        // it — unless they `exit` first. Nothing runs from the error's own line.
-        const prefix = await this.completeCommandsBefore(source, options);
-
-        if (prefix.trim()) {
-          const code = await this.executeScript(await parse(prefix, options), ctx);
-
-          if (isExitSignal(code) || isReturnSignal(code)) {
-            return code;
-          }
-        }
-
-        throw err;
-      }
-
-      return await this.executeNode(ast, ctx);
+      return await this.readAndRun(source, ctx, options);
     } catch (err) {
       // Enhance BashSyntaxError with full source context
       if (err instanceof BashSyntaxError) {
@@ -468,22 +451,105 @@ export class AstExecutor {
   }
 
   /**
-   * The lines of `source` that hold complete commands before its first syntax
-   * error. Lines are added to a chunk until it parses; a chunk that is merely
-   * unfinished — an open `if`, a here-document still to come — takes more, and
-   * the first that fails for good is where the error is.
+   * What the parser takes from the shell as it reads: the aliases, while
+   * `expand_aliases` is on, and POSIX mode, which changes what a `'` inside a
+   * double-quoted `${…}` is.
    */
-  private async completeCommandsBefore(source: string, options: Parameters<typeof parse>[1]): Promise<string> {
+  private parseState(ctx: ExecContextIf): string {
+    return JSON.stringify([ctx.getShellOption('posix'), ctx.getShellOption('expand_aliases') && ctx.getAliases()]);
+  }
+
+  /**
+   * Run `source` as bash reads a script: a command at a time, each parsed with
+   * the shell as the commands before it left it. An `alias` or `set -o posix`
+   * applies from the next line on — the rest of its own line was read with it.
+   * Parsing is done once, and again from the line after a command that changed
+   * the aliases or POSIX mode; the text already run is blanked out, not cut
+   * off, so that lines and offsets stay those of `source`.
+   *
+   * A syntax error stops it only once the complete commands before it have
+   * run, and nothing runs from the error's own line; those commands may change
+   * how the rest parses, so it is parsed again after them.
+   */
+  private async readAndRun(source: string, ctx: ExecContextIf, options: Parameters<typeof parse>[1]): Promise<number> {
     const lines = source.split('\n');
-    let start = 0;
+    // The line to read from next, 0-based
+    let from = 0;
+    let code = 0;
+
+    while (from < lines.length) {
+      const text = lines.map((line, i) => i < from ? ' '.repeat(line.length) : line).join('\n');
+      const reparse: { state: string; resume?: number } = { state: this.parseState(ctx) };
+
+      options = { ...options, posix: ctx.getShellOption('posix') };
+
+      let ast: AstNodeScript;
+      let end = lines.length;
+
+      try {
+        ast = await parse(text, options) as AstNodeScript;
+      } catch (err) {
+        if (!(err instanceof BashSyntaxError)) {
+          throw err;
+        }
+
+        const complete = await this.completeCommandsBefore(lines, from, options);
+        const prefix = (to: number) => lines.map((line, i) => i < from ? ' '.repeat(line.length) : line).slice(0, to).join('\n');
+
+        if (complete.end === from) {
+          throw err;
+        }
+
+        // Each chunk parses on its own; together they may not, where a quote in
+        // one pairs with one in the next. Then the first runs alone, and what it
+        // does to the shell — `set -o posix` — may make the rest parse.
+        try {
+          ast = await parse(prefix(complete.end), options) as AstNodeScript;
+          end = complete.end;
+        } catch (inner) {
+          if (!(inner instanceof BashSyntaxError)) {
+            throw inner;
+          }
+
+          ast = await parse(prefix(complete.first), options) as AstNodeScript;
+          end = complete.first;
+        }
+      }
+
+      code = await this.executeScript(ast, ctx, reparse);
+
+      if (isExitSignal(code) || isReturnSignal(code)) {
+        return code;
+      }
+
+      // Parsed again from where the shell changed, or on past a syntax error
+      from = reparse.resume !== undefined ? reparse.resume - 1 : end;
+    }
+
+    return code;
+  }
+
+  /**
+   * The line index before which `lines`, from `from` on, hold complete commands
+   * ahead of the first syntax error (`end`), and where the first of those ends
+   * (`first`). Lines are added to a chunk until it
+   * parses; a chunk that is merely unfinished — an open `if`, a here-document
+   * still to come — takes more, and the first that fails for good is where the
+   * error is.
+   */
+  private async completeCommandsBefore(lines: string[], from: number, options: Parameters<typeof parse>[1]): Promise<{ end: number; first: number }> {
+    let start = from;
+    // Where the first complete chunk ends
+    let first = from;
 
     // A here-document still open is a chunk to take more lines for, not one to take to the end
     const strict = { ...options, unterminatedHereDocuments: 'error' as const };
 
-    for (let end = 0; end < lines.length; end++) {
+    for (let end = from; end < lines.length; end++) {
       try {
         await parse(lines.slice(start, end + 1).join('\n'), strict);
         start = end + 1;
+        if (first === from) first = start;
       } catch (err) {
         if (!(err instanceof BashSyntaxError)) {
           throw err;
@@ -497,7 +563,7 @@ export class AstExecutor {
       }
     }
 
-    return lines.slice(0, start).join('\n');
+    return { end: start, first };
   }
 
   /**
@@ -881,18 +947,60 @@ export class AstExecutor {
   /**
    * Apply a command's redirections to its context.
    *
+   * A descriptor above 2 is the command's own, `cmd 3<file`, and gone with its
+   * context — unless `exec` makes it (`opts.exec`), or the redirection names a
+   * variable for it, `{fd}<file`: those are the shell's, and stay open.
+   *
    * @param subs - Collects the process substitutions in the redirection targets,
    *               `cmd > >(other)`
-   * @returns The pipes opened on the command's behalf — a here-string has no
-   *          file behind it, so the caller has to remove them when the command
-   *          is done.
+   * @returns The pipes and descriptors opened on the command's behalf — a
+   *          here-string has no file behind it — which the caller releases with
+   *          `releaseTemporary` when the command is done.
    */
-  protected async applyRedirections(ctx: ExecContextIf, redirects?: AstNodeRedirect[], subs?: ProcessSubstitutions): Promise<string[]> {
+  protected async applyRedirections(
+    ctx: ExecContextIf,
+    redirects?: AstNodeRedirect[],
+    subs?: ProcessSubstitutions,
+    opts: { exec?: boolean } = {},
+  ): Promise<string[]> {
     const temporary: string[] = [];
 
-    for (const r of (redirects || [])) {
+    for (let r of (redirects || [])) {
+      const named = r.numberIo?.text.match(/^\{(.+)\}$/)?.[1];
+
+      if (named) {
+        r = await this.namedDescriptor(ctx, r, named);
+      }
+
+      // The shell's own, or this command's
+      const local = !opts.exec && !named;
+      const fd = r.numberIo?.text;
+      const opensFile = fd !== undefined && Number(fd) > 2 && !r.heredoc && ['<', '>', '>|', '>>', '<>'].includes(r.op.text);
+
+      // `{fd}<file`: opened as `exec` opens one, to stay
+      if (opensFile && !local && await this.openExecRedirection(ctx, r)) {
+        continue;
+      }
+
       const { values } = await this.resolveExpansions(r.file, ctx, subs);
       const target = values[0] || r.file.text;
+
+      // `N<file`, `N>file` and the like, N above 2: a descriptor of its own, not a path
+      // to reopen at every write, closed with the command
+      if (opensFile && local) {
+        if (this.shell.fdOpen) {
+          if (r.op.text === '>') await this.assertClobberable(ctx, target);
+          await this.assertOpenable(ctx, target, r.op.text === '<' ? 'read' : 'write');
+
+          const modes: Record<string, string> = { '<': 'r', '>': 'w+', '>|': 'w+', '>>': 'a+', '<>': 'r+' };
+          const handle = await this.shell.fdOpen(ctx, target, modes[r.op.text]);
+
+          this.redirectHandles.add(handle);
+          temporary.push(handle);
+          ctx.redirectFd(fd, handle, local);
+          continue;
+        }
+      }
 
       if (r.heredoc) {
         // One the input ended in: bash warns, on the input's last line, and takes it as it is
@@ -914,23 +1022,25 @@ export class AstExecutor {
         const text = r.heredoc.quoted ? r.heredoc.body : await this.expandHereDocument(r.heredoc.body, ctx);
         const pipe = await this.shell.pipeOpen();
 
-        temporary.push(pipe);
+        // The shell's own stays for what comes after
+        if (local) temporary.push(pipe);
         handled(this.shell.pipeWrite(pipe, text).then(() => this.shell.pipeClose(pipe)));
         // `3<<EOF`: another descriptor than stdin
-        if (r.numberIo) ctx.redirectFd(r.numberIo.text, pipe);
+        if (fd) ctx.redirectFd(fd, pipe, local);
         else ctx.redirectStdin(pipe);
       } else if (r.op.text === '<') {
         await this.assertOpenable(ctx, target, 'read');
-        ctx.redirectStdin(target);
+        if (fd) ctx.redirectFd(fd, target, local);
+        else ctx.redirectStdin(target);
       } else if (r.op.text === '<<<') {
         // A here-string is the word plus a newline, fed in as stdin. The write
         // is detached: a string larger than the pipe holds only completes once
         // the command starts reading, which it cannot do until this returns.
         const pipe = await this.shell.pipeOpen();
 
-        temporary.push(pipe);
+        if (local) temporary.push(pipe);
         handled(this.shell.pipeWrite(pipe, `${target}\n`).then(() => this.shell.pipeClose(pipe)));
-        if (r.numberIo) ctx.redirectFd(r.numberIo.text, pipe);
+        if (fd) ctx.redirectFd(fd, pipe, local);
         else ctx.redirectStdin(pipe);
       } else if (r.op.text === '>' || r.op.text === '>|') {
         // `set -C` refuses to truncate a file that exists; `>|` says do it anyway
@@ -939,73 +1049,47 @@ export class AstExecutor {
         }
 
         await this.assertOpenable(ctx, target, 'write');
-        this.redirectOutput(ctx, r.numberIo?.text, target, false);
+        this.redirectOutput(ctx, fd, target, false, local);
       } else if (r.op.text === '>>') {
         await this.assertOpenable(ctx, target, 'write');
-        this.redirectOutput(ctx, r.numberIo?.text, target, true);
-      } else if (r.op.text === '>&') {
-        const sourceFd = r.numberIo?.text;
+        this.redirectOutput(ctx, fd, target, true, local);
+      } else if (r.op.text === '>&' || r.op.text === '<&') {
+        const sourceFd = fd || (r.op.text === '>&' ? '1' : '0');
 
-        // Close FD: N>&- or >&-
+        // Close FD: N>&- or >&-. A command's closing hides the descriptor from
+        // it alone; the shell's closes it for good.
         if (target === '-') {
-          const fd = sourceFd || '1';
-          await this.shell.fdClose?.(fd);
-          ctx.closeFd(fd);
-          await this.descriptorClosed(ctx, fd);
-          continue;
-        }
-
-        // Move FD: N>&M- is N>&M and then M>&-
-        if (/^\d+-$/.test(target)) {
-          await this.moveDescriptor(ctx, sourceFd || '1', target.slice(0, -1));
-          continue;
-        }
-
-        // Check if target is a numeric file descriptor (fd duplication)
-        if (/^\d+$/.test(target)) {
-          // Get current destination of target fd
-          const targetDest = ctx.getFd(target) ?? target;
-
-          // Redirect source fd to target's destination
-          if (sourceFd) {
-            ctx.redirectFd(sourceFd, targetDest);
-          } else {
-            ctx.redirectStdout(targetDest);
+          if (local && Number(sourceFd) > 2) {
+            ctx.closeFd(sourceFd, true);
+            continue;
           }
-        } else {
-          // Non-numeric target - it's a filename
-          if (sourceFd === '2') {
-            ctx.redirectStderr(target);
-          } else {
-            ctx.redirectStdout(target);
-          }
-        }
-      } else if (r.op.text === '<&') {
-        const sourceFd = r.numberIo?.text || '0';
 
-        // Close FD: N<&- or <&-
-        if (target === '-') {
           await this.shell.fdClose?.(sourceFd);
           ctx.closeFd(sourceFd);
           await this.descriptorClosed(ctx, sourceFd);
           continue;
         }
 
+        // Move FD: N>&M- is N>&M and then M>&-
         if (/^\d+-$/.test(target)) {
-          await this.moveDescriptor(ctx, sourceFd, target.slice(0, -1));
+          await this.moveDescriptor(ctx, sourceFd, target.slice(0, -1), local);
           continue;
         }
 
         if (/^\d+$/.test(target)) {
-          const targetDest = ctx.getFd(target) ?? target;
-          ctx.redirectFd(sourceFd, targetDest);
-        } else {
+          // Duplicate: the source becomes whatever the target is now
+          ctx.redirectFd(sourceFd, ctx.getFd(target) ?? target, local);
+        } else if (r.op.text === '<&') {
           ctx.redirectStdin(target);
+        } else if (sourceFd === '2') {
+          // `>&file`, a file name rather than a descriptor: stdout and stderr both, as `&>`
+          ctx.redirectStderr(target);
+        } else {
+          ctx.redirectStdout(target);
         }
       } else if (r.op.text === '<>') {
-        const fd = r.numberIo?.text || '0';
         if (this.shell.fdOpen) {
-          await this.shell.fdOpen(ctx, target, 'r+', fd);
+          await this.shell.fdOpen(ctx, target, 'r+', fd || '0');
         }
       }
     }
@@ -1013,21 +1097,69 @@ export class AstExecutor {
     return temporary;
   }
 
-  /** `N<&M-`, `N>&M-`: N becomes what M was, and M is closed. */
-  private async moveDescriptor(ctx: ExecContextIf, fd: string, from: string): Promise<void> {
+  /** Descriptors `applyRedirections` opened for one command, closed rather than removed when it is done. */
+  private redirectHandles = new Set<string>();
+
+  /** Let go of a pipe or descriptor `applyRedirections` opened for a command that is done. */
+  protected async releaseTemporary(name: string): Promise<void> {
+    if (this.redirectHandles.delete(name)) {
+      await this.shell.fdClose?.(name).catch(() => {});
+    } else {
+      await this.shell.pipeRemove(name).catch(() => {});
+    }
+  }
+
+  /**
+   * `{name}>file`: the descriptor the shell picks for it, 10 or above and not in
+   * use, put in `name` — or, for `{name}>&-`, the one `name` holds, to close.
+   * The redirection comes back with that number in place of the name.
+   */
+  private async namedDescriptor(ctx: ExecContextIf, r: AstNodeRedirect, name: string): Promise<AstNodeRedirect> {
+    const numbered = (fd: string) => ({ ...r, numberIo: { ...r.numberIo!, text: fd } }) as AstNodeRedirect;
+
+    if ((r.op.text === '>&' || r.op.text === '<&') && r.file.text === '-') {
+      const fd = ctx.getParams()[name] ?? '';
+
+      if (!/^\d+$/.test(fd)) {
+        throw new RedirectionError(`${name}: ambiguous redirect`);
+      }
+
+      this.namedFds.delete(Number(fd));
+
+      return numbered(fd);
+    }
+
+    if (ctx.getVariable(name)?.attributes.includes('r')) {
+      throw new RedirectionError(`${name}: readonly variable\n${name}: cannot assign fd to variable`);
+    }
+
+    let n = 10;
+
+    while (this.namedFds.has(n) || ctx.getFd(String(n)) !== undefined) n++;
+
+    this.namedFds.add(n);
+    ctx.setParams({ [name]: String(n) });
+
+    return numbered(String(n));
+  }
+
+  /** `N<&M-`, `N>&M-`: N becomes what M was, and M is closed — for the command alone when `local`. */
+  private async moveDescriptor(ctx: ExecContextIf, fd: string, from: string, local = false): Promise<void> {
     const target = ctx.getFd(from);
 
     if (target === undefined) {
       throw new CommandAbortError(`${from}: Bad file descriptor`, { code: 'E_BAD_FD' });
     }
 
-    ctx.redirectFd(fd, target);
+    ctx.redirectFd(fd, target, local);
 
     if (Number(from) > 2) {
-      ctx.closeFd(from);
+      ctx.closeFd(from, local);
     }
 
-    await this.descriptorClosed(ctx, from);
+    if (!local) {
+      await this.descriptorClosed(ctx, from);
+    }
   }
 
   /** Descriptors handed out by `exec {fd}>file`, so the next one takes another number. */
@@ -1048,7 +1180,8 @@ export class AstExecutor {
     const modes: Record<string, string> = { '>': 'w+', '>|': 'w+', '>>': 'a+', '<': 'r' };
     const mode = modes[r.op.text];
 
-    if (!this.shell.fdOpen || !mode || r.heredoc) {
+    // `{fd}>file` is left to applyRedirections, which picks the number first
+    if (!this.shell.fdOpen || !mode || r.heredoc || r.numberIo?.text.startsWith('{')) {
       return false;
     }
 
@@ -1074,18 +1207,16 @@ export class AstExecutor {
   }
 
   /**
-   * `N>file` for one command. Descriptors above 2 are kept on the shell's root
-   * context, so this one outlives the command — later `>&N` still reaches the
-   * file where bash would call it a bad descriptor — which is the lesser fault
-   * next to writing the command's stdout there instead.
+   * `N>file`, for one command when `local`. A descriptor above 2 lands here only
+   * when the host cannot open files, and so points at the path itself.
    */
-  private redirectOutput(ctx: ExecContextIf, fd: string | undefined, target: string, append: boolean): void {
+  private redirectOutput(ctx: ExecContextIf, fd: string | undefined, target: string, append: boolean, local = false): void {
     if (fd === '2') {
       ctx.redirectStderr(target, append);
     } else if (fd === undefined || fd === '1') {
       ctx.redirectStdout(target, append);
     } else {
-      ctx.redirectFd(fd, target);
+      ctx.redirectFd(fd, target, local);
     }
   }
 
@@ -1133,9 +1264,14 @@ export class AstExecutor {
    * A script's commands in turn. An `exit` stops them, and comes back as the
    * exit signal rather than its status, for the caller to end its shell by.
    */
-  protected async executeScript(node: AstNodeScript, ctx: ExecContextIf): Promise<number> {
+  /**
+   * @param reparse - For a script read from its source: stop at the first line
+   *                  after the shell changed from `state` in a way that parses
+   *                  differently, and say in `resume` which one it is (1-based)
+   */
+  protected async executeScript(node: AstNodeScript, ctx: ExecContextIf, reparse?: { state: string; resume?: number }): Promise<number> {
     try {
-      return await this.runScriptCommands(node, ctx);
+      return await this.runScriptCommands(node, ctx, reparse);
     } catch (err) {
       // An unset parameter under `set -u` ends this shell, and a command
       // substitution is a shell of its own — it parses to its own Script, so
@@ -1157,12 +1293,21 @@ export class AstExecutor {
     }
   }
 
-  private async runScriptCommands(node: AstNodeScript, ctx: ExecContextIf): Promise<number> {
+  private async runScriptCommands(node: AstNodeScript, ctx: ExecContextIf, reparse?: { state: string; resume?: number }): Promise<number> {
     let lastCode = 0;
     // The line a command that was aborted stood on: the rest of it does not run
     let skipRow: number | undefined;
+    // The last line read with the shell as it now is not: the one the command that changed it ended on
+    let staleAfter: number | undefined;
 
     for (const command of node.commands) {
+      const row = command.loc?.start?.row;
+
+      if (staleAfter !== undefined && row !== undefined && row > staleAfter) {
+        reparse!.resume = row;
+        return lastCode;
+      }
+
       // A script with no locations — a `$( )` is parsed without — is one line
       if (skipRow !== undefined && (command.loc?.start?.row ?? -1) === skipRow) {
         continue;
@@ -1210,6 +1355,10 @@ export class AstExecutor {
 
       // Update $? with the last command's exit code
       ctx.setParams({ '?': String(lastCode) });
+
+      if (reparse && command.loc?.end?.row !== undefined && (staleAfter !== undefined || this.parseState(ctx) !== reparse.state)) {
+        staleAfter = command.loc.end.row;
+      }
 
       // Note: Non-zero exit codes do NOT stop script execution
       // (unless set -e is enabled, which we'd need to check here)
@@ -1282,44 +1431,6 @@ export class AstExecutor {
       const redirects = node.suffix?.filter((arg) => arg.type === 'Redirect') as AstNodeRedirect[] | undefined;
       const words = (node.suffix?.filter((arg) => arg.type === 'Word') ?? []) as AstNodeWord[];
 
-      // `exec {fd}>file`: the word before the redirection names a variable for
-      // the shell to put a free descriptor in, 10 or above. `{fd}>&-` closes it.
-      for (const [i, item] of (node.suffix ?? []).entries()) {
-        const name = item.type === 'Word' ? (item as AstNodeWord).text.match(/^\{([A-Za-z_][A-Za-z0-9_]*)\}$/)?.[1] : undefined;
-        const redirect = node.suffix?.[i + 1] as AstNodeRedirect | undefined;
-
-        if (!name || redirect?.type !== 'Redirect' || redirect.numberIo) {
-          continue;
-        }
-
-        words.splice(words.indexOf(item as AstNodeWord), 1);
-        redirects!.splice(redirects!.indexOf(redirect), 1);
-
-        let fd: string;
-
-        if (redirect.file.text === '-') {
-          fd = parentCtx.getParams()[name] ?? '';
-        } else {
-          let n = 10;
-
-          while (this.namedFds.has(n) || parentCtx.getFd(String(n)) !== undefined) n++;
-
-          this.namedFds.add(n);
-          fd = String(n);
-          parentCtx.setParams({ [name]: fd });
-        }
-
-        const numbered = { ...redirect, numberIo: { type: 'io_number', text: fd } } as AstNodeRedirect;
-
-        if (!(await this.openExecRedirection(parentCtx, numbered))) {
-          await this.applyRedirections(parentCtx, [numbered]);
-        }
-
-        if (redirect.file.text === '-') {
-          this.namedFds.delete(Number(fd));
-        }
-      }
-
       // `-a name` runs the command as `name`, `-l` as a login shell's `-name`, `-c` with no environment
       const options: ExecCommandOptions = {};
       let login = false;
@@ -1369,7 +1480,7 @@ export class AstExecutor {
       try {
         for (const redirect of redirects ?? []) {
           if (!(await this.openExecRedirection(parentCtx, redirect))) {
-            await this.applyRedirections(parentCtx, [redirect]);
+            await this.applyRedirections(parentCtx, [redirect], undefined, { exec: true });
           }
         }
       } catch (err) {
@@ -1786,7 +1897,7 @@ export class AstExecutor {
       return code;
     } finally {
       for (const pipe of pipes) {
-        await this.shell.pipeRemove(pipe).catch(() => {});
+        await this.releaseTemporary(pipe);
       }
     }
   }
@@ -2021,14 +2132,23 @@ export class AstExecutor {
    * A syntax error in eval's string or a sourced file, said as bash says it:
    * `$0: eval: line N:`, counting from the eval's own line, or `file: line N:`.
    */
-  private async reportSyntaxError(ctx: ExecContextIf, err: BashSyntaxError, where: { eval: true } | { file: string }, source: string): Promise<void> {
+  private async reportSyntaxError(
+    ctx: ExecContextIf,
+    err: BashSyntaxError,
+    where: { eval: true } | { file: string } | { substitution: true },
+    source: string,
+  ): Promise<void> {
     const { line, lines } = syntaxErrorLines(err, err.source ?? source);
     const params = ctx.getParams();
     const name = this.sourceFrame.name ?? params['0'] ?? 'bash';
     const at = (n: number) => this.lineNumbers ? `line ${n}: ` : '';
     // Without line numbers a diagnostic has no place before it, and this one just who said it
     const shell = this.lineNumbers ? `${name}: ` : '';
-    const prefix = 'eval' in where ? `${shell}eval: ${at(Number(params.LINENO ?? 1) + line - 1)}` : `${where.file}: ${at(line)}`;
+    const prefix = 'eval' in where
+      ? `${shell}eval: ${at(Number(params.LINENO ?? 1) + line - 1)}`
+      : 'substitution' in where
+      ? `${shell}command substitution: ${at(Number(params.LINENO ?? 1) + line)}`
+      : `${where.file}: ${at(line)}`;
 
     await this.shell.pipeWrite(ctx.getStderr(), lines.map((text) => `${prefix}${text}\n`).join('')).catch(() => {});
   }
@@ -2231,7 +2351,7 @@ export class AstExecutor {
       await this.finishProcessSubstitutions(subs, ctx);
 
       for (const pipe of redirectPipes) {
-        await this.shell.pipeRemove(pipe).catch(() => {});
+        await this.releaseTemporary(pipe);
       }
     }
   }
@@ -2337,7 +2457,7 @@ export class AstExecutor {
       await this.finishProcessSubstitutions(subs, ctx);
 
       for (const pipe of redirectPipes) {
-        await this.shell.pipeRemove(pipe).catch(() => {});
+        await this.releaseTemporary(pipe);
       }
     }
   }
@@ -3814,8 +3934,29 @@ export class AstExecutor {
     }
     quoted += '"';
 
-    const ast = await parse(quoted, { mode: 'word-expansion' });
-    const word = (ast.commands[0] as AstNodeCommand).name;
+    // A `$(` the body leaves open: the substitution's syntax error, said on the delimiter's line
+    if (depth > 0) {
+      const params = ctx.getParams();
+      const line = Number(params.LINENO ?? 1) + (body.match(/\n/g)?.length ?? 0) + 1;
+      const where = this.lineNumbers ? `${this.sourceFrame.name ?? params['0'] ?? 'bash'}: command substitution: line ${line}: ` : '';
+
+      await this.shell.pipeWrite(ctx.getStderr(), `${where}unexpected EOF while looking for matching \`)'\n`).catch(() => {});
+      throw new CommandAbortError('', { code: 'E_SUBSTITUTION_SYNTAX' });
+    }
+
+    let ast: AstNode;
+
+    try {
+      ast = await parse(quoted, { mode: 'word-expansion' });
+    } catch (err) {
+      if (!(err instanceof BashSyntaxError)) throw err;
+
+      // `$(` left open in the body: the substitution's own syntax error, and the command does not run
+      await this.reportSyntaxError(ctx, err, { substitution: true }, quoted);
+      throw new CommandAbortError('', { code: 'E_SUBSTITUTION_SYNTAX' });
+    }
+
+    const word = ((ast as AstNodeScript).commands[0] as AstNodeCommand).name;
 
     if (!word) {
       return body;
@@ -4374,21 +4515,22 @@ export class AstExecutor {
           }
 
           const transformed = await this.applyValueOperator(xpAny, paramValue, ctx);
+          const dquoted = isDoubleQuotedAt(node.text, xp.loc!.start);
 
           if (transformed !== null) {
             resolved = transformed;
           } else if (xpAny.op === 'useDefaultValue') {
             // ${var:-word} — use word if var is unset or empty
-            resolved = paramValue || await this.resolveWordValue(xpAny.word, ctx);
+            resolved = paramValue || await this.operatorWordValue(xpAny, ctx, dquoted);
           } else if (xpAny.op === 'useDefaultValueIfUnset') {
             // ${var-word} — use word if var is unset
-            resolved = isSet ? paramValue : await this.resolveWordValue(xpAny.word, ctx);
+            resolved = isSet ? paramValue : await this.operatorWordValue(xpAny, ctx, dquoted);
           } else if (xpAny.op === 'useAlternativeValue') {
             // ${var:+word} — use word if var is set and non-empty
-            resolved = paramValue ? await this.resolveWordValue(xpAny.word, ctx) : '';
+            resolved = paramValue ? await this.operatorWordValue(xpAny, ctx, dquoted) : '';
           } else if (xpAny.op === 'useAlternativeValueIfUnset') {
             // ${var+word} — use word if var is set
-            resolved = isSet ? await this.resolveWordValue(xpAny.word, ctx) : '';
+            resolved = isSet ? await this.operatorWordValue(xpAny, ctx, dquoted) : '';
           } else if (xpAny.op === 'assignDefaultValue' || xpAny.op === 'assignDefaultValueIfUnset') {
             // ${var:=word} / ${var=word} — when var is empty (or unset), it is assigned word, and
             // expands to it. Only a variable can be: `${1:=x}` is refused.
@@ -4401,7 +4543,7 @@ export class AstExecutor {
                 throw new CommandAbortError(`$${xp.parameter}: cannot assign in this way`, { code: 'E_BAD_ASSIGNMENT' });
               }
 
-              resolved = await this.resolveWordValue(xpAny.word, ctx);
+              resolved = await this.operatorWordValue(xpAny, ctx, dquoted);
               await this.applyAssignment({ name, subscript, append: false, values: [resolved], list: false, status: 0 }, ctx, false);
             } else {
               resolved = paramValue;
@@ -4413,7 +4555,7 @@ export class AstExecutor {
             const missing = xpAny.op === 'indicateErrorIfNull' ? !paramValue : !isSet;
 
             if (missing) {
-              const message = await this.resolveWordValue(xpAny.word, ctx);
+              const message = await this.operatorWordValue(xpAny, ctx, dquoted);
 
               const said = xpAny.op === 'indicateErrorIfNull' ? 'parameter null or not set' : 'parameter not set';
 
@@ -4541,6 +4683,67 @@ export class AstExecutor {
     }
 
     return result;
+  }
+
+  /**
+   * The word of `${x-word}`, `${x+word}`, `${x=word}` or `${x?word}` standing
+   * inside double quotes, which bash reads as double-quoted text: a `'` is a
+   * character like any other, `"${x+'y'}"` gives 'y', a `\` escapes only what
+   * it would between double quotes (and the `}`), and a nested `"…"` only
+   * groups. Outside double quotes the word is read as a word anywhere is.
+   */
+  private async operatorWordValue(xp: Record<string, unknown>, ctx: ExecContextIf, dquoted: boolean): Promise<string> {
+    const source = xp.wordSource;
+
+    if (!dquoted || typeof source !== 'string' || !/['"\\]/.test(source)) {
+      return this.resolveWordValue(xp.word, ctx);
+    }
+
+    let text = '"';
+    // Inside `$( )`, `${ }` and backquotes the word's own text stays as it is
+    let depth = 0;
+    let backquoted = false;
+
+    for (let i = 0; i < source.length; i++) {
+      const char = source[i];
+      const next = source[i + 1];
+
+      if (char === '\\' && next !== undefined) {
+        // `\}` is a `}`; any other escape is the double quotes'
+        text += depth === 0 && !backquoted && next === '}' ? '}' : char + next;
+        i++;
+      } else if (char === '`') {
+        backquoted = !backquoted;
+        text += char;
+      } else if (char === '$' && (next === '(' || next === '{')) {
+        depth++;
+        text += char + next;
+        i++;
+      } else if (depth > 0 && (char === '(' || char === '{')) {
+        depth++;
+        text += char;
+      } else if (depth > 0 && (char === ')' || char === '}')) {
+        depth--;
+        text += char;
+      } else if (depth === 0 && !backquoted && char === '"') {
+        // A nested pair only groups: its text is double-quoted either way
+      } else {
+        text += char;
+      }
+    }
+
+    text += '"';
+
+    const ast = await parse(text, { mode: 'word-expansion' });
+    const word = (ast.commands[0] as AstNodeCommand | undefined)?.name;
+
+    if (!word) {
+      return this.resolveWordValue(xp.word, ctx);
+    }
+
+    const { values } = await this.resolveExpansions({ ...word, type: 'AssignmentWord' } as AstNodeAssignmentWord, ctx);
+
+    return values[0] ?? '';
   }
 
   private async resolveWordValue(word: unknown, ctx: ExecContextIf): Promise<string> {
