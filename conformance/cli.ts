@@ -10,7 +10,17 @@
  * as printed, and so are options it has no counterpart for.
  */
 import { fromFileUrl } from '@std/path';
-import { AstExecutor, BashSyntaxError, createBuiltinRegistry, DEFAULT_SHELL_OPTIONS, ExecContext, getExitCode, SHELL_OPTION_FLAG_MAP, SIGNALS } from '../mod.ts';
+import {
+  AstExecutor,
+  BashSyntaxError,
+  createBuiltinRegistry,
+  DEFAULT_SHELL_OPTIONS,
+  ExecContext,
+  getExitCode,
+  logoutBuiltin,
+  SHELL_OPTION_FLAG_MAP,
+  SIGNALS,
+} from '../mod.ts';
 import { logGap, RealShell } from './host-shell.ts';
 
 const BASH_VERSION = '5.2.21(1)-release';
@@ -166,7 +176,12 @@ async function main(): Promise<number> {
       Deno.exit(await executor.runExitTrap(ctx, 128 + number));
     },
   });
-  const executor = new AstExecutor(shell, { builtins: createBuiltinRegistry(), lineNumbers: true });
+  // bash's logout, which a host of its own leaves out of the default registry
+  const builtins = createBuiltinRegistry();
+
+  builtins.set('logout', logoutBuiltin);
+
+  const executor = new AstExecutor(shell, { builtins, lineNumbers: true });
   const ctx = new ExecContext();
 
   ctx.setCwd(Deno.cwd());

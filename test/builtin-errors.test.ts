@@ -13,7 +13,6 @@ const cases: Array<[string, string, string]> = [
     'f: readonly function\nunset: f: cannot unset: readonly function\ndeclare: f: readonly function\n',
   ],
   ['unset -f -v x; echo $?', '1\n', 'unset: cannot simultaneously unset a function and a variable\n'],
-  ['logout; echo $?', '1\n', "logout: not login shell: use `exit'\n"],
   ['set +h; hash; echo $?', '1\n', 'hash: hashing disabled\n'],
   ['set -q; echo $?', '2\n', 'set: -q: invalid option\nset: usage: set [-abefhkmnptuvxBCEHPT] [-o option-name] [--] [-] [arg ...]\n'],
   ['shopt -s -u extglob; echo $?', '1\n', 'shopt: cannot set and unset shell options simultaneously\n'],

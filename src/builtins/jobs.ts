@@ -223,9 +223,9 @@ export const killBuiltin: BuiltinHandler = async (ctx: ExecContextIf, args: stri
       }
 
       pid = job.pid;
-    } else if (!/^-?\d+$/.test(target)) {
-      // Never handed on: `kill ''` would reach the host as pid 0, every process in the group
-      stderr += target === '' ? "kill: `': not a pid or valid job spec\n" : `kill: ${target}: arguments must be process or job IDs\n`;
+    } else if (target === '') {
+      // Never handed on: to a host that asks Number() it is pid 0, every process in the group
+      stderr += "kill: `': not a pid or valid job spec\n";
       continue;
     }
 

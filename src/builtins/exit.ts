@@ -143,7 +143,11 @@ export const returnBuiltin: BuiltinHandler = async (ctx, args) => {
   return { code: makeReturnSignal(returnCode) };
 };
 
-/** logout: exit, in a login shell; any other shell says to use exit. */
+/**
+ * logout: exit, in a login shell; any other shell says to use exit. Not in the
+ * default registry, since a host may have a logout of its own: one that
+ * wants bash's registers it.
+ */
 export const logoutBuiltin: BuiltinHandler = async (ctx, args, shell, execute) => {
   if (!ctx.getShellOption('login_shell')) {
     return { code: 1, stderr: "logout: not login shell: use `exit'\n" };
