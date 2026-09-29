@@ -100,3 +100,16 @@ Deno.test('[[ -v ]] on arrays is about the element named, 0 when none is', async
 
   assertEquals(result.stdout, 'a\na[0]\nb[@]\nh[k]\nunset\n');
 });
+
+Deno.test('local and name references', async (t) => {
+  await t.step('local x makes a new x, whatever a reference further out says', async () => {
+    assertEquals((await run('declare -n ref=var; f() { local ref=Y; declare -p ref; }; var=X; f')).stdout, 'declare -- ref="Y"\n');
+  });
+
+  await t.step("a function's own reference makes what it names local too", async () => {
+    const result = await run('g() { declare -n r=v; declare -a r; r=(X); declare -p r v; }; g; declare -p v');
+
+    assertEquals(result.stdout, 'declare -n r="v"\ndeclare -a v=([0]="X")\n');
+    assertEquals(result.stderr, 'declare: v: not found\n');
+  });
+});

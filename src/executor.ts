@@ -39,7 +39,7 @@ import type { ErrorPosition } from './errors.ts';
 import { exportedFunctionName, exportedFunctionText, functionEnvName } from './print-command.ts';
 import { singleQuoted } from './quote.ts';
 import { cpuTime, timeReport } from './timing.ts';
-import { contextVariables, evaluateArithmeticText } from './arith.ts';
+import { closingBracket, closingQuote, contextVariables, evaluateArithmeticText, subscriptEnd } from './arith.ts';
 import { bracketExpression, globToRegExp, globToRegexSource, posixRegexToSource, quoteGlob, quoteRegex, unquoteGlob } from './pattern.ts';
 import {
   ArithmeticError,
@@ -1423,7 +1423,7 @@ export class AstExecutor {
           opts.file !== undefined
             ? this.inCallFrame(ctx, 'source', opts.file, () => this.inSourceFrame({ base: 0, name: opts.file }, () => this.executeSource(script, ctx)))
             : this.inSourceFrame({ base: Number(ctx.getParams().LINENO ?? 1) - 1, name: this.sourceFrame.name }, () => this.executeSource(script, ctx));
-        const result = await builtin(ctx, args || [], this.shell, execute);
+        const result = await builtin(ctx, args || [], this.shell, execute, { expandSubscript: (subscript, keyed) => this.arithmeticSubscript(subscript, keyed, ctx) });
 
         code = result.code;
 
@@ -2739,7 +2739,7 @@ export class AstExecutor {
     }
 
     // A readonly variable is said as any assignment to one says it
-    const prefix = err instanceof ReadonlyVariableError ? '' : '((: ';
+    const prefix = err instanceof ReadonlyVariableError || (err instanceof ArithmeticError && err.nameless) ? '' : '((: ';
 
     await this.diagnose(ctx, `${prefix}${err.message}`);
 
@@ -2758,9 +2758,69 @@ export class AstExecutor {
    * does, on 64-bit integers.
    */
   protected async arithmeticBig(part: { expression: string }, ctx: ExecContextIf): Promise<bigint> {
-    const text = (await this.expandHereDocument(part.expression, ctx)).replace(/(?<!\\)"/g, '');
+    const text = (await this.expandArithmetic(part.expression, ctx)).replace(/(?<!\\)"/g, '');
 
-    return await evaluateArithmeticText(text, contextVariables(ctx));
+    return await evaluateArithmeticText(text, contextVariables(ctx, (subscript, keyed) => this.arithmeticSubscript(subscript, keyed, ctx)));
+  }
+
+  /**
+   * An arithmetic expression expanded as bash 5.2 expands one: as in double
+   * quotes, except that each subscript, `a[…]`, is expanded on its own, as a
+   * word, and what comes out is backslash-quoted. What a variable holds then
+   * stays the key it is: `a[$k]` with k='x],b[$(cmd)' neither ends the
+   * subscript early nor runs cmd, since the evaluator expands the subscript
+   * once more and takes the quoting off.
+   */
+  protected async expandArithmetic(text: string, ctx: ExecContextIf): Promise<string> {
+    let out = '';
+    let from = 0;
+
+    for (let i = 0; i < text.length; i++) {
+      const char = text[i];
+
+      if (char === '\\') {
+        i++;
+      } else if (char === '`') {
+        i = closingQuote(text, i);
+      } else if (char === '$' && (text[i + 1] === '(' || text[i + 1] === '{')) {
+        i = closingBracket(text, i + 1);
+      } else if (char === '[') {
+        const close = subscriptEnd(text, i);
+
+        // No subscript, `[` on its own or `[]`: a character like any
+        if (close <= i + 1) continue;
+
+        out += await this.expandHereDocument(text.slice(from, i), ctx);
+        out += `[${(await this.subscriptWord(text.slice(i + 1, close), ctx)).replace(/[[\]$`~\\'"]/g, '\\$&')}]`;
+        from = close + 1;
+        i = close;
+      }
+
+      if (i === -1) break;
+    }
+
+    return out + await this.expandHereDocument(text.slice(from), ctx);
+  }
+
+  /** A subscript as the arithmetic evaluator expands it: a key as a word, an index as in double quotes. */
+  private async arithmeticSubscript(subscript: string, keyed: boolean, ctx: ExecContextIf): Promise<string> {
+    if (keyed) return await this.subscriptWord(subscript, ctx);
+
+    return (await this.expandHereDocument(subscript, ctx)).replace(/(?<!\\)"/g, '');
+  }
+
+  /** A subscript expanded as one word: parameters, substitutions, quote removal, no splitting. */
+  private async subscriptWord(subscript: string, ctx: ExecContextIf): Promise<string> {
+    if (!/[$`\\'"]/.test(subscript)) return subscript;
+
+    const ast = await parse(subscript, { mode: 'word-expansion' });
+    const word = (ast.commands[0] as AstNodeCommand).name;
+
+    if (!word) return subscript;
+
+    const { values } = await this.resolveExpansions({ ...word, type: 'AssignmentWord' } as AstNodeAssignmentWord, ctx);
+
+    return values[0] ?? '';
   }
 
   /** `arithmeticBig` as a number, for a count, an index or a test. */
@@ -2781,7 +2841,7 @@ export class AstExecutor {
       // An arithmetic operand that is no expression fails the test, and says so
       if (!(err instanceof ArithmeticSyntaxError || err instanceof ArithmeticError)) throw err;
 
-      await this.diagnose(ctx, `[[: ${err.message}`);
+      await this.diagnose(ctx, err instanceof ArithmeticError && err.nameless ? err.message : `[[: ${err.message}`);
 
       return this.applyErrexit(1, ctx);
     }
@@ -3130,17 +3190,30 @@ export class AstExecutor {
       return { name: parts.name, subscript: parts.subscript, append: parts.append, values, list: true, status };
     }
 
-    const { values, status } = await this.resolveExpansions(node, ctx);
-    const text = values[0] ?? '';
-    const equals = text.indexOf('=');
+    // The value alone, as `x=value`: the subscript is expanded on its own, and
+    // what it expands to may hold a `=` or a `]` of its own, `h[$path]=1`
+    const { values, status } = await this.resolveExpansions(this.wordFrom(node, parts.valueStart, 'x='), ctx);
 
     return {
       name: parts.name,
       subscript: parts.subscript,
       append: parts.append,
-      values: [equals === -1 ? '' : text.slice(equals + 1)],
+      values: [(values[0] ?? 'x=').slice(2)],
       list: false,
       status,
+    };
+  }
+
+  /** A word from `from` on, `prefix` put before it, its expansions moved along. */
+  private wordFrom<T extends { text: string; expansion?: Array<{ loc?: { start: number; end: number } }> }>(node: T, from: number, prefix = ''): T {
+    const shift = prefix.length - from;
+
+    return {
+      ...node,
+      text: prefix + node.text.slice(from),
+      expansion: (node.expansion ?? [])
+        .filter((xp) => !xp.loc || xp.loc.start >= from)
+        .map((xp) => xp.loc ? { ...xp, loc: { start: xp.loc.start + shift, end: xp.loc.end + shift } } : xp),
     };
   }
 
@@ -3385,7 +3458,8 @@ export class AstExecutor {
 
     if (subscript !== undefined) {
       const array = ctx.getArray(name);
-      const index = await this.resolveIndex(subscript, array?.length ?? 0, ctx);
+      // A subscript that is no expression ends the line, as bash's does
+      const index = await this.resolveIndex(subscript, array?.length ?? 0, ctx, true);
       const element = await this.assignedValue(ctx, name, array?.[index], value, append);
 
       if (local) {
@@ -3451,7 +3525,7 @@ export class AstExecutor {
    * Evaluate an array subscript. It is an arithmetic expression, so `${a[i+1]}`
    * and `a[$i]=x` both work; a negative index counts back from the end.
    */
-  protected async resolveIndex(subscript: string, length: number, ctx: ExecContextIf): Promise<number> {
+  protected async resolveIndex(subscript: string, length: number, ctx: ExecContextIf, strict = false): Promise<number> {
     let index = 0;
 
     if (/^\s*-?\d+\s*$/.test(subscript)) {
@@ -3459,8 +3533,14 @@ export class AstExecutor {
     } else {
       try {
         index = await this.arithmeticValue({ expression: subscript }, ctx);
-      } catch {
-        index = 0;
+      } catch (err) {
+        // bash names no command for an error in a subscript
+        if (!strict || !(err instanceof ArithmeticError)) {
+          index = 0;
+        } else {
+          err.nameless = true;
+          throw err;
+        }
       }
     }
 
@@ -3568,7 +3648,7 @@ export class AstExecutor {
    * it holds.
    */
   protected async expandSubscript(subscript: string, ctx: ExecContextIf): Promise<string> {
-    if (!subscript.includes('$') && !subscript.includes('`')) {
+    if (!/[$`\\'"]/.test(subscript)) {
       return subscript;
     }
 

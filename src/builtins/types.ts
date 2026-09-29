@@ -25,6 +25,7 @@ export type BuiltinResult = {
  * @param args - Command arguments (excluding the command name)
  * @param shell - The shell interface for executing subcommands
  * @param execute - Function to execute a script and return its exit code
+ * @param services - What else the executor lends, for a builtin that needs its expansions
  * @returns Promise resolving to the builtin result
  */
 export type BuiltinHandler = (
@@ -32,7 +33,18 @@ export type BuiltinHandler = (
   args: string[],
   shell: ShellIf,
   execute: (script: string, opts?: { file?: string }) => Promise<number>,
+  services?: BuiltinServices,
 ) => Promise<BuiltinResult>;
+
+/** What the executor lends a builtin beyond running script text. */
+export type BuiltinServices = {
+  /**
+   * A subscript expanded as arithmetic expands `a[$i]` before it uses it — a
+   * key as a word, an index as in double quotes: `let 'a[$i]=1'` and
+   * `declare -i n='a[$i]'` need it.
+   */
+  expandSubscript: (subscript: string, keyed: boolean) => Promise<string>;
+};
 
 /**
  * Registry mapping builtin names to their handlers.

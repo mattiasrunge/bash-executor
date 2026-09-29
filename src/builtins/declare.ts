@@ -12,8 +12,8 @@ import { utils } from '@ein/bash-parser';
 import { contextVariables, evaluateArithmeticText } from '../arith.ts';
 import { CommandAbortError } from '../errors.ts';
 import { functionEnvName, functionText } from '../print-command.ts';
-import { type ExecContextIf, QUOTED_LIST_MARK, type ShellIf, type VariableInfo } from '../types.ts';
-import type { BuiltinHandler, BuiltinResult } from './types.ts';
+import { type ExecContextIf, QUOTED_LIST_MARK, type VariableInfo } from '../types.ts';
+import type { BuiltinHandler, BuiltinResult, BuiltinServices } from './types.ts';
 import { declareLine, setListing, sortedVariables } from './variable-listing.ts';
 import { exportFunctions } from './variables.ts';
 
@@ -95,6 +95,7 @@ class Declaration {
     private readonly command: Command,
     private readonly ctx: ExecContextIf,
     private readonly opts: Options,
+    private readonly services?: BuiltinServices,
   ) {}
 
   private print(stdout: string): void {
@@ -242,6 +243,13 @@ class Declaration {
 
       // …and what it leads to may be an element of a reference: `declare -n a=b b='a[1]'`
       if (element && assigning) this.dropNameref(target, name);
+    }
+
+    // In a function, a reference of its own leads to what it names, which is made local there too
+    if (local && subscript === undefined) {
+      const self = target.getOwnVariables()[name];
+
+      if (self?.attributes.includes('n') && typeof self.value === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(self.value)) name = self.value;
     }
 
     const own = local ? target.getOwnVariables()[name] : undefined;
@@ -404,7 +412,7 @@ class Declaration {
     how: { subscript?: string; value: string; append: boolean; compound: boolean; quotedList: boolean; creatingArray: boolean; arrayExists: boolean },
   ): Promise<void> {
     const integer = info.attributes.includes('i');
-    const arith = async (text: string): Promise<string> => String(await evaluateArithmeticText(text || '0', contextVariables(this.ctx)));
+    const arith = async (text: string): Promise<string> => String(await evaluateArithmeticText(text || '0', contextVariables(this.ctx, this.services?.expandSubscript)));
     /** A value as the variable takes it: arithmetic for -i, `+=` adding or appending to what was there. */
     const valueFor = async (previous: string | undefined, text: string, append = how.append): Promise<string> => {
       if (integer) {
@@ -525,7 +533,7 @@ function parseOptions(command: Command, args: string[]): { opts: Options; names:
  * The shared body of declare, typeset, local, readonly and export: readonly
  * and export only set their attribute on what they are given, `-r` or `-x`.
  */
-export async function declareCommand(command: Command, ctx: ExecContextIf, args: string[]): Promise<BuiltinResult> {
+export async function declareCommand(command: Command, ctx: ExecContextIf, args: string[], services?: BuiltinServices): Promise<BuiltinResult> {
   const { opts, names, bad } = parseOptions(command, args);
 
   if (bad) {
@@ -550,7 +558,7 @@ export async function declareCommand(command: Command, ctx: ExecContextIf, args:
 
   if (opts.on.has('f') || opts.on.has('F')) return await declareFunctions(ctx, opts, names);
 
-  const declaration = new Declaration(command, ctx, opts);
+  const declaration = new Declaration(command, ctx, opts, services);
 
   if (names.length === 0) {
     const attributes = opts.on.size > 0;
@@ -627,10 +635,10 @@ async function declareFunctions(ctx: ExecContextIf, opts: Options, names: string
   return { code, stdout: output };
 }
 
-export const declareBuiltin: BuiltinHandler = (ctx: ExecContextIf, args: string[], _shell: ShellIf) => declareCommand('declare', ctx, args);
+export const declareBuiltin: BuiltinHandler = (ctx, args, _shell, _execute, services) => declareCommand('declare', ctx, args, services);
 
 /** typeset is declare by its ksh name. */
-export const typesetBuiltin: BuiltinHandler = (ctx: ExecContextIf, args: string[], _shell: ShellIf) => declareCommand('typeset', ctx, args);
+export const typesetBuiltin: BuiltinHandler = (ctx, args, _shell, _execute, services) => declareCommand('typeset', ctx, args, services);
 
 /**
  * Check if a variable is readonly.

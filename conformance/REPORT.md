@@ -8,7 +8,7 @@ see [README.md](README.md) for what the scores mean.
 | Test files that parse | 455 / 471 |
 | `run-*` scripts passing | 24 / 83 (real bash here: 74) |
 | Mean upstream score | 73% |
-| Mean stdout score | 76% |
+| Mean stdout score | 77% |
 
 ## Gaps
 
@@ -73,7 +73,6 @@ Errors that escaped the executor and ended the script.
 
 | Name | Tests | Times hit |
 | --- | --- | --- |
-| TypeError: Cannot read properties of undefined (reading 'attributes') | nameref | 1 |
 | Error: No such device or address (os error 6): open '/dev/tty' | vredir | 1 |
 
 ### Invocation options not supported
@@ -94,9 +93,6 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | ulimit: command not found | procsub, redir, vredir |
 | syntax error: Unexpected 'In' | alias, comsub-posix |
 | syntax error: Unexpected 'OPEN_PAREN' | array, parser |
-| a[[]=N : bad array subscript (error token is "a[[]=N ") | array, quotearray |
-| a[]]=N : syntax error in expression (error token is "]=N ") | array, quotearray |
-| ((: A[]]=N: syntax error in expression (error token is "]=N") | array, quotearray |
 | printf: 'A[	]': not a valid identifier | array, quotearray |
 | printf: 'A[ ]': not a valid identifier | array, quotearray |
 | printf: 'A[*]': not a valid identifier | array, quotearray |
@@ -107,6 +103,7 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | foo: : must use subscript when assigning associative array | array, assoc |
 | syntax error: Unexpected 'CLOSE_PAREN' | comsub, parser |
 | syntax error: Unclosed here-document | comsub-eof, heredoc |
+| @: syntax error: operand expected (error token is "@") | assoc, varenv |
 | the test suite should not be run as root | execscript, glob-test |
 | return: can only 'return' from a function or sourced script | execscript, posixexp |
 | N: No such file or directory | heredoc, vredir |
@@ -114,7 +111,7 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | !!: command not found | histexpand, history |
 | !e: command not found | histexpand, history |
 | syntax error: Unexpected 'WORD' | parser, vredir |
-| ((: == N: syntax error: operand expected (error token is "== N") | new-exp, test |
+| ((: == N : syntax error: operand expected (error token is "== N ") | new-exp, test |
 | [N] N | jobs, trap |
 | /dev/tty: No such device or address (os error N): open '/dev/tty' | read, test |
 | x=value: command not found | alias |
@@ -123,11 +120,13 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | ever: command not found | alias |
 | myalias: command not found | alias |
 | aN: command not found | alias |
-| ((: ++: syntax error: operand expected (error token is "+") | arith |
-| ((: --: syntax error: operand expected (error token is "-") | arith |
-| ((: x=N y=N: syntax error in expression (error token is "y=N") | arith |
-| a[b[c]d]=e: command not found | arith |
 | ﷑second): command not found | array |
+| *: syntax error: operand expected (error token is "*") | array |
+| c: readonly variable | array |
+| let: a=(N﷑+﷑N): syntax error: invalid arithmetic operator (error token is "﷑+﷑N)") | array |
+| ﷑[N]=: No such file or directory | array |
+| foo: [version[agent]]=version.agent: must use subscript when assigning associative array | array |
+| foo: [ab]]=bar: must use subscript when assigning associative array | array |
 
 ## Per test
 
@@ -137,11 +136,11 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | --- | --- | --- | --- | --- | --- |
 | alias | pass | no | 9% | 9% | 4,24c4,45 ⏎ &lt; ./alias.tests: line 48: foo: command not found ⏎ &lt; ./alias.tests: line 56: foo: command not found |
 | appendop | pass | yes | 100% | 100% |  |
-| arith | pass | no | 95% | 97% | 164c164 ⏎ &lt; ./arith1.sub: line 48: ((: ++: syntax error: operand expected (error token is "+") ⏎ --- |
+| arith | pass | no | 98% | 97% | 196c196 ⏎ &lt;  ⏎ --- |
 | arith-for | pass | no | 97% | 97% | 67c67,68 ⏎ &lt; bash: syntax error: for (( … )) takes three expressions separated by ';', got "i=0; i &lt; 3" ⏎ --- |
-| array | pass | no | 79% | 83% | 2,3c2,4 ⏎ &lt; ./array.tests: line 28: ﷑second): command not found ⏎ &lt; 127 |
+| array | pass | no | 80% | 84% | 2,3c2,4 ⏎ &lt; ./array.tests: line 28: ﷑second): command not found ⏎ &lt; 127 |
 | array2 | pass | yes | 100% | 100% |  |
-| assoc | pass | no | 55% | 65% | 72c72 ⏎ &lt; 4 -- ⏎ --- |
+| assoc | pass | no | 62% | 73% | 78c78 ⏎ &lt; 1 ⏎ --- |
 | attr | pass | yes | 100% | 100% |  |
 | braces | pass | no | 99% | 99% | 23c23 ⏎ &lt; bazx bazy ⏎ --- |
 | builtins | pass | no | 91% | 92% | 0a1 ⏎ &gt; 1000 ⏎ 104,107c105,108 |
@@ -184,8 +183,8 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | lastpipe | pass | yes | 100% | 100% |  |
 | mapfile | pass | no | 62% | 62% | 16a17,32 ⏎ &gt; a[0] Abcdefghijklmnop ⏎ &gt; [1] aBcdefghijklmnop |
 | more-exp | pass | no | 81% | 89% | 20,23c20,30 ⏎ &lt; argv[1] = &lt;a b c d e f&gt; ⏎ &lt; argv[1] = &lt;a b c d e f&gt; |
-| nameref | pass | no | 86% | 89% | 80d79 ⏎ &lt; ./nameref4.sub: line 181: unset: x: not an array variable ⏎ 155d153 |
-| new-exp | pass | no | 88% | 91% | 1d0 ⏎ &lt; ./new-exp.tests: line 14: ((: == 0: syntax error: operand expected (error token is "== 0") ⏎ 7,8c6,7 |
+| nameref | pass | no | 88% | 91% | 80d79 ⏎ &lt; ./nameref4.sub: line 181: unset: x: not an array variable ⏎ 155d153 |
+| new-exp | pass | no | 88% | 91% | 1d0 ⏎ &lt; ./new-exp.tests: line 14: ((: == 0 : syntax error: operand expected (error token is "== 0 ") ⏎ 7,8c6,7 |
 | nquote | pass | no | 76% | 81% | 7,10c7,10 ⏎ &lt; argv[1] = &lt;$hello,&gt; ⏎ &lt; argv[2] = &lt;$world&gt; |
 | nquote1 | pass | yes | 100% | 100% |  |
 | nquote2 | pass | yes | 100% | 100% |  |
@@ -202,19 +201,19 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | printf | pass | yes | 100% | 100% |  |
 | procsub | pass | no | 67% | 70% | 15,17c15 ⏎ &lt; ./procsub.tests: line 63: ulimit: command not found ⏎ &lt; ./procsub.tests: line 67: ulimit: command not found |
 | quote | pass | no | 94% | 94% | 13,14c13 ⏎ &lt; foo\ ⏎ &lt; bar |
-| quotearray | pass | no | 47% | 59% | 1,12c1,8 ⏎ &lt; ./quotearray.tests: line 20: ((: $(echo uname &gt;&2): syntax error: operand expected (error token is "$(echo uname &gt;&2)") ⏎ &lt; declare -A assoc |
+| quotearray | pass | no | 63% | 72% | 37,38d36 ⏎ &lt; uname ⏎ &lt; uname |
 | read | env | timeout | 42% | 50% | timeout |
 | redir | pass | no | 67% | 69% | 6c6 ⏎ &lt; ./redir.tests: a: No such file or directory ⏎ --- |
 | rhs-exp | pass | no | 92% | 92% | 1d0 ⏎ &lt; argv[1] = &lt;TDEFAULTS = -DSELECT_VECS=$selvecs&gt; ⏎ 2a2 |
 | rsh | pass | no | 6% | 0% | 1,11c1,16 ⏎ &lt; ./rsh1.sub: line 20: set: -r: invalid option ⏎ &lt; ./rsh1.sub: line 25: sh: command not found |
 | set-e | pass | yes | 100% | 100% |  |
 | set-x | pass | no | 76% | 83% | 0a1,2 ⏎ &gt; + (( i=0 )) ⏎ &gt; + (( i&lt;=5 )) |
-| shopt | pass | no | 84% | 84% | 307,335c307,309 ⏎ &lt; /home/mattias/m/git/bash-executor-conformance/conformance/.cache/work/ours/run-shopt/tmp/tmp.nwJ91N6OQ2: 1: shopt: not found ⏎ &lt; 0a1,57 |
+| shopt | pass | no | 84% | 84% | 307,335c307,309 ⏎ &lt; /home/mattias/m/git/bash-executor-conformance/conformance/.cache/work/ours/run-shopt/tmp/tmp.9Mofrga14g: 1: shopt: not found ⏎ &lt; 0a1,57 |
 | strip | pass | yes | 100% | 100% |  |
 | test | env | timeout | 88% | 91% | timeout |
 | tilde | pass | no | 64% | 64% | 2c2 ⏎ &lt; /home/mattias/foo ⏎ --- |
 | tilde2 | pass | no | 61% | 61% | 2c2 ⏎ &lt; ~/bin:~/bin2:/bin:/usr/bin:. ⏎ --- |
 | trap | pass | no | 71% | 77% | 8c8 ⏎ &lt; [1] debug ⏎ --- |
 | type | pass | no | 98% | 98% | 43,44c43,44 ⏎ &lt; /tmp/bash-ts ⏎ &lt; bash-ts is hashed (/tmp/bash-ts) |
-| varenv | pass | no | 77% | 80% | 1,5c1,3 ⏎ &lt; 1 2 ⏎ &lt; ./varenv.tests: line 42: c=7: command not found |
+| varenv | pass | no | 77% | 81% | 1,5c1,3 ⏎ &lt; 1 2 ⏎ &lt; ./varenv.tests: line 42: c=7: command not found |
 | vredir | env | no | 65% | 69% | 8c8 ⏎ &lt;     exec {v} &gt; $TMPFILE; ⏎ --- |

@@ -129,7 +129,7 @@ Deno.test('Arithmetic errors happen at run time, as in bash', async (t) => {
     const shell = new TestShell();
     const result = await shell.runAndCapture('(( a + * b )); echo "s=$?"');
     assertEquals(result.stdout, 's=1\n');
-    assertEquals(result.stderr.startsWith('((: a + * b: syntax error'), true);
+    assertEquals(result.stderr.startsWith('((: a + * b : syntax error'), true);
   });
 
   await t.step('an assignment from a bad expression is not made', async () => {

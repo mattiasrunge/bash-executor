@@ -27,6 +27,8 @@ export const letBuiltin: BuiltinHandler = async (
   ctx: ExecContextIf,
   args: string[],
   _shell: ShellIf,
+  _execute,
+  services,
 ): Promise<BuiltinResult> => {
   if (args.length === 0) {
     return {
@@ -39,7 +41,7 @@ export const letBuiltin: BuiltinHandler = async (
 
   for (const arg of args) {
     try {
-      lastResult = await evaluateArithmeticText(arg, contextVariables(ctx));
+      lastResult = await evaluateArithmeticText(arg, contextVariables(ctx, services?.expandSubscript));
     } catch (error) {
       // A readonly variable is said as any assignment says it, without let's name
       if (error instanceof ReadonlyVariableError) {
@@ -47,7 +49,7 @@ export const letBuiltin: BuiltinHandler = async (
       }
 
       if (error instanceof ArithmeticError) {
-        return { code: 1, stderr: `let: ${error.message}\n` };
+        return { code: 1, stderr: error.nameless ? `${error.message}\n` : `let: ${error.message}\n` };
       }
 
       const message = error instanceof Error ? error.message : String(error);

@@ -213,6 +213,9 @@ export class ArithmeticError extends CommandAbortError {
     this.name = 'ArithmeticError';
   }
 
+  /** Said without the command's name, `((: `, as bash says an error in evaluating a subscript. */
+  nameless = false;
+
   private static describe(reason: string, at?: number, expression?: string): string {
     if (expression === undefined) {
       return reason;

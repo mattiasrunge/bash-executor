@@ -200,4 +200,4 @@ export const unsetBuiltin: BuiltinHandler = async (ctx, args) => {
  * function, the variable's value and export status are restored when
  * the function returns.
  */
-export const localBuiltin: BuiltinHandler = (ctx, args) => declareCommand('local', ctx, args);
+export const localBuiltin: BuiltinHandler = (ctx, args, _shell, _execute, services) => declareCommand('local', ctx, args, services);

@@ -69,6 +69,10 @@ seen[$path]=1
 for key in "${!seen[@]}"; do echo "$key ${seen[$key]}"; done
 ```
 
+A subscript is expanded once, as bash 5.2 expands it, and what it expands to is
+the key: `seen[$path]=1` keeps a path holding `=` or `]`, and `(( count[$k]++ ))`
+neither ends the subscript early nor runs a `$( )` that the key holds.
+
 An operator applies to each element of `${a[@]}` and the expansion stays a list
 (`${a[@]%.jpg}`, `${a[@]^^}`, `${a[@]/x/y}`), while `${a[@]:1:2}` slices the list
 itself. Here-documents (`cat > f <<'EOF'` … `EOF`, `<<-` too; an unquoted delimiter

@@ -487,7 +487,7 @@
       "reference": "pass"
     },
     "run-arith": {
-      "upstream": 0.953,
+      "upstream": 0.975,
       "pass": false,
       "stdout": 0.972,
       "reference": "pass"
@@ -499,9 +499,9 @@
       "reference": "pass"
     },
     "run-array": {
-      "upstream": 0.788,
+      "upstream": 0.799,
       "pass": false,
-      "stdout": 0.827,
+      "stdout": 0.835,
       "reference": "pass"
     },
     "run-array2": {
@@ -511,9 +511,9 @@
       "reference": "pass"
     },
     "run-assoc": {
-      "upstream": 0.549,
+      "upstream": 0.616,
       "pass": false,
-      "stdout": 0.654,
+      "stdout": 0.734,
       "reference": "pass"
     },
     "run-attr": {
@@ -770,9 +770,9 @@
       "reference": "pass"
     },
     "run-nameref": {
-      "upstream": 0.859,
+      "upstream": 0.881,
       "pass": false,
-      "stdout": 0.887,
+      "stdout": 0.91,
       "reference": "pass"
     },
     "run-new-exp": {
@@ -878,9 +878,9 @@
       "reference": "pass"
     },
     "run-quotearray": {
-      "upstream": 0.472,
+      "upstream": 0.628,
       "pass": false,
-      "stdout": 0.588,
+      "stdout": 0.72,
       "reference": "pass"
     },
     "run-read": {
@@ -966,7 +966,7 @@
     "run-varenv": {
       "upstream": 0.772,
       "pass": false,
-      "stdout": 0.804,
+      "stdout": 0.806,
       "reference": "pass"
     },
     "run-vredir": {

@@ -608,8 +608,10 @@ export class ExecContext implements ExecContextIf {
     // `declare -i ref` gives what ref refers to the attribute; making or
     // unmaking a reference is about the reference itself
     const refers = opts.noref || opts.add?.includes('n') || opts.remove?.includes('n');
+    // `local x` makes a new x: a reference of that name further out is not followed, only one of its own
+    const newLocal = opts.local && !this.vars.has(name);
 
-    if (!refers) name = this.ref(name);
+    if (!refers && !newLocal) name = this.ref(name);
 
     const found = this.lookup(name);
     // `local x` is a variable of the function's own, whatever the caller has
