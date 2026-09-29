@@ -89,7 +89,7 @@
     "case3.sub": true,
     "case4.sub": false,
     "casemod.tests": true,
-    "complete.tests": false,
+    "complete.tests": true,
     "comsub-eof.tests": true,
     "comsub-eof0.sub": false,
     "comsub-eof1.sub": true,
@@ -111,10 +111,10 @@
     "comsub4.sub": true,
     "comsub5.sub": false,
     "comsub6.sub": false,
-    "cond-regexp1.sub": false,
-    "cond-regexp2.sub": false,
+    "cond-regexp1.sub": true,
+    "cond-regexp2.sub": true,
     "cond-regexp3.sub": true,
-    "cond.tests": false,
+    "cond.tests": true,
     "coproc.tests": false,
     "cprint.tests": true,
     "dbg-support.sub": true,
@@ -183,7 +183,7 @@
     "exp12.sub": true,
     "exp13.sub": true,
     "exp2.sub": true,
-    "exp3.sub": false,
+    "exp3.sub": true,
     "exp4.sub": true,
     "exp5.sub": true,
     "exp6.sub": true,
@@ -200,7 +200,7 @@
     "extglob2.sub": true,
     "extglob2.tests": true,
     "extglob3.sub": false,
-    "extglob3.tests": false,
+    "extglob3.tests": true,
     "extglob4.sub": false,
     "extglob5.sub": true,
     "extglob6.sub": false,
@@ -221,11 +221,11 @@
     "getopts7.sub": true,
     "getopts8.sub": true,
     "getopts9.sub": true,
-    "glob.tests": false,
+    "glob.tests": true,
     "glob1.sub": true,
     "glob10.sub": true,
     "glob2.sub": true,
-    "glob3.sub": false,
+    "glob3.sub": true,
     "glob4.sub": true,
     "glob5.sub": true,
     "glob6.sub": true,
@@ -354,7 +354,7 @@
     "posixexp6.sub": true,
     "posixexp7.sub": true,
     "posixexp8.sub": true,
-    "posixpat.tests": false,
+    "posixpat.tests": true,
     "posixpipe.tests": false,
     "precedence.tests": true,
     "printf.tests": false,
@@ -419,7 +419,7 @@
     "source6.sub": true,
     "source7.sub": false,
     "strip.tests": true,
-    "test.tests": false,
+    "test.tests": true,
     "test1.sub": true,
     "tilde.tests": true,
     "tilde2.tests": true,
@@ -499,9 +499,9 @@
       "reference": "pass"
     },
     "run-array": {
-      "upstream": 0.084,
+      "upstream": 0.09,
       "pass": false,
-      "stdout": 0.089,
+      "stdout": 0.095,
       "reference": "pass"
     },
     "run-array2": {
@@ -511,9 +511,9 @@
       "reference": "pass"
     },
     "run-assoc": {
-      "upstream": 0.224,
+      "upstream": 0.232,
       "pass": false,
-      "stdout": 0.219,
+      "stdout": 0.228,
       "reference": "pass"
     },
     "run-attr": {
@@ -541,9 +541,9 @@
       "reference": "pass"
     },
     "run-casemod": {
-      "upstream": 0.532,
+      "upstream": 0.723,
       "pass": false,
-      "stdout": 0.532,
+      "stdout": 0.723,
       "reference": "pass"
     },
     "run-complete": {
@@ -571,9 +571,9 @@
       "reference": "pass"
     },
     "run-cond": {
-      "upstream": 0,
+      "upstream": 0.847,
       "pass": false,
-      "stdout": 0,
+      "stdout": 0.85,
       "reference": "pass"
     },
     "run-coproc": {
@@ -607,9 +607,9 @@
       "reference": "pass"
     },
     "run-dollars": {
-      "upstream": 0.673,
+      "upstream": 0.681,
       "pass": false,
-      "stdout": 0.674,
+      "stdout": 0.682,
       "reference": "pass"
     },
     "run-dynvar": {
@@ -631,9 +631,9 @@
       "reference": "env"
     },
     "run-exp-tests": {
-      "upstream": 0.274,
+      "upstream": 0.277,
       "pass": false,
-      "stdout": 0.344,
+      "stdout": 0.347,
       "reference": "pass"
     },
     "run-exportfunc": {
@@ -649,15 +649,15 @@
       "reference": "pass"
     },
     "run-extglob2": {
-      "upstream": 0.402,
+      "upstream": 0.903,
       "pass": false,
-      "stdout": 0.402,
+      "stdout": 0.903,
       "reference": "pass"
     },
     "run-extglob3": {
-      "upstream": 0,
-      "pass": false,
-      "stdout": 0,
+      "upstream": 1,
+      "pass": true,
+      "stdout": 1,
       "reference": "pass"
     },
     "run-func": {
@@ -673,9 +673,9 @@
       "reference": "pass"
     },
     "run-glob-test": {
-      "upstream": 0,
+      "upstream": 0.701,
       "pass": false,
-      "stdout": 0,
+      "stdout": 0.719,
       "reference": "env"
     },
     "run-globstar": {
@@ -842,9 +842,9 @@
       "reference": "pass"
     },
     "run-posixpat": {
-      "upstream": 0,
+      "upstream": 0.937,
       "pass": false,
-      "stdout": 0,
+      "stdout": 0.937,
       "reference": "pass"
     },
     "run-posixpipe": {
@@ -933,9 +933,9 @@
       "reference": "pass"
     },
     "run-test": {
-      "upstream": 0,
+      "upstream": 0.875,
       "pass": false,
-      "stdout": 0,
+      "stdout": 0.916,
       "reference": "env"
     },
     "run-tilde": {
