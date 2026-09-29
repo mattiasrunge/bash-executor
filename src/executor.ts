@@ -42,6 +42,7 @@ import {
   ArithmeticError,
   ArithmeticSyntaxError,
   CommandAbortError,
+  GlobNoMatchError,
   NoClobberError,
   ReadonlyVariableError,
   UnboundVariableError,
@@ -93,6 +94,11 @@ const DECLARATION_COMMANDS = new Set(['declare', 'typeset', 'local', 'export', '
  * Attaching a no-op catch marks the promise handled without consuming it: the
  * reference kept in the array still rejects normally for the Promise.all.
  */
+/** Whether a word, after quote removal, could still be a pattern. */
+function hasGlobCharacters(text: string): boolean {
+  return /[*?[]|[@+!?*]\(/.test(text);
+}
+
 /** Where an arithmetic expression's text starts in the source: its leftmost node's offset. */
 function firstOffset(node: unknown): number | undefined {
   let offset: number | undefined;
@@ -222,7 +228,8 @@ export class AstExecutor {
     const prefix = this.lineNumbers ? `${this.sourceFrame.name ?? params['0'] ?? 'bash'}: line ${params.LINENO ?? 0}: ` : '';
     const text = message.endsWith('\n') ? message : `${message}\n`;
 
-    await this.shell.pipeWrite(ctx.getStderr(), prefix ? text.replace(/^(?=.)/gm, prefix) : text).catch(() => {});
+    // A usage message is said without the place, as bash does
+    await this.shell.pipeWrite(ctx.getStderr(), prefix ? text.replace(/^(?=.)(?![\w-]+: usage: )/gm, prefix) : text).catch(() => {});
   }
 
   /**
@@ -1176,6 +1183,11 @@ export class AstExecutor {
         // closed with `>&-`, or a descriptor open only for reading — fails the
         // builtin, as bash's "write error", and not the script.
         try {
+          for (const chunk of result.output ?? []) {
+            if (chunk.stderr) await this.diagnose(ctx, chunk.stderr);
+            if (chunk.stdout) await this.shell.pipeWrite(ctx.getStdout(), chunk.stdout);
+          }
+
           if (result.stdout) {
             await this.shell.pipeWrite(ctx.getStdout(), result.stdout);
           }
@@ -3608,7 +3620,16 @@ export class AstExecutor {
       const newValues: string[] = [];
 
       for (const path of result.values) {
-        newValues.push(...(await this.shell.resolvePath(ctx, path)));
+        const matches = await this.shell.resolvePath(ctx, path);
+
+        // A host gives an unmatched pattern back as it was: that is the word,
+        // unless `nullglob` drops it or `failglob` makes it an error
+        if (matches.length === 1 && matches[0] === path && hasGlobCharacters(path)) {
+          if (ctx.getShellOption('failglob')) throw new GlobNoMatchError(path);
+          if (ctx.getShellOption('nullglob')) continue;
+        }
+
+        newValues.push(...matches);
       }
 
       result.values = newValues;

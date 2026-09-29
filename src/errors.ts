@@ -229,6 +229,14 @@ export class ArithmeticError extends CommandAbortError {
   }
 }
 
+/** A pattern that matched no file under `shopt -s failglob`: `no match: q*`. */
+export class GlobNoMatchError extends CommandAbortError {
+  constructor(readonly pattern: string) {
+    super(`no match: ${pattern}`, { code: 'E_GLOB_NO_MATCH' });
+    this.name = 'GlobNoMatchError';
+  }
+}
+
 /** An assignment to a readonly variable: `x: readonly variable`. */
 export class ReadonlyVariableError extends CommandAbortError {
   constructor(readonly variable: string) {

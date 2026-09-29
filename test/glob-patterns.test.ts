@@ -1,5 +1,6 @@
 import { assertEquals } from '@std/assert';
 import { TestShell } from './lib/test-shell.ts';
+import type { ExecContextIf } from '../src/types.ts';
 
 Deno.test('Case Statement Glob Patterns - Wildcards', async (t) => {
   await t.step('* matches any string', async () => {
@@ -417,5 +418,27 @@ Deno.test('Case Statement - Edge Cases', async (t) => {
       esac
     `);
     assertEquals(result.stdout, 'first\n');
+  });
+});
+
+Deno.test('nullglob and failglob', async (t) => {
+  // A host that knows one file, a.c, and gives an unmatched pattern back as it was
+  class GlobShell extends TestShell {
+    resolvePath(_ctx: ExecContextIf, text: string): Promise<string[]> {
+      return Promise.resolve(/^[a*?]*\.c$/.test(text) && text !== 'b.c' ? ['a.c'] : [text]);
+    }
+  }
+
+  await t.step('an unmatched pattern stays as it was', async () => {
+    assertEquals((await new GlobShell().runAndCapture('echo x q* *.c')).stdout, 'x q* a.c\n');
+  });
+
+  await t.step('nullglob drops it', async () => {
+    assertEquals((await new GlobShell().runAndCapture('shopt -s nullglob; echo x q* *.c')).stdout, 'x a.c\n');
+  });
+
+  await t.step('failglob makes it an error that ends the line', async () => {
+    const result = await new GlobShell().runAndCapture('shopt -s failglob; echo x q*; echo same\necho "next $?"');
+    assertEquals([result.stdout, result.stderr], ['next 1\n', 'no match: q*\n']);
   });
 });

@@ -23,8 +23,9 @@ Deno.test('printf builtin', async (t) => {
   await t.step('no arguments returns error', async () => {
     const ctx = new ExecContext();
     const result = await printfBuiltin(ctx, [], mockShell, noopExecute);
-    assertEquals(result.code, 1);
-    assertEquals(result.stderr, 'printf: usage: printf format [arguments]\n');
+    // bash's usage status, and its usage line
+    assertEquals(result.code, 2);
+    assertEquals(result.stderr, 'printf: usage: printf [-v var] format [arguments]\n');
   });
 
   await t.step('prints literal string', async () => {
@@ -237,5 +238,48 @@ Deno.test('printf as bash has it', async (t) => {
 
   await t.step('%q quotes to read back', async () => {
     assertEquals(await printf('%q|%q|%q|%q', 'a b', "it's", '', 'x\ty'), "a\\ b|it\\'s|''|$'x\\ty'");
+  });
+});
+
+Deno.test("printf: C conversions on 64-bit integers, * widths, and bash's own", async (t) => {
+  const printf = async (...args: string[]) => await printfBuiltin(new ExecContext(), args, mockShell, noopExecute);
+  const out = async (...args: string[]) => (await printf(...args)).stdout;
+
+  await t.step('integers: flags, precision, 64 bits, unsigned', async () => {
+    assertEquals(
+      await out('%05d|%+d|%.3d|%#x|%#o|%u|%d', '42', '42', '7', '255', '8', '-1', '9223372036854775807'),
+      '00042|+42|007|0xff|010|18446744073709551615|9223372036854775807',
+    );
+  });
+
+  await t.step('floats: %f %e %g %a as C writes them', async () => {
+    assertEquals(await out('%.2f|%e|%g|%g|%a', '3.14159', '31415.9', '0.0001', '1234567', '3'), '3.14|3.141590e+04|0.0001|1.23457e+06|0xcp-2');
+  });
+
+  await t.step('* takes the width and precision from the arguments, a negative width left-justifies', async () => {
+    assertEquals(await out('%*s|%-*s|%.*f|%*s|', '6', 'x', '6', 'y', '2', '3.14159', '-3', 'z'), '     x|y     |3.14|z  |');
+  });
+
+  await t.step('a huge width is only padding', async () => {
+    assertEquals((await out('%50000d', '1'))!.length, 50000);
+  });
+
+  await t.step('an invalid number is said before the output it belongs to, and fails', async () => {
+    const result = await printf('%d\n', 'GNU', '12abc');
+    assertEquals(result.code, 1);
+    assertEquals(result.output, [{ stderr: 'printf: GNU: invalid number\n', stdout: '0\n' }, { stderr: 'printf: 12abc: invalid number\n', stdout: '12\n' }]);
+  });
+
+  await t.step('%n stores the count so far, %c of nothing is NUL', async () => {
+    const ctx = new ExecContext();
+    const result = await printfBuiltin(ctx, ['%s%n|%c', 'abc', 'v', ''], mockShell, noopExecute);
+    assertEquals([result.stdout, ctx.getParams()['v']], ['abc|\0', '3']);
+  });
+
+  await t.step('%(…)T in the zone TZ names', async () => {
+    const ctx = new ExecContext();
+    ctx.setEnv({ TZ: 'EST5EDT' });
+    const result = await printfBuiltin(ctx, ['%(%F %r %Z %z)T', '1275250155'], mockShell, noopExecute);
+    assertEquals(result.stdout, '2010-05-30 04:09:15 PM EDT -0400');
   });
 });

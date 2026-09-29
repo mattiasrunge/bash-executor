@@ -10,6 +10,12 @@ export type BuiltinResult = {
   stdout?: string;
   /** Optional stderr output */
   stderr?: string;
+  /**
+   * Output in the order it was made, where stdout and stderr interleave —
+   * printf's complaint about an argument comes before that pass's text.
+   * Written before `stdout` and `stderr`.
+   */
+  output?: { stdout?: string; stderr?: string }[];
 };
 
 /**
