@@ -15,6 +15,8 @@ export type FunctionDef = {
   body: AstNodeCompoundList;
   ctx: ExecContextIf;
   definition?: FunctionDefinition;
+  /** `readonly -f name`: it can be neither defined again nor unset. */
+  readonly?: boolean;
 };
 
 /**

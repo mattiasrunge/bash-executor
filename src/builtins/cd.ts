@@ -1,4 +1,5 @@
 import { isAbsolute, join, normalize } from '@std/path';
+import type { ExecContextIf, ShellIf } from '../types.ts';
 import type { BuiltinHandler } from './types.ts';
 
 /**
@@ -50,7 +51,8 @@ export const cdBuiltin: BuiltinHandler = async (ctx, args, shell) => {
     }
   }
 
-  const env = ctx.getEnv();
+  // HOME and OLDPWD are shell variables, exported or not
+  const env = { ...ctx.getEnv(), ...ctx.getParams() };
   const currentDir = ctx.getCwd();
   let targetDir: string;
 
@@ -75,15 +77,8 @@ export const cdBuiltin: BuiltinHandler = async (ctx, args, shell) => {
     }
     targetDir = oldpwd;
     // Check if the directory exists
-    if (shell.testPath) {
-      const isDir = await shell.testPath(ctx, targetDir, 'DIRECTORY');
-      if (!isDir) {
-        return {
-          code: 1,
-          stderr: `cd: ${targetDir}: No such file or directory\n`,
-        };
-      }
-    }
+    const missing = await notADirectory(ctx, shell, targetDir);
+    if (missing) return { code: 1, stderr: `cd: ${targetDir}: ${missing}\n` };
     // Print the new directory when using cd -
     ctx.setCwd(targetDir);
     ctx.setEnv({ OLDPWD: currentDir, PWD: targetDir });
@@ -107,15 +102,8 @@ export const cdBuiltin: BuiltinHandler = async (ctx, args, shell) => {
   targetDir = resolvePath(currentDir, targetDir);
 
   // Check if the directory exists
-  if (shell.testPath) {
-    const isDir = await shell.testPath(ctx, targetDir, 'DIRECTORY');
-    if (!isDir) {
-      return {
-        code: 1,
-        stderr: `cd: ${pathArgs[0] || targetDir}: No such file or directory\n`,
-      };
-    }
-  }
+  const missing = await notADirectory(ctx, shell, targetDir);
+  if (missing) return { code: 1, stderr: `cd: ${pathArgs[0] || targetDir}: ${missing}\n` };
 
   // Update the context
   ctx.setCwd(targetDir);
@@ -123,3 +111,10 @@ export const cdBuiltin: BuiltinHandler = async (ctx, args, shell) => {
 
   return { code: 0 };
 };
+
+/** Why a path is no directory to change to, as the system says it, or undefined when it is one. */
+async function notADirectory(ctx: ExecContextIf, shell: ShellIf, path: string): Promise<string | undefined> {
+  if (!shell.testPath || await shell.testPath(ctx, path, 'DIRECTORY')) return undefined;
+
+  return await shell.testPath(ctx, path, 'EXISTS') ? 'Not a directory' : 'No such file or directory';
+}

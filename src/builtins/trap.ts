@@ -98,6 +98,11 @@ export const trapBuiltin: BuiltinHandler = async (
 
   if (args[i] === '--') {
     i++;
+  } else if (/^-./.test(args[i] ?? '')) {
+    // trap takes -l and -p; `-` alone is the reset action, an operand
+    const bad = args[i].slice(1).split('').find((letter) => !'lp'.includes(letter));
+
+    return { code: 2, stderr: `trap: -${bad}: invalid option\ntrap: usage: trap [-lp] [[arg] signal_spec ...]\n` };
   }
 
   const operands = args.slice(i);

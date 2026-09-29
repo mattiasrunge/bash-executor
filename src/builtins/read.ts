@@ -8,10 +8,9 @@ import { utils } from '@ein/bash-parser';
 import type { ExecContextIf, ShellIf } from '../types.ts';
 import type { BuiltinHandler, BuiltinResult } from './types.ts';
 
-/**
- * Parse options from arguments.
- */
-function parseOptions(args: string[]): {
+const USAGE = 'read: usage: read [-ers] [-a array] [-d delim] [-i text] [-n nchars] [-N nchars] [-p prompt] [-t timeout] [-u fd] [name ...]\n';
+
+type ReadOptions = {
   prompt: string;
   delimiter: string;
   raw: boolean;
@@ -20,50 +19,85 @@ function parseOptions(args: string[]): {
   fd: string | null;
   arrayName: string | null;
   varNames: string[];
-} {
-  const options = {
+};
+
+/** A name read can assign: a variable, or an element of one, `A[k]`. */
+const assignable = (name: string) => /^[A-Za-z_][A-Za-z0-9_]*(\[.+\])?$/s.test(name);
+
+/**
+ * The options as bash's getopt string `ersa:d:i:n:N:p:t:u:` reads them —
+ * `-rs`, `-p prompt` and `-pprompt` alike — or the error bash gives.
+ */
+function parseOptions(args: string[]): ReadOptions | BuiltinResult {
+  const options: ReadOptions = {
     prompt: '',
     delimiter: '\n',
     raw: false,
     silent: false,
-    nChars: null as number | null,
-    fd: null as string | null,
-    arrayName: null as string | null,
-    varNames: [] as string[],
+    nChars: null,
+    fd: null,
+    arrayName: null,
+    varNames: [],
   };
 
   let i = 0;
-  while (i < args.length) {
+
+  for (; i < args.length; i++) {
     const arg = args[i];
 
-    if (arg === '-p' && i + 1 < args.length) {
-      // Prompt string
-      options.prompt = args[++i];
-    } else if (arg === '-d' && i + 1 < args.length) {
-      // Delimiter
-      options.delimiter = args[++i];
-    } else if (arg === '-r') {
-      // Raw mode (don't interpret backslashes)
-      options.raw = true;
-    } else if (arg === '-s') {
-      // Silent mode (don't echo input)
-      options.silent = true;
-    } else if (arg === '-n' && i + 1 < args.length) {
-      // Read exactly n characters
-      options.nChars = Number.parseInt(args[++i], 10);
-    } else if (arg === '-u' && i + 1 < args.length) {
-      // Read from file descriptor
-      options.fd = args[++i];
-    } else if (arg === '-a' && i + 1 < args.length) {
-      // Assign the words to an array instead of to separate variables
-      options.arrayName = args[++i];
-    } else if (!arg.startsWith('-')) {
-      // Variable names start here
-      options.varNames = args.slice(i);
+    if (arg === '--') {
+      i++;
       break;
     }
+    if (!/^-./.test(arg)) break;
 
-    i++;
+    for (let at = 1; at < arg.length; at++) {
+      const letter = arg[at];
+
+      if ('ers'.includes(letter)) {
+        if (letter === 'r') options.raw = true;
+        if (letter === 's') options.silent = true;
+        continue;
+      }
+
+      if (!'adinNptu'.includes(letter)) {
+        return { code: 2, stderr: `read: -${letter}: invalid option\n${USAGE}` };
+      }
+
+      // The rest of the word, or the next one, is the option's value
+      const value = at + 1 < arg.length ? arg.slice(at + 1) : args[++i];
+
+      if (value === undefined) {
+        return { code: 2, stderr: `read: -${letter}: option requires an argument\n${USAGE}` };
+      }
+
+      if (letter === 'p') options.prompt = value;
+      if (letter === 'd') options.delimiter = value === '' ? '' : value[0];
+      if (letter === 'a') options.arrayName = value;
+
+      if (letter === 'n' || letter === 'N') {
+        if (!/^\d+$/.test(value)) return { code: 1, stderr: `read: ${value}: invalid number\n` };
+        options.nChars = Number(value);
+      }
+
+      if (letter === 'u') {
+        if (!/^\d+$/.test(value)) return { code: 1, stderr: `read: ${value}: invalid file descriptor specification\n` };
+        options.fd = value;
+      }
+
+      // A timeout is taken and not kept to: the host's reads have no deadline
+      if (letter === 't' && !/^(\d+\.?\d*|\.\d+)$/.test(value)) {
+        return { code: 1, stderr: `read: ${value}: invalid timeout specification\n` };
+      }
+
+      break;
+    }
+  }
+
+  options.varNames = args.slice(i);
+
+  for (const name of [...options.varNames, ...(options.arrayName !== null ? [options.arrayName] : [])]) {
+    if (!assignable(name)) return { code: 1, stderr: `read: \`${name}': not a valid identifier\n` };
   }
 
   // Default variable name is REPLY
@@ -133,6 +167,8 @@ export const readBuiltin: BuiltinHandler = async (
 ): Promise<BuiltinResult> => {
   const options = parseOptions(args);
 
+  if ('code' in options) return options;
+
   // Output prompt if specified
   if (options.prompt) {
     await shell.pipeWrite(ctx.getStdout(), options.prompt);
@@ -147,7 +183,8 @@ export const readBuiltin: BuiltinHandler = async (
     if (shell.pipeReadLine) {
       const line = await shell.pipeReadLine(fd, options.delimiter);
       if (line === null) {
-        return { code: 1 };
+        // At the end of the input the names are still assigned, empty, and read fails
+        return assign(ctx, options, [], 1);
       }
       input = line;
     } else {
@@ -185,37 +222,46 @@ export const readBuiltin: BuiltinHandler = async (
   // Split by IFS
   const words = utils.splitByIfs(input, ifs);
 
+  return assign(ctx, options, words, 0);
+};
+
+/** The words read, into the array or the names; `code` is read's status when they could all be assigned. */
+function assign(ctx: ExecContextIf, options: ReadOptions, words: string[], code: number): BuiltinResult {
   // -a: the words become the elements of an array
   if (options.arrayName) {
+    if (ctx.isReadonlyVar(options.arrayName)) return { code: 1, stderr: `${options.arrayName}: readonly variable\n` };
+
     ctx.setArray(options.arrayName, words);
 
-    return { code: 0 };
+    return { code };
   }
 
-  // Assign to variables
+  // Each name takes a word, the last one the rest of the line
   const varNames = options.varNames;
   const updates: Record<string, string> = {};
 
   for (let i = 0; i < varNames.length; i++) {
-    if (i < varNames.length - 1) {
-      // Assign one word
-      updates[varNames[i]] = words[i] ?? '';
-    } else {
-      // Last variable gets all remaining words
-      updates[varNames[i]] = words.slice(i).join(' ');
-    }
+    updates[varNames[i]] = i < varNames.length - 1 ? words[i] ?? '' : words.slice(i).join(' ');
   }
 
   // Readonly ones are not read into; the rest are set as any assignment sets them
-  const readonly = Object.keys(updates).filter((name) => ctx.isReadonlyVar(name));
+  const readonly = Object.keys(updates).filter((name) => ctx.isReadonlyVar(name.replace(/\[.*$/s, '')));
 
   if (readonly.length > 0) {
     return { code: 1, stderr: readonly.map((name) => `${name}: readonly variable\n`).join('') };
   }
 
   for (const [name, value] of Object.entries(updates)) {
-    ctx.assignVariable(name, value);
+    const element = name.match(/^([A-Za-z_][A-Za-z0-9_]*)\[(.+)\]$/s);
+
+    if (!element) {
+      ctx.assignVariable(name, value);
+    } else if (ctx.getAssoc(element[1])) {
+      ctx.setAssocElement(element[1], element[2], value);
+    } else {
+      ctx.setArrayElement(element[1], Number.parseInt(element[2], 10) || 0, value);
+    }
   }
 
-  return { code: 0 };
-};
+  return { code };
+}

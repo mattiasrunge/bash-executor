@@ -147,6 +147,7 @@ export class ExecContext implements ExecContextIf {
 
     for (const fn of Object.values(this.getFunctions())) {
       ctx.setFunction(fn.name, fn.body, fn.ctx, fn.definition);
+      if (fn.readonly) ctx.getFunction(fn.name)!.readonly = true;
     }
 
     for (const [name, args] of Object.entries(this.getAliases())) {

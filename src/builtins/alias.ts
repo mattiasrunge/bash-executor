@@ -70,24 +70,36 @@ function aliasQuoted(value: string): string {
  *   -a    Remove all alias definitions
  */
 export const unaliasBuiltin: BuiltinHandler = async (ctx, args) => {
-  if (args.length === 0) {
-    return {
-      code: 1,
-      stderr: 'unalias: usage: unalias [-a] name [name ...]\n',
-    };
-  }
+  const usage = 'unalias: usage: unalias [-a] name [name ...]\n';
+  let all = false;
+  let i = 0;
 
-  for (const arg of args) {
-    if (arg === '-a') {
-      // Remove all aliases
-      const aliases = ctx.getAliases();
-      for (const name of Object.keys(aliases)) {
-        ctx.unsetAlias(name);
-      }
-      continue;
+  for (; i < args.length && args[i].startsWith('-') && args[i] !== '-'; i++) {
+    if (args[i] === '--') {
+      i++;
+      break;
     }
-    ctx.unsetAlias(arg);
+    if (!/^-a+$/.test(args[i])) {
+      return { code: 2, stderr: `unalias: ${args[i].slice(0, 2)}: invalid option\n${usage}` };
+    }
+    all = true;
   }
 
-  return { code: 0 };
+  if (all) {
+    for (const name of Object.keys(ctx.getAliases())) ctx.unsetAlias(name);
+    return { code: 0 };
+  }
+
+  const names = args.slice(i);
+
+  if (names.length === 0) return { code: 2, stderr: usage };
+
+  let stderr = '';
+
+  for (const name of names) {
+    if (ctx.getAliases()[name] === undefined) stderr += `unalias: ${name}: not found\n`;
+    else ctx.unsetAlias(name);
+  }
+
+  return stderr ? { code: 1, stderr } : { code: 0 };
 };

@@ -180,6 +180,10 @@ export const killBuiltin: BuiltinHandler = async (ctx: ExecContextIf, args: stri
   let signal = 'TERM';
   let i = 0;
 
+  if ((args[0] === '-s' || args[0] === '-n') && args.length === 1) {
+    return { code: 2, stderr: `kill: ${args[0]}: option requires an argument\n` };
+  }
+
   if (args[0] === '-s' || args[0] === '-n') {
     const spec = args[1] ?? '';
     const name = signalName(spec);
@@ -219,6 +223,10 @@ export const killBuiltin: BuiltinHandler = async (ctx: ExecContextIf, args: stri
       }
 
       pid = job.pid;
+    } else if (!/^-?\d+$/.test(target)) {
+      // Never handed on: `kill ''` would reach the host as pid 0, every process in the group
+      stderr += target === '' ? "kill: `': not a pid or valid job spec\n" : `kill: ${target}: arguments must be process or job IDs\n`;
+      continue;
     }
 
     // What a pid looks like is the host's to say; bash's are numbers

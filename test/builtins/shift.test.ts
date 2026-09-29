@@ -68,7 +68,11 @@ Deno.test('shift builtin', async (t) => {
 
     const result = await shiftBuiltin(ctx, ['3'], mockShell, noopExecute);
     assertEquals(result.code, 1);
-    assertEquals(result.stderr, "shift: can't shift that many\n");
+    // Said only under shopt -s shift_verbose
+    assertEquals(result.stderr, undefined);
+
+    ctx.setShellOption('shift_verbose', true);
+    assertEquals((await shiftBuiltin(ctx, ['3'], mockShell, noopExecute)).stderr, 'shift: 3: shift count out of range\n');
   });
 
   await t.step('fails with non-numeric argument', async () => {
@@ -86,7 +90,7 @@ Deno.test('shift builtin', async (t) => {
 
     const result = await shiftBuiltin(ctx, ['-1'], mockShell, noopExecute);
     assertEquals(result.code, 1);
-    assertEquals(result.stderr, 'shift: -1: numeric argument required\n');
+    assertEquals(result.stderr, 'shift: -1: shift count out of range\n');
   });
 
   await t.step('handles empty positional parameters', async () => {
@@ -95,7 +99,7 @@ Deno.test('shift builtin', async (t) => {
 
     const result = await shiftBuiltin(ctx, [], mockShell, noopExecute);
     assertEquals(result.code, 1);
-    assertEquals(result.stderr, "shift: can't shift that many\n");
+    assertEquals(result.stderr, undefined);
   });
 
   await t.step('shifts all parameters', async () => {

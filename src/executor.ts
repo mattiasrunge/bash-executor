@@ -48,6 +48,7 @@ import {
   GlobNoMatchError,
   NoClobberError,
   ReadonlyVariableError,
+  RedirectionError,
   UnboundVariableError,
   UnknownNodeTypeError,
   UnsupportedOperatorError,
@@ -235,7 +236,7 @@ export class AstExecutor {
     const text = message.endsWith('\n') ? message : `${message}\n`;
 
     // A usage message is said without the place, as bash does
-    await this.shell.pipeWrite(ctx.getStderr(), prefix ? text.replace(/^(?=.)(?![\w-]+: usage: )/gm, prefix) : text).catch(() => {});
+    await this.shell.pipeWrite(ctx.getStderr(), prefix ? text.replace(/^(?=.)(?![\w.-]+: usage: )/gm, prefix) : text).catch(() => {});
   }
 
   /** The file each function was defined in, for its BASH_SOURCE. */
@@ -888,6 +889,7 @@ export class AstExecutor {
         handled(this.shell.pipeWrite(pipe, text).then(() => this.shell.pipeClose(pipe)));
         ctx.redirectStdin(pipe);
       } else if (r.op.text === '<') {
+        await this.assertOpenable(ctx, target, 'read');
         ctx.redirectStdin(target);
       } else if (r.op.text === '<<<') {
         // A here-string is the word plus a newline, fed in as stdin. The write
@@ -904,8 +906,10 @@ export class AstExecutor {
           await this.assertClobberable(ctx, target);
         }
 
+        await this.assertOpenable(ctx, target, 'write');
         this.redirectOutput(ctx, r.numberIo?.text, target, false);
       } else if (r.op.text === '>>') {
+        await this.assertOpenable(ctx, target, 'write');
         this.redirectOutput(ctx, r.numberIo?.text, target, true);
       } else if (r.op.text === '>&') {
         const sourceFd = r.numberIo?.text;
@@ -1024,6 +1028,8 @@ export class AstExecutor {
       await this.assertClobberable(ctx, target);
     }
 
+    await this.assertOpenable(ctx, target, r.op.text === '<' ? 'read' : 'write');
+
     if (Number(fd) > 2) {
       await this.shell.fdClose?.(fd);
       await this.shell.fdOpen(ctx, target, mode, fd);
@@ -1049,6 +1055,29 @@ export class AstExecutor {
     } else {
       ctx.redirectFd(fd, target);
     }
+  }
+
+  /**
+   * Whether a redirection's file can be opened, as bash finds out by opening
+   * it before the command runs: a file to read must be there, and one to
+   * write must have somewhere to go. The host answers through `testPath`, with
+   * no more asked of it than whether a path exists — a host's tree need not
+   * tell directories from files, nor hold /dev — and without it nothing is
+   * refused. What else a host cannot open it reports as it opens it.
+   */
+  protected async assertOpenable(ctx: ExecContextIf, target: string, mode: 'read' | 'write'): Promise<void> {
+    if (!this.shell.testPath || this.shell.isPipe(target) || /^\d+$/.test(target) || target.startsWith('/dev/')) return;
+
+    const exists = (path: string) => this.shell.testPath!(ctx, path, 'EXISTS').catch(() => true);
+
+    if (mode === 'read') {
+      if (!(await exists(target))) throw new RedirectionError(`${target}: No such file or directory`);
+      return;
+    }
+
+    const slash = target.lastIndexOf('/');
+
+    if (slash > 0 && !(await exists(target.slice(0, slash)))) throw new RedirectionError(`${target}: No such file or directory`);
   }
 
   /**
@@ -1127,6 +1156,12 @@ export class AstExecutor {
         // What is left of the line goes too, as in bash
         lastCode = await this.abortStatus(err, ctx);
         skipRow = command.loc?.start?.row ?? -1;
+
+        // A POSIX shell that fails an assignment, or an expansion, ends there
+        if (ctx.getShellOption('posix')) {
+          if (err instanceof ReadonlyVariableError) lastCode = makeExitSignal(1);
+          if (err.code === 'E_BAD_SUBSTITUTION') lastCode = makeExitSignal(UNBOUND_VARIABLE_CODE);
+        }
       }
 
       // `exit` stops the script, and the signal goes up to whatever ends the shell
@@ -1161,21 +1196,33 @@ export class AstExecutor {
     return this.applyErrexit(1, ctx);
   }
 
-  protected async executeCommand(node: AstNodeCommand, parentCtx: ExecContextIf): Promise<number> {
-    // `$BASH_COMMAND`: the command running now, as written
+  /**
+   * Before a simple command, `[[`, `((` and each expression of `for ((`: set
+   * `$BASH_COMMAND` to it and run the DEBUG trap — in a function only under
+   * `set -T`, since functions do not inherit it otherwise.
+   * @returns The exit signal when the trap ended the shell, else undefined
+   */
+  private async debugTrap(node: AstNode, ctx: ExecContextIf): Promise<number | undefined> {
     if (node.loc) {
-      parentCtx.setParams({ BASH_COMMAND: this.nodeSource(node) });
+      ctx.setParams({ BASH_COMMAND: this.nodeSource(node) });
     }
 
-    // The DEBUG trap runs before every simple command; in a function only
-    // under `set -T`, since functions do not inherit it otherwise
-    if (parentCtx.getTrap('DEBUG') && (this.functionDepth === 0 || parentCtx.getShellOption('functrace'))) {
-      const trapped = await this.runTrap('DEBUG', parentCtx, Number(parentCtx.getParams()['?'] ?? 0));
+    if (ctx.getTrap('DEBUG') && (this.functionDepth === 0 || ctx.getShellOption('functrace'))) {
+      // The trap's own lines are its own: what runs after it is still on this one
+      const line = ctx.getParams().LINENO;
+      const trapped = await this.runTrap('DEBUG', ctx, Number(ctx.getParams()['?'] ?? 0));
 
-      if (isExitSignal(trapped)) {
-        return trapped;
-      }
+      if (line !== undefined) ctx.setParams({ LINENO: line });
+      if (isExitSignal(trapped)) return trapped;
     }
+
+    return undefined;
+  }
+
+  protected async executeCommand(node: AstNodeCommand, parentCtx: ExecContextIf): Promise<number> {
+    const trapped = await this.debugTrap(node, parentCtx);
+
+    if (trapped !== undefined) return trapped;
 
     try {
       return await this.runCommand(node, parentCtx);
@@ -1263,6 +1310,12 @@ export class AstExecutor {
 
       if (words[0]?.text === '--') {
         words.shift();
+      } else if (words[0] && /^-./.test(words[0].text) && !words[0].expansion?.length) {
+        // An option exec does not know leaves the shell standing, with a usage message
+        const bad = words[0].text.slice(0, 2);
+
+        await this.diagnose(parentCtx, `exec: ${bad}: invalid option\nexec: usage: exec [-cl] [-a name] [command [argument ...]] [redirection ...]`);
+        return 2;
       }
 
       // `exec cmd args`: the command takes the shell's place, so the shell ends
@@ -1281,10 +1334,19 @@ export class AstExecutor {
         return isExitSignal(code) ? code : makeExitSignal(code);
       }
 
-      for (const redirect of redirects ?? []) {
-        if (!(await this.openExecRedirection(parentCtx, redirect))) {
-          await this.applyRedirections(parentCtx, [redirect]);
+      try {
+        for (const redirect of redirects ?? []) {
+          if (!(await this.openExecRedirection(parentCtx, redirect))) {
+            await this.applyRedirections(parentCtx, [redirect]);
+          }
         }
+      } catch (err) {
+        if (!(err instanceof RedirectionError)) throw err;
+
+        // A POSIX shell that cannot make exec's redirections ends, as for any special builtin
+        await this.diagnose(parentCtx, err.message);
+
+        return parentCtx.getShellOption('posix') ? makeExitSignal(1) : 1;
       }
 
       return 0;
@@ -1320,7 +1382,11 @@ export class AstExecutor {
     // and last only the command sees them, except, in POSIX mode, before a
     // special builtin, where they persist
     const special = ctx.getShellOption('posix') && node.name && !node.name.expansion?.length && SPECIAL_BUILTINS.has(node.name.text);
-    const assign = async () => {
+    // Whether an assignment before the command was refused, a readonly variable
+    let refused = false;
+    // `asCommand`: they stand before a command, which is the only one to see them;
+    // before nothing — `x=1`, or `x=1 $empty` — they are the shell's
+    const assign = async (asCommand: boolean) => {
       for (const arg of node.prefix?.filter((arg) => arg.type === 'AssignmentWord') || []) {
         const assignment = await this.resolveAssignment(arg, ctx);
 
@@ -1330,12 +1396,12 @@ export class AstExecutor {
 
         assignStatus = assignment.status;
         await this.trace(parentCtx, this.traceAssignment(assignment));
-        await this.applyAssignment(assignment, special ? parentCtx : ctx, Boolean(node?.name) && !special);
+        refused = !(await this.applyAssignment(assignment, special ? parentCtx : ctx, asCommand && !special)) || refused;
       }
     };
 
     if (!node.name) {
-      await assign();
+      await assign(false);
     }
 
     // Redirections may stand before the name as well as after it: `>out echo hi`,
@@ -1386,14 +1452,20 @@ export class AstExecutor {
     // Apply IO redirections
     const redirectPipes = await this.applyRedirections(ctx, redirects, subs);
 
-    await assign();
-
     // A name that expands to nothing leaves the next word to be the command, and
     // one that expands to several makes the rest arguments: `$empty echo hi` runs
     // echo, `$cmd` with cmd='ls -l' runs ls. When every word is gone there is no
     // command at all, only the redirections, and the status is that of the last
     // command substitution.
     const words = [...expandedName.values, ...args];
+
+    await assign(words.length > 0);
+
+    // POSIX: a command whose assignment was refused does not run; before a special builtin the shell ends
+    if (refused && ctx.getShellOption('posix') && words.length > 0) {
+      await this.finishProcessSubstitutions(subs, ctx);
+      return special ? makeExitSignal(1) : this.applyErrexit(1, ctx);
+    }
 
     if (words.length === 0) {
       return this.withFileBridging(ctx, async () => await this.applyErrexit(expandedName.status ?? 0, ctx), redirectPipes)
@@ -2047,7 +2119,7 @@ export class AstExecutor {
    * else.
    */
   protected async noClobberStatus(err: unknown, ctx: ExecContextIf): Promise<number> {
-    if (!(err instanceof NoClobberError)) {
+    if (!(err instanceof RedirectionError)) {
       throw err;
     }
 
@@ -2149,8 +2221,27 @@ export class AstExecutor {
   }
 
   protected async registerFunction(node: AstNodeFunction, parentCtx: ExecContextIf): Promise<number> {
+    // POSIX allows only a name for a function, and a shell that is given another ends
+    if (parentCtx.getShellOption('posix') && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(node.name.text)) {
+      await this.diagnose(parentCtx, `\`${node.name.text}': not a valid identifier`);
+      return makeExitSignal(2);
+    }
+
+    if (parentCtx.getFunction(node.name.text)?.readonly) {
+      // bash has read the whole definition by then, and names its last line
+      const end = node.loc?.end?.row;
+
+      if (end !== undefined) parentCtx.setParams({ LINENO: String(this.sourceFrame.base + end) });
+      await this.diagnose(parentCtx, `${node.name.text}: readonly function`);
+      return 1;
+    }
+
     const ctx = parentCtx.spawnContext();
-    await this.applyRedirections(ctx, node.redirections);
+
+    // bash expands and opens a function's redirections each time it runs it, not when it is defined
+    await this.applyRedirections(ctx, node.redirections).catch((err) => {
+      if (!(err instanceof RedirectionError || err instanceof CommandAbortError)) throw err;
+    });
     parentCtx.setFunction(node.name.text, node.body, ctx, { node, source: this.currentSource });
 
     // An exported function stays exported when it is defined again, as the new definition
@@ -2227,8 +2318,10 @@ export class AstExecutor {
 
     const arg = args[0];
 
+    // A count that is no number ends the shell, with 128, as bash's throw to the top level does
     if (arg !== undefined && !/^\s*[+-]?\d+\s*$/.test(arg)) {
-      throw new CommandAbortError(`${name}: ${arg}: numeric argument required`, { code: 'E_NUMERIC_ARGUMENT' });
+      await this.diagnose(ctx, `${name}: ${arg}: numeric argument required`);
+      return makeExitSignal(128);
     }
 
     const levels = arg === undefined ? 1 : Number(arg);
@@ -2452,22 +2545,36 @@ export class AstExecutor {
    */
   protected async executeArithmeticFor(node: AstNodeArithmeticFor, parentCtx: ExecContextIf): Promise<number> {
     return this.withCompoundRedirections(node, parentCtx, async (ctx) => {
-      if (node.init) await this.arithmeticValue(node.init, ctx);
+      // Each of the three is preceded by the DEBUG trap, as each is a command of its own to bash
+      const evaluate = async (part: { expression: string } | undefined, empty: number): Promise<number> => {
+        const trapped = await this.debugTrap(node, ctx);
 
-      let last = 0;
+        if (trapped !== undefined) throw new LoopExit(trapped);
 
-      while (!node.test || await this.arithmeticValue(node.test, ctx) !== 0) {
-        const { stop, code } = await this.runLoopBody(node.do, ctx);
-        last = code;
+        return part ? await this.arithmeticValue(part, ctx) : empty;
+      };
 
-        if (stop) {
-          return code;
+      try {
+        await evaluate(node.init, 0);
+
+        let last = 0;
+
+        while (await evaluate(node.test, 1) !== 0) {
+          const { stop, code } = await this.runLoopBody(node.do, ctx);
+          last = code;
+
+          if (stop) {
+            return code;
+          }
+
+          await evaluate(node.update, 0);
         }
 
-        if (node.update) await this.arithmeticValue(node.update, ctx);
+        return last;
+      } catch (err) {
+        if (err instanceof LoopExit) return err.code;
+        throw err;
       }
-
-      return last;
     }).catch((err) => this.arithmeticCommandStatus(err, parentCtx));
   }
 
@@ -2702,6 +2809,11 @@ export class AstExecutor {
     // the left side is exempt however deep it goes; the right side runs as-is
     const left = await this.executeNode(node.left, this.exemptContext(ctx));
 
+    // `exit 3 || echo not` ends the shell, as `return`, `break` and `continue` leave what they leave
+    if (isExitSignal(left) || isReturnSignal(left) || isLoopControl(left)) {
+      return left;
+    }
+
     if (node.op === 'and') {
       if (left !== 0) {
         return left;
@@ -2723,6 +2835,10 @@ export class AstExecutor {
   }
 
   protected async executeArithmeticCommand(node: AstNodeArithmeticCommand, ctx: ExecContextIf): Promise<number> {
+    const trapped = await this.debugTrap(node, ctx);
+
+    if (trapped !== undefined) return trapped;
+
     try {
       const result = await this.arithmeticValue(node, ctx);
       // In bash, (( expr )) returns 0 (success) if expr is non-zero, 1 (failure) if expr is zero
@@ -2834,6 +2950,10 @@ export class AstExecutor {
    */
   protected async executeConditionalCommand(node: AstNodeConditionalCommand, ctx: ExecContextIf): Promise<number> {
     let result: boolean;
+
+    const trapped = await this.debugTrap(node, ctx);
+
+    if (trapped !== undefined) return trapped;
 
     try {
       result = await this.evaluateConditionalExpression(node.conditionAST, ctx);
@@ -3317,14 +3437,17 @@ export class AstExecutor {
    * @param local - True for a prefix assignment, which only the command it
    *                precedes can see; a bare assignment goes to the shell.
    */
-  protected async applyAssignment(assignment: Assignment, ctx: ExecContextIf, local: boolean): Promise<void> {
+  protected async applyAssignment(assignment: Assignment, ctx: ExecContextIf, local: boolean): Promise<boolean> {
     let { name, subscript } = assignment;
     const { append, values, list } = assignment;
 
     // An assignment bash refuses ends the command line, as a readonly one does,
     // except before a command, where only that command goes without it
-    const refuse = async (message: string): Promise<void> => {
-      if (local) return await this.diagnose(ctx, message);
+    const refuse = async (message: string): Promise<boolean> => {
+      if (local) {
+        await this.diagnose(ctx, message);
+        return false;
+      }
 
       throw new CommandAbortError(message, { code: 'E_ASSIGNMENT' });
     };
@@ -3365,7 +3488,7 @@ export class AstExecutor {
     }
 
     // The call stack is the shell's to keep: assigning FUNCNAME does nothing, as in bash
-    if (name === 'FUNCNAME') return;
+    if (name === 'FUNCNAME') return true;
 
     // A readonly variable cannot be assigned. Before a command that is said and
     // the command runs without it, as in bash; anywhere else the command ends.
@@ -3376,7 +3499,7 @@ export class AstExecutor {
       if (local) {
         await this.diagnose(ctx, `${refused}: readonly variable`);
 
-        return;
+        return false;
       }
 
       throw new ReadonlyVariableError(refused);
@@ -3388,7 +3511,7 @@ export class AstExecutor {
     if (nameref?.attributes.includes('n') && !nameref.value && subscript === undefined && !list && !/^[A-Za-z_][A-Za-z0-9_]*(\[.*\])?$/s.test(values[0] ?? '')) {
       await this.diagnose(ctx, `\`${values[0] ?? ''}': not a valid identifier`);
 
-      return;
+      return false;
     }
 
     if (list) {
@@ -3412,7 +3535,7 @@ export class AstExecutor {
           ctx.setAssoc(name, entries);
         }
 
-        return;
+        return true;
       }
 
       const existing = append ? (ctx.getArray(name) ?? []).slice() : [];
@@ -3437,7 +3560,7 @@ export class AstExecutor {
         ctx.setParams({ [name]: null });
       }
 
-      return;
+      return true;
     }
 
     const value = values[0] ?? '';
@@ -3453,7 +3576,7 @@ export class AstExecutor {
         ctx.setAssocElement(name, key, element);
       }
 
-      return;
+      return true;
     }
 
     if (subscript !== undefined) {
@@ -3470,19 +3593,19 @@ export class AstExecutor {
         copy[index] = element;
         ctx.setLocalArray(name, copy);
 
-        return;
+        return true;
       }
 
       ctx.setArrayElement(name, index, element);
 
-      return;
+      return true;
     }
 
     // A plain assignment to an array name writes element 0 and leaves the rest
     if (ctx.getArray(name)) {
       ctx.setArrayElement(name, 0, await this.assignedValue(ctx, name, ctx.getArray(name)?.[0], value, append));
 
-      return;
+      return true;
     }
 
     const previous = append ? ctx.getParams()[name] ?? ctx.getEnv()[name] ?? '' : '';
@@ -3507,6 +3630,8 @@ export class AstExecutor {
     } else {
       ctx.setParams({ [name]: assigned });
     }
+
+    return true;
   }
 
   /**
@@ -4090,6 +4215,15 @@ export class AstExecutor {
       }
 
       if (xp.type === 'ParameterExpansion') {
+        // `${$x}`: no parameter has that name, and bash refuses the whole expansion. A name
+        // with a quote in it is the parser's misreading instead — in POSIX mode a `'` inside
+        // "${x+'y}" is a character, which it cannot know when it parses — and is left as it was.
+        if (typeof xp.parameter === 'string' && !/['"]/.test(xp.parameter) && !/^([A-Za-z_][A-Za-z0-9_]*(\[.*\])?|\d+|[@*#?$!0-])$/s.test(xp.parameter)) {
+          const written = xp.loc ? node.text.slice(xp.loc.start, xp.loc.end + 1) : `\${${xp.parameter}}`;
+
+          throw new CommandAbortError(`${written}: bad substitution`, { code: 'E_BAD_SUBSTITUTION' });
+        }
+
         const params = {
           ...ctx.getEnv(),
           ...ctx.getParams(),
@@ -4219,7 +4353,9 @@ export class AstExecutor {
             if (missing) {
               const message = await this.resolveWordValue(xpAny.word, ctx);
 
-              throw new UnboundVariableError(String(xp.parameter), message || 'parameter null or not set');
+              const said = xpAny.op === 'indicateErrorIfNull' ? 'parameter null or not set' : 'parameter not set';
+
+              throw new UnboundVariableError(String(xp.parameter), message || said);
             }
 
             resolved = paramValue;
@@ -4395,4 +4531,9 @@ export class AstExecutor {
    */
   /** How deep variables that hold expressions have sent the evaluation; bash stops at 1024. */
   private arithmeticDepth = 0;
+}
+
+/** A DEBUG trap that ended the shell in the middle of a `for ((`: carries the exit signal out. */
+class LoopExit {
+  constructor(readonly code: number) {}
 }

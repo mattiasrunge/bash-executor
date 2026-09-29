@@ -68,36 +68,49 @@ Deno.test('exit builtin', async (t) => {
   });
 });
 
+/** A context inside a function call, where there is something to return from. */
+const inFunction = () => {
+  const ctx = new ExecContext();
+  ctx.setArray('FUNCNAME', ['f']);
+  return ctx;
+};
+
 Deno.test('return builtin', async (t) => {
+  await t.step('outside a function or a sourced file there is nothing to return from', async () => {
+    const result = await returnBuiltin(new ExecContext(), ['1'], mockShell, noopExecute);
+    assertEquals(result.code, 2);
+    assertEquals(result.stderr, "return: can only `return' from a function or sourced script\n");
+  });
+
   await t.step('returns with code 0 by default', async () => {
-    const ctx = new ExecContext();
+    const ctx = inFunction();
     const result = await returnBuiltin(ctx, [], mockShell, noopExecute);
     assertEquals(isReturnSignal(result.code), true);
     assertEquals(getReturnCode(result.code), 0);
   });
 
   await t.step('returns with specified code', async () => {
-    const ctx = new ExecContext();
+    const ctx = inFunction();
     const result = await returnBuiltin(ctx, ['42'], mockShell, noopExecute);
     assertEquals(isReturnSignal(result.code), true);
     assertEquals(getReturnCode(result.code), 42);
   });
 
   await t.step('wraps return codes > 255 with modulo 256', async () => {
-    const ctx = new ExecContext();
+    const ctx = inFunction();
     const result = await returnBuiltin(ctx, ['256'], mockShell, noopExecute);
     assertEquals(getReturnCode(result.code), 0);
   });
 
   await t.step('returns error for non-numeric argument', async () => {
-    const ctx = new ExecContext();
+    const ctx = inFunction();
     const result = await returnBuiltin(ctx, ['abc'], mockShell, noopExecute);
     assertEquals(result.code, 2);
     assertEquals(result.stderr, 'return: abc: numeric argument required\n');
   });
 
   await t.step('uses last exit code from context when no argument', async () => {
-    const ctx = new ExecContext();
+    const ctx = inFunction();
     ctx.setParams({ '?': '7' });
     const result = await returnBuiltin(ctx, [], mockShell, noopExecute);
     assertEquals(getReturnCode(result.code), 7);

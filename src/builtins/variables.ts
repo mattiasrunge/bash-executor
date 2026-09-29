@@ -126,7 +126,17 @@ export const unsetBuiltin: BuiltinHandler = async (ctx, args) => {
     noref ||= args[i].includes('n');
   }
 
-  if (args[i] === '--') i++;
+  if (args[i] === '--') {
+    i++;
+  } else if (/^-./.test(args[i] ?? '')) {
+    const bad = args[i].slice(1).split('').find((letter) => !'fvn'.includes(letter));
+
+    return { code: 2, stderr: `unset: -${bad}: invalid option\nunset: usage: unset [-f] [-v] [-n] [name ...]\n` };
+  }
+
+  if (unsetFunctions && variablesOnly) {
+    return { code: 1, stderr: 'unset: cannot simultaneously unset a function and a variable\n' };
+  }
 
   const names = args.slice(i);
   let stderr = '';
@@ -134,6 +144,11 @@ export const unsetBuiltin: BuiltinHandler = async (ctx, args) => {
   for (const name of names) {
     // A name that is no variable but a function is the function, unless -v says otherwise
     if (unsetFunctions || (!variablesOnly && !noref && !ctx.getVariable(name) && ctx.getFunction(name))) {
+      if (ctx.getFunction(name)?.readonly) {
+        stderr += `unset: ${name}: cannot unset: readonly function\n`;
+        continue;
+      }
+
       ctx.unsetFunction(name);
       ctx.setEnv({ [functionEnvName(name)]: null });
       continue;
@@ -176,6 +191,12 @@ export const unsetBuiltin: BuiltinHandler = async (ctx, args) => {
       const array = ctx.getArray(element.name);
       const parsed = Number.parseInt(element.subscript, 10) || 0;
       const index = parsed < 0 ? (array?.length ?? 0) + parsed : parsed;
+
+      // Counting back from the end past the first element
+      if (index < 0) {
+        stderr += `unset: [${element.subscript}]: bad array subscript\n`;
+        continue;
+      }
 
       ctx.unsetArrayElement(element.name, index);
       continue;

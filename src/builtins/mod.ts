@@ -28,6 +28,7 @@ export {
   getReturnCode,
   isExitSignal,
   isReturnSignal,
+  logoutBuiltin,
   makeExitSignal,
   makeReturnSignal,
   RETURN_SIGNAL_BASE,
@@ -65,7 +66,7 @@ import { dirsBuiltin, popdBuiltin, pushdBuiltin } from './dirstack.ts';
 import { echoBuiltin } from './echo.ts';
 import { createEnableBuiltin } from './enable.ts';
 import { evalBuiltin } from './eval.ts';
-import { exitBuiltin, returnBuiltin } from './exit.ts';
+import { exitBuiltin, logoutBuiltin, returnBuiltin } from './exit.ts';
 import { createBuiltinBuiltin, createCommandBuiltin, createTypeBuiltin } from './introspection.ts';
 import { getoptsBuiltin } from './getopts.ts';
 import { createHashBuiltin } from './hash.ts';
@@ -103,6 +104,7 @@ export function createBuiltinRegistry(): BuiltinRegistry {
   registry.set('pwd', pwdBuiltin);
   registry.set('exit', exitBuiltin);
   registry.set('return', returnBuiltin);
+  registry.set('logout', logoutBuiltin);
 
   // Phase 2: Context-modifying builtins
   registry.set('cd', cdBuiltin);

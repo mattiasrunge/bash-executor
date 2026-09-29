@@ -48,7 +48,7 @@ Deno.test('source builtin', async (t) => {
     const mock = createMockExecute();
     const result = await sourceBuiltin(ctx, [], shell, mock.execute);
     assertEquals(result.code, 2);
-    assertEquals(result.stderr, 'source: filename argument required\n');
+    assertEquals(result.stderr, 'source: filename argument required\nsource: usage: source filename [arguments]\n');
   });
 
   await t.step('sources file content', async () => {
@@ -111,6 +111,6 @@ Deno.test('. builtin', async (t) => {
     const mock = createMockExecute();
     const result = await dotBuiltin(ctx, [], shell, mock.execute);
     assertEquals(result.code, 2);
-    assertEquals(result.stderr, 'source: filename argument required\n');
+    assertEquals(result.stderr, '.: filename argument required\n.: usage: . filename [arguments]\n');
   });
 });

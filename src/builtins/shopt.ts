@@ -39,6 +39,10 @@ export const shoptBuiltin: BuiltinHandler = async (
 
     for (const flag of args[i].slice(1)) {
       if (flag === 's' || flag === 'u') {
+        if (mode !== undefined && mode !== flag) {
+          return { code: 1, stderr: 'shopt: cannot set and unset shell options simultaneously\n' };
+        }
+
         mode = flag;
       } else if (flag === 'q') {
         quiet = true;

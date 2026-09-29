@@ -106,7 +106,7 @@ export const setBuiltin: BuiltinHandler = async (
       const optName = args[i];
       if (!(optName in DEFAULT_SHELL_OPTIONS)) {
         return {
-          code: 1,
+          code: 2,
           stderr: `set: ${optName}: invalid option name\n`,
         };
       }
@@ -131,7 +131,7 @@ export const setBuiltin: BuiltinHandler = async (
 
           if (!optName || !(optName in DEFAULT_SHELL_OPTIONS)) {
             return {
-              code: 1,
+              code: 2,
               stderr: `set: ${optName ?? ''}: invalid option name\n`,
             };
           }
@@ -144,8 +144,8 @@ export const setBuiltin: BuiltinHandler = async (
           ctx.setShellOption(SHELL_OPTION_FLAG_MAP[flag], enable);
         } else {
           return {
-            code: 1,
-            stderr: `set: -${flag}: invalid option\n`,
+            code: 2,
+            stderr: `set: ${arg[0]}${flag}: invalid option\nset: usage: set [-abefhkmnptuvxBCEHPT] [-o option-name] [--] [-] [arg ...]\n`,
           };
         }
       }

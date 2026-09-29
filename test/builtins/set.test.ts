@@ -136,15 +136,15 @@ Deno.test('set builtin', async (t) => {
   await t.step('invalid option returns error', async () => {
     const ctx = setup();
     const result = await setBuiltin(ctx, ['-o', 'invalid_option'], mockShell, noopExecute);
-    assertEquals(result.code, 1);
+    assertEquals(result.code, 2);
     assertStringIncludes(result.stderr || '', 'invalid option name');
   });
 
   await t.step('invalid short option returns error', async () => {
     const ctx = setup();
     const result = await setBuiltin(ctx, ['-z'], mockShell, noopExecute);
-    assertEquals(result.code, 1);
-    assertStringIncludes(result.stderr || '', 'invalid option');
+    assertEquals(result.code, 2);
+    assertEquals(result.stderr, 'set: -z: invalid option\nset: usage: set [-abefhkmnptuvxBCEHPT] [-o option-name] [--] [-] [arg ...]\n');
   });
 
   await t.step('- alone turns off xtrace and verbose', async () => {

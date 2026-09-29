@@ -20,6 +20,15 @@ import { exportFunctions } from './variables.ts';
 type Command = 'declare' | 'typeset' | 'local' | 'readonly' | 'export';
 
 /** The options each takes, as bash's getopt strings. */
+/** Each command's usage line, as bash words it. */
+const USAGE: Record<Command, string> = {
+  declare: 'declare [-aAfFgiIlnrtux] [name[=value] ...] or declare -p [-aAfFilnrtux] [name ...]',
+  typeset: 'typeset [-aAfFgiIlnrtux] name[=value] ... or typeset -p [-aAfFilnrtux] [name ...]',
+  local: 'local [option] name[=value] ...',
+  export: 'export [-fn] [name[=value] ...] or export -p',
+  readonly: 'readonly [-aAf] [name[=value] ...] or readonly -p',
+};
+
 const OPTIONS: Record<Command, string> = {
   declare: 'aAfFgiIlnprtuxc',
   typeset: 'aAfFgiIlnprtuxc',
@@ -209,7 +218,8 @@ class Declaration {
       }
     }
 
-    if (!isIdentifier(name)) {
+    // export and readonly name variables, never elements
+    if (!isIdentifier(name) || (subscript !== undefined && (this.command === 'export' || this.command === 'readonly'))) {
       this.error(`${this.command}: \`${assigning ? `${name}${subscript !== undefined ? `[${subscript}]` : ''}` : arg}': not a valid identifier`, assigning);
       return;
     }
@@ -537,7 +547,7 @@ export async function declareCommand(command: Command, ctx: ExecContextIf, args:
   const { opts, names, bad } = parseOptions(command, args);
 
   if (bad) {
-    return { code: 2, stderr: `${command}: ${bad}: invalid option\n${command}: usage: ${command} [-${OPTIONS[command]}] [name[=value] ...]\n` };
+    return { code: 2, stderr: `${command}: ${bad}: invalid option\n${command}: usage: ${USAGE[command]}\n` };
   }
 
   // readonly and export are declare giving one attribute; -n takes it instead,
@@ -556,7 +566,7 @@ export async function declareCommand(command: Command, ctx: ExecContextIf, args:
     return { code: 1, stderr: 'local: can only be used in a function\n' };
   }
 
-  if (opts.on.has('f') || opts.on.has('F')) return await declareFunctions(ctx, opts, names);
+  if (opts.on.has('f') || opts.on.has('F')) return await declareFunctions(command, ctx, opts, names);
 
   const declaration = new Declaration(command, ctx, opts, services);
 
@@ -603,24 +613,48 @@ async function functionsListing(ctx: ExecContextIf): Promise<string> {
  * `-f` prints functions as bash would read them back, `-F` only their names:
  * the ones named, or all of them sorted. A name that is no function fails quietly.
  */
-async function declareFunctions(ctx: ExecContextIf, opts: Options, names: string[]): Promise<BuiltinResult> {
+async function declareFunctions(command: Command, ctx: ExecContextIf, opts: Options, names: string[]): Promise<BuiltinResult> {
+  // A function takes only -r, -t and -x of the attributes
+  const variableOnly = [...opts.on, ...opts.off].find((letter) => 'aAilnucI'.includes(letter));
+
+  if (variableOnly) return { code: 1, stderr: `${command}: -${variableOnly}: invalid option\n` };
+
+  if (command !== 'export' && names.some((name) => name.includes('='))) {
+    return { code: 1, stderr: `${command}: cannot use \`-f' to make functions\n` };
+  }
+
+  const functions = ctx.getFunctions();
+
+  // `declare -fr name`, `readonly -f name`: it stays as it is; `+r` cannot undo that
+  if (names.length && (opts.on.has('r') || opts.off.has('r'))) {
+    let stderr = '';
+
+    for (const name of names) {
+      if (!functions[name]) stderr += `${command}: ${name}: not a function\n`;
+      else if (opts.off.has('r')) stderr += `${command}: ${name}: readonly function\n`;
+      else functions[name].readonly = true;
+    }
+
+    if (stderr || !(opts.on.has('x') || opts.off.has('x'))) return stderr ? { code: 1, stderr } : { code: 0 };
+  }
+
   const exporting = opts.on.has('x') || opts.off.has('x');
 
   // `declare -fx name` exports it, as `export -f name` does
   if (names.length && exporting) return await exportFunctions(ctx, names, opts.off.has('x'));
 
-  const functions = ctx.getFunctions();
   const env = ctx.getEnv();
   const exported = (name: string) => functionEnvName(name) in env;
-  // `declare -xF` lists the exported ones only
+  const attributes = (name: string) => `f${functions[name]?.readonly ? 'r' : ''}${exported(name) ? 'x' : ''}`;
+  // `declare -xF` lists the exported ones only, `declare -Fr` and `readonly -f` the readonly ones
   const listing = names.length === 0;
-  const chosen = listing ? Object.keys(functions).sort().filter((name) => !opts.on.has('x') || exported(name)) : names;
+  const chosen = listing ? Object.keys(functions).sort().filter((name) => (!opts.on.has('x') || exported(name)) && (!opts.on.has('r') || functions[name].readonly)) : names;
   let output = '';
   let code = 0;
 
   for (const name of chosen) {
     const fn = functions[name];
-    const declaration = `declare -f${exported(name) ? 'x' : ''} ${name}\n`;
+    const declaration = `declare -${attributes(name)} ${name}\n`;
 
     if (!fn) {
       code = 1;
@@ -628,7 +662,7 @@ async function declareFunctions(ctx: ExecContextIf, opts: Options, names: string
       output += listing ? declaration : `${name}\n`;
     } else {
       output += `${await functionText(fn, ctx.getShellOption('posix'))}\n`;
-      if (listing && exported(name)) output += declaration;
+      if (listing && attributes(name) !== 'f') output += declaration;
     }
   }
 

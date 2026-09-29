@@ -58,6 +58,11 @@ export function createHashBuiltin(registry: BuiltinRegistry): BuiltinHandler {
 
     const names = args.slice(i);
 
+    // `set +h`: there is no table to show or change
+    if (!ctx.getShellOption('hashall')) {
+      return { code: 1, stderr: 'hash: hashing disabled\n' };
+    }
+
     if (names.length === 0 && (del || targets)) {
       return { code: 1, stderr: `hash: ${del ? '-d' : '-t'}: option requires an argument\n` };
     }

@@ -83,13 +83,20 @@ Deno.test('unalias builtin', async (t) => {
   await t.step('returns error with no arguments', async () => {
     const ctx = new ExecContext();
     const result = await unaliasBuiltin(ctx, [], mockShell, noopExecute);
-    assertEquals(result.code, 1);
+    assertEquals(result.code, 2);
     assertEquals(result.stderr, 'unalias: usage: unalias [-a] name [name ...]\n');
   });
 
-  await t.step('removes non-existent alias silently', async () => {
+  await t.step('a name that is no alias is not found', async () => {
     const ctx = new ExecContext();
     const result = await unaliasBuiltin(ctx, ['nonexistent'], mockShell, noopExecute);
-    assertEquals(result.code, 0);
+    assertEquals(result.code, 1);
+    assertEquals(result.stderr, 'unalias: nonexistent: not found\n');
+  });
+
+  await t.step('an option it does not know is a usage error', async () => {
+    const result = await unaliasBuiltin(new ExecContext(), ['-x', 'a'], mockShell, noopExecute);
+    assertEquals(result.code, 2);
+    assertEquals(result.stderr, 'unalias: -x: invalid option\nunalias: usage: unalias [-a] name [name ...]\n');
   });
 });

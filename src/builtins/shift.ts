@@ -4,6 +4,7 @@
  * Shifts positional parameters to the left.
  */
 
+import { CommandAbortError } from '../errors.ts';
 import type { ExecContextIf, ShellIf } from '../types.ts';
 import type { BuiltinHandler, BuiltinResult } from './types.ts';
 
@@ -29,18 +30,27 @@ export const shiftBuiltin: BuiltinHandler = async (
   _shell: ShellIf,
 ): Promise<BuiltinResult> => {
   // Parse shift count (default is 1)
+  if (args[0] === '--') args = args.slice(1);
+
+  // More than a count is a usage error, and bash drops the rest of the line for it
+  if (args.length > 1) {
+    throw new CommandAbortError('shift: too many arguments', { code: 'E_USAGE' });
+  }
+
   let n = 1;
   if (args.length > 0) {
-    const parsed = Number.parseInt(args[0], 10);
-    if (Number.isNaN(parsed) || parsed < 0) {
+    if (!/^\s*[-+]?\d+\s*$/.test(args[0])) {
       return {
         code: 1,
         stderr: `shift: ${args[0]}: numeric argument required\n`,
       };
     }
-    n = parsed;
+    n = Number.parseInt(args[0], 10);
   }
 
+  if (n < 0) {
+    return { code: 1, stderr: `shift: ${args[0]}: shift count out of range\n` };
+  }
   // Get current positional parameters
   const params = ctx.getParams();
 
@@ -60,11 +70,11 @@ export const shiftBuiltin: BuiltinHandler = async (
   const count = positional.length;
 
   // Check if we can shift
+  // Past the last one it fails, and says so only under `shopt -s shift_verbose`, or in POSIX mode
   if (n > count) {
-    return {
-      code: 1,
-      stderr: `shift: can't shift that many\n`,
-    };
+    if (!ctx.getShellOption('shift_verbose') && !ctx.getShellOption('posix')) return { code: 1 };
+
+    return { code: 1, stderr: `shift: ${args[0] !== undefined ? `${args[0]}: ` : ''}shift count out of range\n` };
   }
 
   // If n is 0, do nothing

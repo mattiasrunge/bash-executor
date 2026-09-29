@@ -25,6 +25,13 @@ export const evalBuiltin: BuiltinHandler = async (
   _shell: ShellIf,
   execute: (script: string) => Promise<number>,
 ): Promise<BuiltinResult> => {
+  // eval takes no options, but says so of one
+  if (args[0] === '--') {
+    args = args.slice(1);
+  } else if (/^-./.test(args[0] ?? '')) {
+    return { code: 2, stderr: `eval: ${args[0].slice(0, 2)}: invalid option\neval: usage: eval [arg ...]\n` };
+  }
+
   // If no arguments, return success
   if (args.length === 0) {
     return { code: 0 };

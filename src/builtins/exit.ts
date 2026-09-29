@@ -113,6 +113,14 @@ export function makeReturnSignal(code: number): number {
 export const returnBuiltin: BuiltinHandler = async (ctx, args) => {
   let returnCode = 0;
 
+  // Outside a function and a sourced file there is nothing to return from, and the script goes on
+  if ((ctx.getArray('FUNCNAME') ?? []).length === 0) {
+    // …and in POSIX mode, as an error in any special builtin, the shell ends
+    const code = ctx.getShellOption('posix') ? makeExitSignal(2) : 2;
+
+    return { code, stderr: "return: can only `return' from a function or sourced script\n" };
+  }
+
   if (args.length > 0) {
     const parsed = Number.parseInt(args[0], 10);
     if (Number.isNaN(parsed)) {
@@ -133,4 +141,13 @@ export const returnBuiltin: BuiltinHandler = async (ctx, args) => {
 
   // Return a special signal code that the executor can detect
   return { code: makeReturnSignal(returnCode) };
+};
+
+/** logout: exit, in a login shell; any other shell says to use exit. */
+export const logoutBuiltin: BuiltinHandler = async (ctx, args, shell, execute) => {
+  if (!ctx.getShellOption('login_shell')) {
+    return { code: 1, stderr: "logout: not login shell: use `exit'\n" };
+  }
+
+  return await exitBuiltin(ctx, args, shell, execute);
 };

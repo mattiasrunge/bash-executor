@@ -158,7 +158,9 @@ export class RealShell implements ShellIf {
         return true;
       }
 
-      // Any other process
+      // Any other process: a number, or nothing — Number('') is 0, the whole process group
+      if (!/^-?\d+$/.test(pid)) return false;
+
       try {
         if (signal === '0') {
           return (await statOf(`/proc/${Number(pid)}`)) !== null;

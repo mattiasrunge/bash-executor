@@ -255,11 +255,22 @@ export class ReadonlyVariableError extends CommandAbortError {
  * command it belongs to fails with status 1 and the shell carries on, so it is
  * caught where redirections are applied.
  */
-export class NoClobberError extends BashExecutorError {
+/**
+ * A redirection that could not be made: `< missing`, `> /no/dir/x`. It fails
+ * the one command it was for, which does not run, with status 1.
+ */
+export class RedirectionError extends BashExecutorError {
+  constructor(message: string, code = 'E_REDIRECTION') {
+    super(message, { code });
+    this.name = 'RedirectionError';
+  }
+}
+
+export class NoClobberError extends RedirectionError {
   readonly path: string;
 
   constructor(path: string) {
-    super(`${path}: cannot overwrite existing file`, { code: 'E_NO_CLOBBER' });
+    super(`${path}: cannot overwrite existing file`, 'E_NO_CLOBBER');
     this.name = 'NoClobberError';
     this.path = path;
   }

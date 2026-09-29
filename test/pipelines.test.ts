@@ -96,8 +96,16 @@ Deno.test('I/O Redirections', async (t) => {
     assertEquals(result.exitCode, 0);
   });
 
+  await t.step('stdin redirection < from a file that is not there fails the command, which does not run', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('echo ran < nope.txt; echo "s=$?"');
+    assertEquals(result.stdout, 's=1\n');
+    assertEquals(result.stderr, 'nope.txt: No such file or directory\n');
+  });
+
   await t.step('stdin redirection <', async () => {
     const shell = new TestShell();
+    shell.setFile('input.txt', 'x\n');
     const result = await shell.runAndCapture('cat < input.txt');
     assertEquals(result.exitCode, 0);
   });

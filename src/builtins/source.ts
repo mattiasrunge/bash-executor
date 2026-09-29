@@ -28,17 +28,26 @@ import type { BuiltinHandler, BuiltinResult } from './types.ts';
  * . ~/.bashrc             -> executes .bashrc in current shell
  * source script.sh arg1 arg2 -> $1=arg1, $2=arg2 during execution
  */
-export const sourceBuiltin: BuiltinHandler = async (
+export const sourceBuiltin: BuiltinHandler = (ctx, args, shell, execute) => sourceAs('source', ctx, args, shell, execute);
+
+/** `source` and `.` are one builtin, which says its errors under the name it was called by. */
+async function sourceAs(
+  command: string,
   ctx: ExecContextIf,
   args: string[],
   shell: ShellIf,
   execute: (script: string, opts?: { file?: string }) => Promise<number>,
-): Promise<BuiltinResult> => {
+): Promise<BuiltinResult> {
+  const usage = `${command}: usage: ${command} filename [arguments]\n`;
+
+  if (args[0] === '--') {
+    args = args.slice(1);
+  } else if (/^-./.test(args[0] ?? '')) {
+    return { code: 2, stderr: `${command}: ${args[0].slice(0, 2)}: invalid option\n${usage}` };
+  }
+
   if (args.length === 0) {
-    return {
-      code: 2,
-      stderr: 'source: filename argument required\n',
-    };
+    return { code: 2, stderr: `${command}: filename argument required\n${usage}` };
   }
 
   const [filename, ...params] = args;
@@ -96,7 +105,7 @@ export const sourceBuiltin: BuiltinHandler = async (
   } finally {
     if (saved) setPositional(ctx, saved);
   }
-};
+}
 
 /**
  * Where `source name` finds a name without a slash: on PATH, under `shopt -s
@@ -142,4 +151,4 @@ function setPositional(ctx: ExecContextIf, values: string[]): void {
  *
  * This is an alias for the source builtin.
  */
-export const dotBuiltin: BuiltinHandler = sourceBuiltin;
+export const dotBuiltin: BuiltinHandler = (ctx, args, shell, execute) => sourceAs('.', ctx, args, shell, execute);

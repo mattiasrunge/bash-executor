@@ -425,7 +425,12 @@ export class TestShell implements ShellIf {
    * Only EXISTS is answered, which is all `set -C` asks about.
    */
   async testPath(_ctx: ExecContextIf, path: string, op: string): Promise<boolean> {
-    return await (op === 'EXISTS' ? this.files.has(path) : false);
+    // A directory is one a file is in, or one every system has
+    const directory = path === '/' || path === '/tmp' || path === '/dev' || [...this.files.keys()].some((file) => file.startsWith(`${path}/`));
+
+    if (op === 'DIRECTORY') return await directory;
+
+    return await (op === 'EXISTS' ? this.files.has(path) || directory : false);
   }
 
   /**
