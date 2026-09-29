@@ -226,3 +226,13 @@ Deno.test('readonly variables stay as they are', async (t) => {
     assertEquals(await run('f() { readonly a=(1); }; f\na[0]=2\necho "${a[0]}"; declare -p a'), ['1\ndeclare -ar a=([0]="1")\n', 'a: readonly variable\n']);
   });
 });
+
+Deno.test('BASHPID is $$ in the shell, another number in a subshell, and not to be assigned', async () => {
+  const shell = new TestShell();
+
+  shell.setParams({ '$': '4242' });
+
+  const result = await shell.runAndCapture('echo $BASHPID; [ "$(echo $BASHPID)" != 4242 ] && echo other; BASHPID=1; echo $BASHPID');
+
+  assertEquals(result.stdout, '4242\nother\n4242\n');
+});

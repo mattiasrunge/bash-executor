@@ -2,6 +2,7 @@ import { assertEquals } from '@std/assert';
 import { bracketBuiltin, testBuiltin } from '../../src/builtins/test.ts';
 import { ExecContext } from '../../src/context.ts';
 import type { ShellIf } from '../../src/types.ts';
+import { TestShell } from '../lib/test-shell.ts';
 
 // No-op execute function for tests
 const noopExecute = async (_script: string) => 0;
@@ -306,4 +307,39 @@ Deno.test('[ builtin', async (t) => {
     const result = await bracketBuiltin(ctx, ['5', '-lt', '10', ']'], shell, noopExecute);
     assertEquals(result.code, 0);
   });
+});
+
+// Each status and message is bash 5.2's for the same command
+const cases: Array<[string, number, string?]> = [
+  ['test', 1],
+  ['test -n', 0],
+  ['test a b', 2, 'test: a: unary operator expected'],
+  ['test a b c', 2, 'test: b: binary operator expected'],
+  ['test a b c d e', 2, 'test: too many arguments'],
+  ['test 1 -eq 1 -o 1 -eq', 2, "test: syntax error: `-eq' unexpected"],
+  ['test a -a b -o', 2, 'test: argument expected'],
+  ["test '(' -n x ')' -a '(' -z '' ')'", 0],
+  ["test ! '(' a ')'", 1],
+  ['test -z -a -z', 0],
+  ['test = = =', 0],
+  ['test " 3 " -eq 3', 0],
+  ['test 12 -eq 012', 0],
+  ['test 0x10 -eq 16', 2, 'test: 0x10: integer expression expected'],
+  ['test 99999999999999999999 -gt 1', 2, 'test: 99999999999999999999: integer expression expected'],
+  ['test -o errexit', 1],
+  ['set -e; test -o errexit', 0],
+  ['declare -n r=x; test -R r', 0],
+  ["a=(1 2); test -v 'a[1]' && test -v 'a[@]' && ! test -v 'a[5]'", 0],
+  ['[ a -eq ]', 2, '[: a: unary operator expected'],
+  ['[ ! ]', 0],
+];
+
+Deno.test('test and [ decide as bash does', async (t) => {
+  for (const [script, code, message] of cases) {
+    await t.step(script, async () => {
+      const result = await new TestShell().runAndCapture(`${script}; echo $?`);
+
+      assertEquals([result.stdout, result.stderr], [`${code}\n`, message ? `${message}\n` : '']);
+    });
+  }
 });

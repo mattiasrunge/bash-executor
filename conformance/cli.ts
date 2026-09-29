@@ -9,7 +9,7 @@
  * syntax errors and uncaught exceptions are logged to `$BASH_TS_GAPLOG` as well
  * as printed, and so are options it has no counterpart for.
  */
-import { fromFileUrl } from '@std/path';
+import { dirname, fromFileUrl, join } from '@std/path';
 import {
   AstExecutor,
   BashSyntaxError,
@@ -125,6 +125,18 @@ function selfCommand(): string[] {
   return [Deno.execPath(), 'run', '-A', '--no-check', '--quiet', '--config', config, fromFileUrl(import.meta.url)];
 }
 
+/** fetch.sh's exec-as, beside the wrapper or this file, when it has been built. */
+function execAsHelper(): string | undefined {
+  const wrapper = Deno.env.get('BASH_TS_SELF');
+  const helper = wrapper ? join(dirname(wrapper), '.cache', 'helpers', 'exec-as') : fromFileUrl(new URL('./.cache/helpers/exec-as', import.meta.url));
+
+  try {
+    return Deno.statSync(helper).isFile ? helper : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * The wrapper's and the runner's variables, taken out of the environment the
  * script sees (tests print theirs) and handed back to every process it starts,
@@ -164,6 +176,7 @@ async function main(): Promise<number> {
 
   const shell: RealShell = new RealShell({
     selfCommand: self,
+    execAs: execAsHelper(),
     name: () => inv.name,
     hostEnv,
     // `kill -SIG $$`: the trap for it, or what the signal does by default —

@@ -7,8 +7,8 @@ see [README.md](README.md) for what the scores mean.
 | --- | --- |
 | Test files that parse | 462 / 471 |
 | `run-*` scripts passing | 27 / 83 (real bash here: 74) |
-| Mean upstream score | 79% |
-| Mean stdout score | 81% |
+| Mean upstream score | 80% |
+| Mean stdout score | 82% |
 
 ## Gaps
 
@@ -95,7 +95,7 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | foo: : must use subscript when assigning associative array | array, assoc |
 | foo: : must use subscript when assigning associative array | array, assoc |
 | @: syntax error: operand expected (error token is "@") | assoc, varenv |
-| the test suite should not be run as root | execscript, glob-test |
+| [: -eq: unary operator expected | execscript, glob-test |
 | return: can only 'return' from a function or sourced script | execscript, posixexp |
 | history: command not found | histexpand, history |
 | !!: command not found | histexpand, history |
@@ -139,7 +139,7 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | assoc | pass | no | 62% | 74% | 78c78 ⏎ &lt; 1 ⏎ --- |
 | attr | pass | yes | 100% | 100% |  |
 | braces | pass | no | 99% | 99% | 23c23 ⏎ &lt; bazx bazy ⏎ --- |
-| builtins | pass | no | 93% | 93% | 0a1 ⏎ &gt; 1000 ⏎ 104,107c105,108 |
+| builtins | pass | no | 96% | 96% | 0a1 ⏎ &gt; 1000 ⏎ 104,107c105,108 |
 | case | pass | yes | 100% | 100% |  |
 | casemod | pass | yes | 100% | 100% |  |
 | complete | pass | no | 0% | 0% | 1,37c1,63 ⏎ &lt; ./complete.tests: line 19: complete: command not found ⏎ &lt; ./complete.tests: line 22: complete: command not found |
@@ -155,7 +155,7 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | dollars | pass | no | 85% | 85% | 2,3d1 ⏎ &lt; ./dollar-at-star: line 37: *: invalid indirect expansion ⏎ &lt; ./dollar-at-star: line 38: @: invalid indirect expansion |
 | dynvar | pass | yes | 100% | 100% |  |
 | errors | pass | no | 98% | 100% | 118c118 ⏎ &lt; ./errors4.sub: line 29: break: x: numeric argument required ⏎ --- |
-| execscript | env | no | 84% | 91% | 1d0 ⏎ &lt; execscript: the test suite should not be run as root ⏎ 11c10 |
+| execscript | env | no | 84% | 91% | 1d0 ⏎ &lt; ./execscript: line 4: [: -eq: unary operator expected ⏎ 11c10 |
 | exp-tests | pass | no | 51% | 58% | 41,42c41 ⏎ &lt; argv[1] = &lt;&gt; ⏎ &lt; argv[1] = &lt;"Hello world!"&gt; |
 | exportfunc | pass | no | 86% | 93% | 4c4 ⏎ &lt; ./exportfunc.tests: eval: line 43: syntax error: unexpected end of file ⏎ --- |
 | extglob | pass | no | 84% | 86% | 44c44 ⏎ &lt; @(*) ⏎ --- |
@@ -175,7 +175,7 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | intl | env | no | 71% | 77% | 13a14 ⏎ &gt; 1,0000 ⏎ 18,19c19 |
 | invert | pass | yes | 100% | 100% |  |
 | iquote | pass | yes | 100% | 100% |  |
-| jobs | env | timeout | 38% | 47% | timeout |
+| jobs | env | timeout | 38% | 48% | timeout |
 | lastpipe | pass | yes | 100% | 100% |  |
 | mapfile | pass | no | 69% | 69% | 17,18c17 ⏎ &lt; a ⏎ &lt; [0] Abcdefghijklmnop |
 | more-exp | pass | no | 87% | 93% | 20,22c20,30 ⏎ &lt; argv[1] = &lt;a b c d e f&gt; ⏎ &lt; argv[1] = &lt;a b c d e f&gt; |
@@ -197,19 +197,19 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | printf | pass | yes | 100% | 100% |  |
 | procsub | pass | no | 67% | 70% | 15,17c15 ⏎ &lt; ./procsub.tests: line 63: ulimit: command not found ⏎ &lt; ./procsub.tests: line 67: ulimit: command not found |
 | quote | pass | no | 98% | 98% | 77c77 ⏎ &lt; 'weferfds'\\''dsfsdf' ⏎ --- |
-| quotearray | pass | no | 63% | 72% | 37,38d36 ⏎ &lt; uname ⏎ &lt; uname |
+| quotearray | pass | no | 72% | 80% | 70,72c70,71 ⏎ &lt; declare -A A=([$'\t']="X" ["*"]="X" [" "]="X" ["]"]="X" ["@"]="X" ) ⏎ &lt; ./quotearray2.sub: line 62: printf: 'A[	]': not a valid identifier |
 | read | env | timeout | 50% | 50% | timeout |
 | redir | pass | no | 70% | 72% | 6c6 ⏎ &lt; ./redir.tests: line 44: a: No such file or directory ⏎ --- |
 | rhs-exp | pass | no | 95% | 95% | 11c11 ⏎ &lt; argv[1] = &lt;TDEFAULTS = -DSELECT_VECS=\'&m68kcoff_vec\'&gt; ⏎ --- |
 | rsh | pass | no | 17% | 0% | 1,13c1,14 ⏎ &lt; ./rsh1.sub: line 20: set: -r: invalid option ⏎ &lt; set: usage: set [-abefhkmnptuvxBCEHPT] [-o option-name] [--] [-] [arg ...] |
 | set-e | pass | yes | 100% | 100% |  |
 | set-x | pass | no | 76% | 83% | 0a1,2 ⏎ &gt; + (( i=0 )) ⏎ &gt; + (( i&lt;=5 )) |
-| shopt | pass | no | 84% | 84% | 307,335c307,309 ⏎ &lt; /home/mattias/m/git/bash-executor-conformance/conformance/.cache/work/ours/run-shopt/tmp/tmp.U1HkRfCELO: 1: shopt: not found ⏎ &lt; 0a1,57 |
+| shopt | pass | no | 99% | 99% | 306a307,310 ⏎ &gt; 28c28 ⏎ &gt; &lt; globskipdots   	off |
 | strip | pass | yes | 100% | 100% |  |
-| test | env | timeout | 88% | 91% | timeout |
+| test | env | timeout | 97% | 98% | timeout |
 | tilde | pass | no | 64% | 64% | 2c2 ⏎ &lt; /home/mattias/foo ⏎ --- |
 | tilde2 | pass | no | 68% | 68% | 2c2 ⏎ &lt; ~/bin:~/bin2:/bin:/usr/bin:. ⏎ --- |
-| trap | pass | no | 71% | 77% | 8c8 ⏎ &lt; [1] debug ⏎ --- |
+| trap | pass | no | 77% | 83% | 8c8 ⏎ &lt; [1] debug ⏎ --- |
 | type | pass | no | 98% | 98% | 43,44c43,44 ⏎ &lt; /tmp/bash-ts ⏎ &lt; bash-ts is hashed (/tmp/bash-ts) |
 | varenv | pass | no | 78% | 81% | 2,5c2,3 ⏎ &lt; ./varenv.tests: line 42: c=7: command not found ⏎ &lt; 3 4 3 4 5 |
 | vredir | env | no | 93% | 95% | 14,17d13 ⏎ &lt; bad foo 1 ⏎ &lt; bad foo 2 |

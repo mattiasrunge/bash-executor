@@ -55,3 +55,42 @@ Deno.test('an assignment subscript runs to its own ], and the value is what foll
     assertEquals(result.stderr, 'x],b: syntax error: invalid arithmetic operator (error token is "],b")\n');
   });
 });
+
+Deno.test('[[ -eq ]] takes its operands expanded once, as words', async (t) => {
+  await t.step('a subscript in them is not expanded again', async () => {
+    const result = await run([
+      "a=(5 6 7); i=1; declare -A m; m['$(echo x)']=3; key='$(echo x)'",
+      '[[ a[i] -eq 6 ]] && echo ok1',
+      "[[ m['$(echo x)'] -eq 3 ]] && echo ok2",
+      '[[ m[$key] -eq 3 ]] && echo ok3',
+    ].join('\n'));
+
+    assertEquals(result.stdout, 'ok1\nok2\nok3\n');
+  });
+
+  await t.step('[[ -v ]] expands a subscript once too', async () => {
+    const result = await run([
+      "declare -A assoc; key='x],b[$(echo uname >&2)'; assoc[$key]=42; a=(1 '' 3)",
+      '[[ -v assoc[$key] ]]; echo $?',
+      "[[ -v assoc['$key'] ]]; echo $?",
+      '[[ -v a[1] ]]; echo $?',
+      '[[ -v a[5] ]]; echo $?',
+    ].join('\n'));
+
+    assertEquals(result.stdout, '0\n1\n0\n1\n');
+    assertEquals(result.stderr, '');
+  });
+
+  await t.step('an error in a subscript ends the line, in [[, (( and let alike', async () => {
+    const result = await run([
+      'a=(1)',
+      '[[ a[1+] -eq 1 ]] || echo no; echo same',
+      '(( a[1+] )) || echo no; echo same',
+      'let "a[1+]" || echo no; echo same',
+      'echo next $?',
+    ].join('\n'));
+
+    assertEquals(result.stdout, 'next 1\n');
+    assertEquals(result.stderr, '1+: syntax error: operand expected (error token is "+")\n'.repeat(3));
+  });
+});

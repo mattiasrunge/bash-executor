@@ -48,8 +48,13 @@ export const letBuiltin: BuiltinHandler = async (
         return { code: 1, stderr: `${error.message}\n` };
       }
 
+      // One in a subscript ends the rest of the line, as an expansion error does
+      if (error instanceof ArithmeticError && error.nameless) {
+        throw error;
+      }
+
       if (error instanceof ArithmeticError) {
-        return { code: 1, stderr: error.nameless ? `${error.message}\n` : `let: ${error.message}\n` };
+        return { code: 1, stderr: `let: ${error.message}\n` };
       }
 
       const message = error instanceof Error ? error.message : String(error);

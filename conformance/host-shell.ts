@@ -66,6 +66,8 @@ type FileHandle = { file: Deno.FsFile };
 export type RealShellOptions = {
   /** How to start another copy of this shell, for a script that has no `#!` line (bash runs those itself). */
   selfCommand: string[];
+  /** The exec-as helper, to start a command under its own name; without it, by its path. */
+  execAs?: string;
   /** `$0` as bash would print it in front of an error. */
   name: () => string;
   /** Added to every child's environment, out of sight of the script. */
@@ -92,6 +94,34 @@ const HARMLESS_SIGNALS = new Set(['0', 'CHLD', 'CONT', 'URG', 'WINCH']);
  * process's own stdio), pipes this shell opened, and descriptors opened with
  * `fdOpen`. Anything else is a path, which the executor bridges through a pipe.
  */
+/**
+ * Whether the kernel would run the file at `path`: not without an execute bit,
+ * and as a script of its own — which bash runs itself — without an ELF header
+ * or a `#!` line.
+ */
+async function launchable(path: string): Promise<'binary' | 'script' | 'denied'> {
+  try {
+    const stat = await Deno.stat(path);
+
+    if (stat.mode !== null && (stat.mode & 0o111) === 0) return 'denied';
+
+    const file = await Deno.open(path);
+    const head = new Uint8Array(4);
+
+    try {
+      const n = await file.read(head) ?? 0;
+      const text = new TextDecoder().decode(head.subarray(0, n));
+
+      return text.startsWith('#!') || text === '\x7fELF' ? 'binary' : 'script';
+    } finally {
+      file.close();
+    }
+  } catch {
+    // Unreadable but executable: the kernel decides
+    return 'binary';
+  }
+}
+
 export class RealShell implements ShellIf {
   private pipes = new Map<string, PipeBuffer>();
   private files = new Map<string, FileHandle>();
@@ -289,10 +319,31 @@ export class RealShell implements ShellIf {
 
     let child: Deno.ChildProcess;
 
+    // Through exec-as the command's argv[0] is the name it was called by, as
+    // bash gives it; checked first, since exec-as cannot tell the two apart
+    const launch = !viaSelf && this.opts.execAs ? await launchable(path) : 'direct';
+
+    if (launch === 'denied') {
+      await this.writeTo(stderr, `${this.where(ctx)}${name}: Permission denied\n`);
+
+      return 126;
+    }
+
+    if (launch === 'script') {
+      return await this.spawn(ctx, name, path, args, true, opts);
+    }
+
+    const [program, argv] = viaSelf
+      // Its $0 is the name as written, `./script`, or the path PATH found it at
+      ? [this.opts.selfCommand[0], [...this.opts.selfCommand.slice(1), name.includes('/') ? name : path, ...args]]
+      : launch === 'binary'
+      ? [this.opts.execAs!, [opts.argv0 ?? name, path, ...args]]
+      : [path, args];
+
     try {
       Deno.umask(ctx.getUmask());
-      child = new Deno.Command(viaSelf ? this.opts.selfCommand[0] : path, {
-        args: viaSelf ? [...this.opts.selfCommand.slice(1), path, ...args] : args,
+      child = new Deno.Command(program, {
+        args: argv,
         cwd: ctx.getCwd(),
         // Deno cannot set a child's argv[0]; bash-ts takes it from the environment
         env: { ...(opts.clearEnv ? {} : ctx.getEnv()), ...this.opts.hostEnv, ...(opts.argv0 === undefined ? {} : { BASH_TS_ARGV0: opts.argv0 }) },

@@ -511,9 +511,9 @@
       "reference": "pass"
     },
     "run-assoc": {
-      "upstream": 0.617,
+      "upstream": 0.619,
       "pass": false,
-      "stdout": 0.735,
+      "stdout": 0.736,
       "reference": "pass"
     },
     "run-attr": {
@@ -529,9 +529,9 @@
       "reference": "pass"
     },
     "run-builtins": {
-      "upstream": 0.93,
+      "upstream": 0.955,
       "pass": false,
-      "stdout": 0.934,
+      "stdout": 0.961,
       "reference": "pass"
     },
     "run-case": {
@@ -685,7 +685,7 @@
       "reference": "pass"
     },
     "run-heredoc": {
-      "upstream": 0.926,
+      "upstream": 0.934,
       "pass": false,
       "stdout": 0.992,
       "reference": "env"
@@ -747,7 +747,7 @@
     "run-jobs": {
       "upstream": 0.376,
       "pass": false,
-      "stdout": 0.474,
+      "stdout": 0.478,
       "reference": "env",
       "timeout": true
     },
@@ -878,9 +878,9 @@
       "reference": "pass"
     },
     "run-quotearray": {
-      "upstream": 0.628,
+      "upstream": 0.717,
       "pass": false,
-      "stdout": 0.72,
+      "stdout": 0.795,
       "reference": "pass"
     },
     "run-read": {
@@ -921,9 +921,9 @@
       "reference": "pass"
     },
     "run-shopt": {
-      "upstream": 0.837,
+      "upstream": 0.994,
       "pass": false,
-      "stdout": 0.838,
+      "stdout": 0.993,
       "reference": "pass"
     },
     "run-strip": {
@@ -933,9 +933,9 @@
       "reference": "pass"
     },
     "run-test": {
-      "upstream": 0.877,
+      "upstream": 0.97,
       "pass": false,
-      "stdout": 0.913,
+      "stdout": 0.984,
       "reference": "env",
       "timeout": true
     },
@@ -952,9 +952,9 @@
       "reference": "pass"
     },
     "run-trap": {
-      "upstream": 0.706,
+      "upstream": 0.767,
       "pass": false,
-      "stdout": 0.768,
+      "stdout": 0.827,
       "reference": "pass"
     },
     "run-type": {

@@ -38,4 +38,9 @@ for helper in recho zecho printenv xcase; do
   fi
 done
 
+# Starts a command under the name bash would give it, see exec-as.c
+if [ ! -x "${CACHE}/helpers/exec-as" ] || [ "${HERE}/exec-as.c" -nt "${CACHE}/helpers/exec-as" ]; then
+  cc -O -o "${CACHE}/helpers/exec-as" "${HERE}/exec-as.c"
+fi
+
 echo "bash ${VERSION} tests ready in ${SRC}/tests"

@@ -19,7 +19,10 @@ import {
  * Execution context for shell commands, managing environment variables, I/O streams, and function definitions.
  */
 /** bash's dynamic variables: made each time they are read. */
-const DYNAMIC_PARAMS = ['SECONDS', 'EPOCHSECONDS', 'EPOCHREALTIME', 'RANDOM', 'SRANDOM', 'BASH_ARGV0'];
+const DYNAMIC_PARAMS = ['SECONDS', 'EPOCHSECONDS', 'EPOCHREALTIME', 'RANDOM', 'SRANDOM', 'BASH_ARGV0', 'BASHPID'];
+
+/** The next subshell's BASHPID: no process of its own, so a number above Linux's pids */
+let nextSubshellPid = 2 ** 22 + 100_000;
 
 /**
  * The parameters that change from one command to the next without anything
@@ -174,6 +177,9 @@ export class ExecContext implements ExecContextIf {
     // The descriptors above 2 the subshell starts with, the shell's and its command's own
     ctx.fds = this.visibleFds();
 
+    // A process of its own, as far as $BASHPID tells
+    ctx.subshellPid = String(nextSubshellPid++);
+
     // A subshell inherits the shell's options and cannot write them back
     ctx.options = { ...this.getShellOptions() };
 
@@ -290,6 +296,8 @@ export class ExecContext implements ExecContextIf {
   private secondsFrom = Date.now();
   private secondsBase = 0;
   private randomSeed = Math.floor(Math.random() * 2 ** 31);
+  /** A subshell's own BASHPID; the shell's is `$$` */
+  private subshellPid?: string;
 
   private dynamicValue(name: string): string {
     const now = Date.now();
@@ -310,6 +318,8 @@ export class ExecContext implements ExecContextIf {
         return String(this.randomSeed >> 16 & 0x7fff);
       case 'SRANDOM':
         return String(crypto.getRandomValues(new Uint32Array(1))[0]);
+      case 'BASHPID':
+        return this.subshellPid ?? this.special['$'] ?? '';
       default:
         return this.special['0'] ?? '';
     }

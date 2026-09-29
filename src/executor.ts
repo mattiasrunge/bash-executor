@@ -3021,12 +3021,13 @@ export class AstExecutor {
 
   /** `((` and `for ((` report a bad expression as bash does, `((: 1 + : syntax error: …`, and fail with 1. */
   private async arithmeticCommandStatus(err: unknown, ctx: ExecContextIf): Promise<number> {
-    if (!(err instanceof CommandAbortError)) {
+    // So is one in a subscript, and it ends the rest of the line as an expansion error does
+    if (!(err instanceof CommandAbortError) || (err instanceof ArithmeticError && err.nameless)) {
       throw err;
     }
 
     // A readonly variable is said as any assignment to one says it
-    const prefix = err instanceof ReadonlyVariableError || (err instanceof ArithmeticError && err.nameless) ? '' : '((: ';
+    const prefix = err instanceof ReadonlyVariableError ? '' : '((: ';
 
     await this.diagnose(ctx, `${prefix}${err.message}`);
 
@@ -3132,7 +3133,10 @@ export class AstExecutor {
       // An arithmetic operand that is no expression fails the test, and says so
       if (!(err instanceof ArithmeticSyntaxError || err instanceof ArithmeticError)) throw err;
 
-      await this.diagnose(ctx, err instanceof ArithmeticError && err.nameless ? err.message : `[[: ${err.message}`);
+      // One in a subscript ends the rest of the line, as an expansion error does
+      if (err instanceof ArithmeticError && err.nameless) throw err;
+
+      await this.diagnose(ctx, `[[: ${err.message}`);
 
       return this.applyErrexit(1, ctx);
     }
@@ -3192,14 +3196,50 @@ export class AstExecutor {
   }
 
   /**
+   * `[[ -v a[sub] ]]` as bash 5.2 has it: the subscript is expanded once, as a
+   * word, and what it expands to is the key, or an index evaluated as it is —
+   * `a[$k]` with k='x],b[$(cmd)' is that key, and cmd does not run.
+   * @returns undefined for anything but one element of an array
+   */
+  private async conditionalElement(word: AstConditionalWord, ctx: ExecContextIf): Promise<{ set: boolean } | undefined> {
+    const text = word.written ?? word.text;
+    const name = text.match(/^[A-Za-z_][A-Za-z0-9_]*(?=\[)/)?.[0];
+
+    if (!name || subscriptEnd(text, name.length) !== text.length - 1) return undefined;
+
+    const written = text.slice(name.length + 1, -1);
+
+    if (written === '@' || written === '*') return undefined;
+
+    const subscript = await this.subscriptWord(written, ctx);
+    const assoc = ctx.getAssoc(name);
+
+    if (assoc) return { set: subscript in assoc };
+
+    const array = ctx.getArray(name) ?? (ctx.getParams()[name] !== undefined ? [ctx.getParams()[name]] : undefined);
+    const index = Number(await evaluateArithmeticText(subscript, contextVariables(ctx)));
+    const at = index < 0 ? (array?.length ?? 0) + index : index;
+
+    return { set: array?.[at] !== undefined };
+  }
+
+  /**
    * Evaluates unary conditional expressions (-f, -d, -z, -n, etc.).
    */
   protected async evaluateConditionalUnary(
     node: AstConditionalUnaryExpression,
     ctx: ExecContextIf,
   ): Promise<boolean> {
-    const arg = await this.expandConditionalWord(node.argument, ctx);
     const op = node.operator;
+
+    // `-v name[subscript]`: the subscript as written, expanded once, as a word
+    if (op === '-v') {
+      const element = await this.conditionalElement(node.argument, ctx);
+
+      if (element) return element.set;
+    }
+
+    const arg = await this.expandConditionalWord(node.argument, ctx);
 
     // String tests
     if (op === '-z') return arg.length === 0;
@@ -3253,7 +3293,9 @@ export class AstExecutor {
     ctx: ExecContextIf,
   ): Promise<boolean> {
     const op = node.operator;
-    const left = await this.expandConditionalWord(node.left, ctx);
+    const arithmetic = ['-eq', '-ne', '-lt', '-le', '-gt', '-ge'].includes(op);
+    // An arithmetic operand is expanded as arithmetic is, below, and only there
+    const left = arithmetic ? '' : await this.expandConditionalWord(node.left, ctx);
 
     // String comparison operators
     // Pattern matching: the right side is a pattern as in `case`, its quoted
@@ -3296,10 +3338,23 @@ export class AstExecutor {
 
     // Numeric comparison operators
     if (op === '-eq' || op === '-ne' || op === '-lt' || op === '-le' || op === '-gt' || op === '-ge') {
-      const right = await this.expandConditionalWord(node.right, ctx);
-      // Both are arithmetic expressions in [[ ]]: `4+3`, a variable's name
-      const leftNum = await this.arithmeticValue({ expression: left }, ctx);
-      const rightNum = await this.arithmeticValue({ expression: right }, ctx);
+      // Both are arithmetic expressions in [[ ]]: `4+3`, a variable's name,
+      // expanded as $(( )) expands one — a subscript on its own and kept whole,
+      // so `a[$k]` with k='$(cmd)' does not run cmd, and m[$k] finds that key
+      // even when it holds `]`. A `'` quotes in a word, though, and not in
+      // arithmetic: such an operand is expanded as a word, and then evaluated
+      // with nothing in it expanded again.
+      const evaluate = async (word: unknown) => {
+        const text = (word as { written?: string; text?: string }).written ?? (word as { text?: string }).text ?? '';
+
+        if (!/'/.test(text.replace(/\[[^\]]*\]/g, ''))) {
+          return await this.arithmeticValue({ expression: text }, ctx);
+        }
+
+        return Number(await evaluateArithmeticText(await this.expandConditionalWord(word as never, ctx), contextVariables(ctx)));
+      };
+      const leftNum = await evaluate(node.left);
+      const rightNum = await evaluate(node.right);
 
       switch (op) {
         case '-eq':
