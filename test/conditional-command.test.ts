@@ -284,3 +284,26 @@ Deno.test('Conditional Command [[]]', async (t) => {
     assertEquals(result.exitCode, 0);
   });
 });
+
+Deno.test('[[ ]] patterns and regular expressions as bash reads them', async (t) => {
+  const run = async (script: string) => (await new TestShell().runAndCapture(script)).stdout;
+
+  await t.step('quoted parts of a pattern match literally', async () => {
+    assertEquals(
+      await run('[[ "a*b" == "a*"b ]] && echo y; [[ axb == "a*"b ]] || echo n; p="a*"; [[ axb == $p ]] && echo y2; [[ axb == "$p" ]] || echo n2'),
+      'y\nn\ny2\nn2\n',
+    );
+  });
+
+  await t.step('extended patterns', async () => {
+    assertEquals(await run('[[ foo.h == *.@(c|h) ]] && echo y; [[ abc != !(x*) ]] || echo y2'), 'y\ny2\n');
+  });
+
+  await t.step('=~ expands its variables and quotes what was quoted', async () => {
+    assertEquals(await run('re="^a(b)"; [[ abc =~ $re ]] && echo "${BASH_REMATCH[1]}"; [[ abc =~ "a.c" ]] || echo literal'), 'b\nliteral\n');
+  });
+
+  await t.step('=~ knows POSIX classes', async () => {
+    assertEquals(await run('[[ 1a =~ ^[[:digit:]]+[^[:space:]]$ ]] && echo y'), 'y\n');
+  });
+});

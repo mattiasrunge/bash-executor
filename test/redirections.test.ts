@@ -352,7 +352,7 @@ Deno.test('exec {name}>file puts a free descriptor in name', async () => {
 });
 
 Deno.test('redirections before the command name', async (t) => {
-  await t.step('>file cmd writes cmd\'s output to the file', async () => {
+  await t.step(">file cmd writes cmd's output to the file", async () => {
     const shell = new TestShell();
     const result = await shell.runAndCapture('>/tmp/pre echo hi');
     assertEquals(result.stdout, '');
@@ -389,7 +389,7 @@ Deno.test('a builtin whose output cannot be written fails, and the script goes o
   assertEquals(result.stderr, 'echo: write error: Bad file descriptor\n');
 });
 
-Deno.test('exec in the background leaves the shell\'s descriptors alone', async () => {
+Deno.test("exec in the background leaves the shell's descriptors alone", async () => {
   const shell = new TestShell();
   const result = await shell.runAndCapture('exec >/tmp/bg &\necho still; exec true &\necho alive');
   assertEquals(result.stdout, 'still\nalive\n');

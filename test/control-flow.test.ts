@@ -721,3 +721,15 @@ Deno.test('$? inside compound bodies', async (t) => {
     assertEquals(result.stdout, '0\n');
   });
 });
+
+Deno.test('case patterns: extended, and quoted parts literal', async () => {
+  const shell = new TestShell();
+  const result = await shell.runAndCapture('for f in a.c b.o "x*"; do case $f in *.@(c|h)) echo "$f src";; "x*") echo "$f star";; *) echo "$f other";; esac; done');
+  assertEquals(result.stdout, 'a.c src\nb.o other\nx* star\n');
+});
+
+Deno.test('ANSI-C and locale strings in patterns', async () => {
+  const shell = new TestShell();
+  const result = await shell.runAndCapture(`z=$'\\t'; case "$z" in $'\\t') echo tab;; esac; case x in $"x") echo loc;; esac; [[ $'a\\tb' =~ ^a$'\\t'b$ ]] && echo re`);
+  assertEquals(result.stdout, 'tab\nloc\nre\n');
+});

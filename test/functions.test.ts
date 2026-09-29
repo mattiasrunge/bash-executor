@@ -248,13 +248,13 @@ Deno.test('dynamic scoping of assignments', async (t) => {
     assertEquals(result.stdout, 'y=5\n');
   });
 
-  await t.step('shift and set -- in a function leave the caller\'s arguments', async () => {
+  await t.step("shift and set -- in a function leave the caller's arguments", async () => {
     const shell = new TestShell();
     const result = await shell.runAndCapture('set -- top1 top2; f() { shift; echo "f=$1 $#"; set -- p; echo "f=$1 $#"; }; f a b; echo "top=$1 $#"');
     assertEquals(result.stdout, 'f=b 1\nf=p 1\ntop=top1 2\n');
   });
 
-  await t.step('a function sees its own arguments only, not its caller\'s', async () => {
+  await t.step("a function sees its own arguments only, not its caller's", async () => {
     const shell = new TestShell();
     const result = await shell.runAndCapture('set -- a b c; f() { echo "[$3] $#"; }; f x y');
     assertEquals(result.stdout, '[] 2\n');

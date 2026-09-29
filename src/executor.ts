@@ -34,6 +34,7 @@ import {
 import { getExitCode, getReturnCode, isExitSignal, isReturnSignal, makeExitSignal } from './builtins/exit.ts';
 import type { BuiltinRegistry } from './builtins/types.ts';
 import type { ErrorPosition } from './errors.ts';
+import { bracketExpression, globToRegExp, globToRegexSource, posixRegexToSource, quoteGlob, quoteRegex } from './pattern.ts';
 import { ArithmeticSyntaxError, NoClobberError, UnboundVariableError, UnknownNodeTypeError, UnsupportedArithmeticNodeError, UnsupportedOperatorError } from './errors.ts';
 import type { ExecContextIf, ExecSyncResult, ExecuteAndCaptureOptions, ShellIf } from './types.ts';
 
@@ -1605,32 +1606,6 @@ export class AstExecutor {
   protected async expandCasePattern(word: AstNodeWord, ctx: ExecContextIf): Promise<RegExp> {
     const text = word.text;
 
-    const escapeRegexChar = (c: string): string => /[\\^$.*+?()[\]{}|]/.test(c) ? `\\${c}` : c;
-
-    // Glob translation for expansion results (quote chars in values are data)
-    const globToRegex = (s: string): string => {
-      let out = '';
-      for (let i = 0; i < s.length; i++) {
-        const c = s[i];
-        if (c === '*') {
-          out += '.*';
-        } else if (c === '?') {
-          out += '.';
-        } else if (c === '[') {
-          const bracket = this.translateBracketExpression(s, i);
-          if (bracket) {
-            out += bracket.source;
-            i = bracket.end;
-          } else {
-            out += '\\[';
-          }
-        } else {
-          out += escapeRegexChar(c);
-        }
-      }
-      return out;
-    };
-
     // Pre-evaluate non-glob expansions by their location in the raw text,
     // each via a synthetic single-expansion word so resolveExpansions'
     // parameter-op/command/arithmetic handling is reused as-is
@@ -1648,62 +1623,40 @@ export class AstExecutor {
       evaluated.set(xp.loc.start, { end: xp.loc.end, value: values.join(' ') });
     }
 
-    let regex = '^';
+    // The pattern as bash sees it once quotes are gone: what was quoted is
+    // quoted with a backslash, so it matches itself
+    let glob = '';
     let inSingle = false;
     let inDouble = false;
 
     for (let i = 0; i < text.length; i++) {
       const expansion = !inSingle ? evaluated.get(i) : undefined;
       if (expansion) {
-        regex += inDouble ? [...expansion.value].map(escapeRegexChar).join('') : globToRegex(expansion.value);
+        glob += inDouble ? quoteGlob(expansion.value) : expansion.value;
         i = expansion.end;
         continue;
       }
 
       const c = text[i];
+      const ansi = !inSingle && !inDouble && c === '$' ? this.ansiCString(text, i) : undefined;
 
-      if (!inSingle && !inDouble && c === '\\' && i + 1 < text.length) {
-        regex += escapeRegexChar(text[++i]);
-        continue;
-      }
-      if (!inDouble && c === "'") {
+      if (ansi) {
+        glob += quoteGlob(ansi.value);
+        i = ansi.end;
+      } else if (!inSingle && !inDouble && c === '$' && text[i + 1] === '"') {
+        // $"…" is a string to translate; untranslated it is "…"
+      } else if (!inSingle && !inDouble && c === '\\' && i + 1 < text.length) {
+        glob += quoteGlob(text[++i]);
+      } else if (!inDouble && c === "'") {
         inSingle = !inSingle;
-        continue;
-      }
-      if (!inSingle && c === '"') {
+      } else if (!inSingle && c === '"') {
         inDouble = !inDouble;
-        continue;
-      }
-      if (inSingle || inDouble) {
-        regex += escapeRegexChar(c);
-        continue;
-      }
-
-      if (c === '*') {
-        regex += '.*';
-      } else if (c === '?') {
-        regex += '.';
-      } else if (c === '[') {
-        const bracket = this.translateBracketExpression(text, i);
-        if (bracket) {
-          regex += bracket.source;
-          i = bracket.end;
-        } else {
-          regex += '\\[';
-        }
       } else {
-        regex += escapeRegexChar(c);
+        glob += inSingle || inDouble ? quoteGlob(c) : c;
       }
     }
-    regex += '$';
 
-    try {
-      return new RegExp(regex);
-    } catch {
-      // invalid regex (e.g. malformed character class): fall back to exact match
-      const literal = [...text].map(escapeRegexChar).join('');
-      return new RegExp(`^${literal}$`);
-    }
+    return globToRegExp(glob);
   }
 
   /**
@@ -1724,30 +1677,7 @@ export class AstExecutor {
    * `[]]` at the wrong place and produced an empty, invalid class.
    */
   protected translateBracketExpression(pattern: string, open: number): { source: string; end: number } | undefined {
-    let i = open + 1;
-    let out = '[';
-
-    if (pattern[i] === '!' || pattern[i] === '^') {
-      out += '^';
-      i++;
-    }
-
-    // A leading `]` is data, not the terminator.
-    if (pattern[i] === ']') {
-      out += '\\]';
-      i++;
-    }
-
-    for (; i < pattern.length; i++) {
-      const c = pattern[i];
-      if (c === ']') {
-        return { source: out + ']', end: i };
-      }
-      // `\` and `[` are the two characters that change meaning inside a JS class.
-      out += c === '\\' || c === '[' ? `\\${c}` : c;
-    }
-
-    return undefined;
+    return bracketExpression(pattern, open);
   }
 
   /**
@@ -1755,51 +1685,7 @@ export class AstExecutor {
    * Supports *, ?, and character classes.
    */
   protected matchGlobPattern(pattern: string, value: string): boolean {
-    // Convert glob pattern to regex
-    let regex = '^';
-    for (let i = 0; i < pattern.length; i++) {
-      const c = pattern[i];
-      switch (c) {
-        case '*':
-          regex += '.*';
-          break;
-        case '?':
-          regex += '.';
-          break;
-        case '[': {
-          const bracket = this.translateBracketExpression(pattern, i);
-          if (bracket) {
-            regex += bracket.source;
-            i = bracket.end;
-          } else {
-            regex += '\\[';
-          }
-          break;
-        }
-        case '\\':
-        case '^':
-        case '$':
-        case '.':
-        case '+':
-        case '(':
-        case ')':
-        case '{':
-        case '}':
-        case '|':
-          regex += '\\' + c;
-          break;
-        default:
-          regex += c;
-      }
-    }
-    regex += '$';
-
-    try {
-      return new RegExp(regex).test(value);
-    } catch {
-      // If regex is invalid, fall back to exact match
-      return pattern === value;
-    }
+    return globToRegExp(pattern).test(value);
   }
 
   protected async executeLogicalExpression(node: AstNodeLogicalExpression, ctx: ExecContextIf): Promise<number> {
@@ -1994,14 +1880,12 @@ export class AstExecutor {
     const left = await this.expandConditionalWord(node.left, ctx);
 
     // String comparison operators
-    if (op === '==' || op === '=') {
-      // Pattern matching: right side is a pattern
-      const right = await this.expandConditionalWord(node.right, ctx);
-      return this.matchGlobPattern(right, left);
-    }
-    if (op === '!=') {
-      const right = await this.expandConditionalWord(node.right, ctx);
-      return !this.matchGlobPattern(right, left);
+    // Pattern matching: the right side is a pattern as in `case`, its quoted
+    // parts matching themselves, extended patterns included
+    if (op === '==' || op === '=' || op === '!=') {
+      const matches = (await this.expandCasePattern(node.right as unknown as AstNodeWord, ctx)).test(left);
+
+      return op === '!=' ? !matches : matches;
     }
     if (op === '<') {
       const right = await this.expandConditionalWord(node.right, ctx);
@@ -2072,10 +1956,9 @@ export class AstExecutor {
     word: AstConditionalWord,
     ctx: ExecContextIf,
   ): Promise<string> {
+    // Quote removal only: no field splitting in [[ ]], so `$'a\tb'` stays one word
     if (!word.expansion || word.expansion.length === 0) {
-      // No expansions - process quotes and escapes
-      const unquoted = utils.unquoteWord(word.text);
-      return utils.unescape(unquoted.values[0] ?? word.text);
+      return utils.unquoteSingleWord(word.text);
     }
 
     const rValue = new utils.ReplaceString(word.text);
@@ -2100,38 +1983,83 @@ export class AstExecutor {
       // Note: PathExpansion is NOT applied in [[ ]] - patterns are used literally
     }
 
-    // Process quotes but NOT word splitting (key difference from [ ])
-    const unquoted = utils.unquoteWord(rValue.text);
-    return utils.unescape(unquoted.values[0] ?? rValue.text);
+    return utils.unquoteSingleWord(rValue.text);
   }
 
   /**
    * Expands the right-hand side of =~ without unquoting (preserves regex metacharacters).
    */
+  /**
+   * An ANSI-C quoted string, `$'\t…'`, starting at `start`: its value and the
+   * index of its closing quote, or undefined when there is none.
+   */
+  private ansiCString(text: string, start: number): { value: string; end: number } | undefined {
+    if (text[start] !== '$' || text[start + 1] !== "'") {
+      return undefined;
+    }
+
+    for (let i = start + 2; i < text.length; i++) {
+      if (text[i] === '\\') {
+        i++;
+      } else if (text[i] === "'") {
+        return { value: utils.unquoteWord(text.slice(start, i + 1)).values[0] ?? '', end: i };
+      }
+    }
+
+    return undefined;
+  }
+
   protected async expandConditionalRegex(
     word: AstConditionalWord,
     ctx: ExecContextIf,
   ): Promise<string> {
-    if (!word.expansion || word.expansion.length === 0) {
-      return word.text;
-    }
+    // The parser keeps the regular expression as written; its expansions happen
+    // here, where bash's quoting rules for it apply: what is quoted matches
+    // itself (`=~ "a.c"` is no pattern), what is not is part of the expression
+    // (`=~ $re`).
+    const text = word.text;
+    let regex = '';
+    let i = 0;
 
-    const rValue = new utils.ReplaceString(word.text);
+    while (i < text.length) {
+      const c = text[i];
+      const ansi = c === '$' ? this.ansiCString(text, i) : undefined;
 
-    for (const xp of word.expansion) {
-      if (xp.resolved) continue;
+      if (ansi) {
+        regex += quoteRegex(ansi.value);
+        i = ansi.end + 1;
+      } else if (c === '$' && text[i + 1] === '"') {
+        // $"…" is a string to translate; untranslated it is "…"
+        i++;
+      } else if (c === "'") {
+        const close = text.indexOf("'", i + 1);
+        const end = close === -1 ? text.length : close;
 
-      if (xp.type === 'ParameterExpansion') {
-        const params = { ...ctx.getEnv(), ...ctx.getParams() };
-        rValue.replace(
-          xp.loc!.start,
-          xp.loc!.end + 1,
-          params[xp.parameter!] || '',
-        );
+        regex += quoteRegex(text.slice(i + 1, end));
+        i = end + 1;
+      } else if (c === '"') {
+        let close = i + 1;
+
+        while (close < text.length && text[close] !== '"') {
+          close += text[close] === '\\' ? 2 : 1;
+        }
+
+        regex += quoteRegex(await this.expandHereDocument(text.slice(i + 1, close), ctx));
+        i = close + 1;
+      } else {
+        let end = i;
+
+        // Up to the next quote, `$'` and `$"` included
+        while (end < text.length && text[end] !== "'" && text[end] !== '"' && !(text[end] === '$' && `'"`.includes(text[end + 1]))) {
+          end += text[end] === '\\' ? 2 : 1;
+        }
+
+        regex += await this.expandHereDocument(text.slice(i, end), ctx);
+        i = end;
       }
     }
 
-    return rValue.text;
+    return posixRegexToSource(regex);
   }
 
   /**
@@ -2969,13 +2897,7 @@ export class AstExecutor {
   }
 
   private globToRegexStr(pattern: string): string {
-    let regex = '';
-    for (const ch of pattern) {
-      if (ch === '*') regex += '.*';
-      else if (ch === '?') regex += '.';
-      else regex += ch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    }
-    return regex;
+    return globToRegexSource(pattern);
   }
 
   private removePrefix(value: string, pattern: string, greedy: boolean): string {
