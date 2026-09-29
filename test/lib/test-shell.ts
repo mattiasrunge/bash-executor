@@ -313,7 +313,7 @@ export class TestShell implements ShellIf {
   /**
    * Run a script and capture all output for assertions
    */
-  async runAndCapture(script: string, opts: { exited?: { value: boolean } } = {}): Promise<TestRunResult> {
+  async runAndCapture(script: string, opts: { exited?: { value: boolean }; file?: string } = {}): Promise<TestRunResult> {
     this.capturedStdout = [];
     this.capturedStderr = [];
 

@@ -11,10 +11,13 @@ export * from './types.ts';
 // Export individual builtins
 export { argBuiltin } from './arg.ts';
 export { aliasBuiltin, unaliasBuiltin } from './alias.ts';
+export { callerBuiltin } from './caller.ts';
 export { cdBuiltin } from './cd.ts';
+export { createCompgenBuiltin } from './compgen.ts';
 export { clearAttributes, declareBuiltin, isReadonly, typesetBuiltin } from './declare.ts';
 export { clearDirStack, dirsBuiltin, getDirStack, popdBuiltin, pushdBuiltin } from './dirstack.ts';
 export { echoBuiltin } from './echo.ts';
+export { createEnableBuiltin } from './enable.ts';
 export { evalBuiltin } from './eval.ts';
 export {
   EXIT_SIGNAL_BASE,
@@ -30,7 +33,9 @@ export {
   RETURN_SIGNAL_MAX,
   returnBuiltin,
 } from './exit.ts';
-export { createBuiltinBuiltin, createCommandBuiltin, createTypeBuiltin } from './introspection.ts';
+export { createBuiltinBuiltin, createCommandBuiltin, createTypeBuiltin, lookupCommand } from './introspection.ts';
+export { getoptsBuiltin } from './getopts.ts';
+export { createHashBuiltin } from './hash.ts';
 export { letBuiltin } from './let.ts';
 export { mapfileBuiltin } from './mapfile.ts';
 export { printfBuiltin } from './printf.ts';
@@ -43,19 +48,25 @@ export { shoptBuiltin } from './shopt.ts';
 export { SIGNALS, trapBuiltin, trapName } from './trap.ts';
 export { bgBuiltin, disownBuiltin, fgBuiltin, JOB_BUILTINS, jobsBuiltin, killBuiltin, waitBuiltin } from './jobs.ts';
 export { dotBuiltin, sourceBuiltin } from './source.ts';
+export { umaskBuiltin } from './umask.ts';
 export { bracketBuiltin, testBuiltin } from './test.ts';
 export { colonBuiltin, falseBuiltin, trueBuiltin } from './trivial.ts';
 export { exportBuiltin, localBuiltin, unsetBuiltin } from './variables.ts';
 
 import { argBuiltin } from './arg.ts';
 import { aliasBuiltin, unaliasBuiltin } from './alias.ts';
+import { callerBuiltin } from './caller.ts';
 import { cdBuiltin } from './cd.ts';
+import { createCompgenBuiltin } from './compgen.ts';
 import { declareBuiltin, typesetBuiltin } from './declare.ts';
 import { dirsBuiltin, popdBuiltin, pushdBuiltin } from './dirstack.ts';
 import { echoBuiltin } from './echo.ts';
+import { createEnableBuiltin } from './enable.ts';
 import { evalBuiltin } from './eval.ts';
 import { exitBuiltin, returnBuiltin } from './exit.ts';
 import { createBuiltinBuiltin, createCommandBuiltin, createTypeBuiltin } from './introspection.ts';
+import { getoptsBuiltin } from './getopts.ts';
+import { createHashBuiltin } from './hash.ts';
 import { letBuiltin } from './let.ts';
 import { mapfileBuiltin } from './mapfile.ts';
 import { printfBuiltin } from './printf.ts';
@@ -68,6 +79,7 @@ import { shoptBuiltin } from './shopt.ts';
 import { trapBuiltin } from './trap.ts';
 import { bgBuiltin, disownBuiltin, fgBuiltin, jobsBuiltin, killBuiltin, waitBuiltin } from './jobs.ts';
 import { dotBuiltin, sourceBuiltin } from './source.ts';
+import { umaskBuiltin } from './umask.ts';
 import { bracketBuiltin, testBuiltin } from './test.ts';
 import { colonBuiltin, falseBuiltin, trueBuiltin } from './trivial.ts';
 import type { BuiltinHandler, BuiltinRegistry } from './types.ts';
@@ -92,6 +104,7 @@ export function createBuiltinRegistry(): BuiltinRegistry {
 
   // Phase 2: Context-modifying builtins
   registry.set('cd', cdBuiltin);
+  registry.set('umask', umaskBuiltin);
   registry.set('export', exportBuiltin);
   registry.set('unset', unsetBuiltin);
   registry.set('local', localBuiltin);
@@ -119,6 +132,7 @@ export function createBuiltinRegistry(): BuiltinRegistry {
 
   // Phase 3: Parameter manipulation
   registry.set('shift', shiftBuiltin);
+  registry.set('getopts', getoptsBuiltin);
 
   // Phase 3: Output formatting
   registry.set('printf', printfBuiltin);
@@ -127,6 +141,10 @@ export function createBuiltinRegistry(): BuiltinRegistry {
   registry.set('type', createTypeBuiltin(registry));
   registry.set('command', createCommandBuiltin(registry));
   registry.set('builtin', createBuiltinBuiltin(registry));
+  registry.set('hash', createHashBuiltin(registry));
+  registry.set('enable', createEnableBuiltin(registry));
+  registry.set('caller', callerBuiltin);
+  registry.set('compgen', createCompgenBuiltin(registry));
 
   // Phase 3: Arithmetic
   registry.set('let', letBuiltin);

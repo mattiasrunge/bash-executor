@@ -5,6 +5,7 @@
  */
 
 import { DEFAULT_SHELL_OPTIONS, type ExecContextIf, SHELL_OPTION_FLAG_MAP, type ShellIf } from '../types.ts';
+import { doubleQuoted, quotedIfNeeded } from '../quote.ts';
 import type { BuiltinHandler, BuiltinResult } from './types.ts';
 
 /**
@@ -36,22 +37,27 @@ export const setBuiltin: BuiltinHandler = async (
 ): Promise<BuiltinResult> => {
   // No arguments: display all variables
   if (args.length === 0) {
-    const env = ctx.getEnv();
-    const params = ctx.getParams();
-    let output = '';
+    // The shell's variables, not its special parameters, as bash lists them:
+    // values quoted only when they need it, arrays as `a=([0]="x")`
+    const lines: Record<string, string> = {};
 
-    // Merge env and params, sorted
-    const all = { ...env, ...params };
-    const keys = Object.keys(all).sort();
-
-    for (const key of keys) {
-      const value = all[key];
-      // Quote the value
-      const quotedValue = value.replace(/'/g, "'\\''");
-      output += `${key}='${quotedValue}'\n`;
+    for (const [name, value] of Object.entries({ ...ctx.getEnv(), ...ctx.getParams() })) {
+      lines[name] = `${name}=${quotedIfNeeded(value)}`;
     }
 
-    return { code: 0, stdout: output };
+    for (const [name, values] of Object.entries(ctx.getArrays())) {
+      lines[name] = `${name}=(${Object.entries(values).map(([index, value]) => `[${index}]=${doubleQuoted(value)}`).join(' ')})`;
+    }
+
+    for (const [name, values] of Object.entries(ctx.getAssocs())) {
+      const elements = Object.entries(values).map(([key, value]) => `[${quotedIfNeeded(key).replace(/^'.*'$/s, () => doubleQuoted(key))}]=${doubleQuoted(value)} `);
+
+      lines[name] = `${name}=(${elements.join('')})`;
+    }
+
+    const names = Object.keys(lines).filter((name) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name)).sort();
+
+    return { code: 0, stdout: names.map((name) => `${lines[name]}\n`).join('') };
   }
 
   let i = 0;

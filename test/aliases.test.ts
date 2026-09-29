@@ -1,6 +1,15 @@
 import { assertEquals } from '@std/assert';
 import { AstExecutor, type ExecCommandOptions, ExecContext, type ExecContextIf, type ShellIf } from '../mod.ts';
 
+/** A context that expands aliases, as an interactive shell does. */
+function aliasContext(): ExecContext {
+  const ctx = new ExecContext();
+
+  ctx.setShellOption('expand_aliases', true);
+
+  return ctx;
+}
+
 /**
  * Simple test shell that tracks alias resolution
  */
@@ -8,7 +17,7 @@ class AliasTestShell implements ShellIf {
   private executor: AstExecutor;
   private pipes = new Map<string, string[]>();
   private pipeCounter = 0;
-  private defaultCtx = new ExecContext();
+  private defaultCtx = aliasContext();
   public executedCommands: { name: string; args: string[] }[] = [];
 
   constructor() {
@@ -69,7 +78,7 @@ class AliasTestShell implements ShellIf {
 Deno.test('Alias Resolution', async (t) => {
   await t.step('alias resolves simple command', async () => {
     const shell = new AliasTestShell();
-    const ctx = new ExecContext();
+    const ctx = aliasContext();
     ctx.setAlias('ll', 'ls -la');
 
     await shell.runWithContext('ll', ctx);
@@ -81,7 +90,7 @@ Deno.test('Alias Resolution', async (t) => {
 
   await t.step('alias with additional arguments', async () => {
     const shell = new AliasTestShell();
-    const ctx = new ExecContext();
+    const ctx = aliasContext();
     ctx.setAlias('ll', 'ls -la');
 
     await shell.runWithContext('ll /tmp', ctx);
@@ -93,7 +102,7 @@ Deno.test('Alias Resolution', async (t) => {
 
   await t.step('alias resolves to different command', async () => {
     const shell = new AliasTestShell();
-    const ctx = new ExecContext();
+    const ctx = aliasContext();
     ctx.setAlias('dir', 'ls');
 
     await shell.runWithContext('dir', ctx);
@@ -104,7 +113,7 @@ Deno.test('Alias Resolution', async (t) => {
 
   await t.step('alias resolves with multiple flags', async () => {
     const shell = new AliasTestShell();
-    const ctx = new ExecContext();
+    const ctx = aliasContext();
     ctx.setAlias('la', 'ls -la --color=auto');
 
     await shell.runWithContext('la', ctx);
@@ -116,7 +125,7 @@ Deno.test('Alias Resolution', async (t) => {
 
   await t.step('unaliased command runs normally', async () => {
     const shell = new AliasTestShell();
-    const ctx = new ExecContext();
+    const ctx = aliasContext();
 
     await shell.runWithContext('ls -l', ctx);
 
@@ -127,7 +136,7 @@ Deno.test('Alias Resolution', async (t) => {
 
   await t.step('alias in script context', async () => {
     const shell = new AliasTestShell();
-    const ctx = new ExecContext();
+    const ctx = aliasContext();
     ctx.setAlias('hi', 'echo hello');
 
     await shell.runWithContext('hi; hi', ctx);
@@ -140,7 +149,7 @@ Deno.test('Alias Resolution', async (t) => {
 
   await t.step('alias in if statement', async () => {
     const shell = new AliasTestShell();
-    const ctx = new ExecContext();
+    const ctx = aliasContext();
     ctx.setAlias('ok', 'true');
 
     await shell.runWithContext('if ok; then echo yes; fi', ctx);
@@ -151,7 +160,7 @@ Deno.test('Alias Resolution', async (t) => {
 
   await t.step('alias in while condition', async () => {
     const shell = new AliasTestShell();
-    const ctx = new ExecContext();
+    const ctx = aliasContext();
     ctx.setAlias('fail', 'false');
 
     await shell.runWithContext('while fail; do echo never; done', ctx);
@@ -162,7 +171,7 @@ Deno.test('Alias Resolution', async (t) => {
 
   await t.step('alias in for loop body', async () => {
     const shell = new AliasTestShell();
-    const ctx = new ExecContext();
+    const ctx = aliasContext();
     ctx.setAlias('hi', 'echo hello');
 
     await shell.runWithContext('for i in 1 2; do hi; done', ctx);
@@ -174,7 +183,7 @@ Deno.test('Alias Resolution', async (t) => {
 
   await t.step('alias in pipeline', async () => {
     const shell = new AliasTestShell();
-    const ctx = new ExecContext();
+    const ctx = aliasContext();
     ctx.setAlias('hi', 'echo hello');
 
     await shell.runWithContext('hi | cat', ctx);
@@ -186,7 +195,7 @@ Deno.test('Alias Resolution', async (t) => {
 
   await t.step('alias in subshell', async () => {
     const shell = new AliasTestShell();
-    const ctx = new ExecContext();
+    const ctx = aliasContext();
     ctx.setAlias('hi', 'echo hello');
 
     await shell.runWithContext('(hi)', ctx);
@@ -198,7 +207,7 @@ Deno.test('Alias Resolution', async (t) => {
 
 Deno.test('Alias Context Inheritance', async (t) => {
   await t.step('child context inherits aliases', () => {
-    const parent = new ExecContext();
+    const parent = aliasContext();
     parent.setAlias('ll', 'ls -la');
 
     const child = parent.spawnContext();
@@ -206,7 +215,7 @@ Deno.test('Alias Context Inheritance', async (t) => {
   });
 
   await t.step('subContext copies aliases', () => {
-    const original = new ExecContext();
+    const original = aliasContext();
     original.setAlias('ll', 'ls -la');
 
     const copy = original.subContext();
@@ -214,7 +223,7 @@ Deno.test('Alias Context Inheritance', async (t) => {
   });
 
   await t.step('child alias changes affect parent', () => {
-    const parent = new ExecContext();
+    const parent = aliasContext();
     const child = parent.spawnContext();
 
     child.setAlias('new', 'command');
@@ -222,14 +231,14 @@ Deno.test('Alias Context Inheritance', async (t) => {
   });
 
   await t.step('unsetAlias removes alias', () => {
-    const ctx = new ExecContext();
+    const ctx = aliasContext();
     ctx.setAlias('ll', 'ls -la');
     ctx.unsetAlias('ll');
     assertEquals(ctx.getAlias('ll'), undefined);
   });
 
   await t.step('child unsetAlias affects parent', () => {
-    const parent = new ExecContext();
+    const parent = aliasContext();
     parent.setAlias('ll', 'ls -la');
 
     const child = parent.spawnContext();

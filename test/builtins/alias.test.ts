@@ -36,7 +36,7 @@ Deno.test('alias builtin', async (t) => {
     const ctx = new ExecContext();
     const result = await aliasBuiltin(ctx, ['nonexistent'], mockShell, noopExecute);
     assertEquals(result.code, 1);
-    assertEquals(result.stdout, 'alias: nonexistent: not found\n');
+    assertEquals(result.stderr, 'alias: nonexistent: not found\n');
   });
 
   await t.step('returns success with no arguments', async () => {

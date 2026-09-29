@@ -455,6 +455,28 @@ Deno.test('Loops - failing body', async (t) => {
     `);
     assertEquals(result.stdout, 'break\ncontinue\ndone\n');
   });
+
+  await t.step('break N and continue N leave N loops', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture(`
+      for i in a b; do for j in x y; do echo $i$j; break 2; done; echo end-$i; done
+      for i in a b; do for j in x y; do echo $i$j; continue 2; done; echo end-$i; done
+      for i in a; do while :; do break 9; done; echo not-here; done
+      echo "done $?"
+    `);
+    assertEquals(result.stdout, 'ax\nax\nbx\ndone 0\n');
+  });
+
+  await t.step('break outside a loop, a function called from one included, complains and does nothing', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture(`
+      f() { break; }
+      break; echo "status $?"
+      for i in 1 2; do f; echo $i; done
+    `);
+    assertEquals(result.stdout, 'status 0\n1\n2\n');
+    assertEquals(result.stderr.match(/only meaningful/g)?.length, 3);
+  });
 });
 
 Deno.test('Case Statements', async (t) => {

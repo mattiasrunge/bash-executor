@@ -37,3 +37,20 @@ export function backslashQuoted(value: string): string {
 
   return value.replace(/[^A-Za-z0-9_./,:@%+=^-]/g, '\\$&').replace(/^~/, '\\~');
 }
+
+/** As `declare -p` writes a value: in double quotes. */
+export function doubleQuoted(value: string): string {
+  return `"${value.replace(/(["\\$`])/g, '\\$1')}"`;
+}
+
+/**
+ * As `set` writes a value: as it is, unless something in it means something
+ * to the shell (bash's sh_contains_shell_metas); a `#` or `~` only at the start.
+ */
+export function quotedIfNeeded(value: string): string {
+  if (CONTROL.test(value)) return ansiC(value);
+  if (!/[ \t\n'"\\|&;()<>!{}*[?\]^$`]|^#|(?:^|[=:])~/.test(value)) return value;
+
+  // A lone quote bash writes as \'
+  return value === "'" ? "\\'" : `'${value.replaceAll("'", "'\\''")}'`;
+}

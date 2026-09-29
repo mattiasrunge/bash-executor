@@ -1,6 +1,5 @@
+import { hashedCommand } from './command-hash.ts';
 import {
-  type AstArithmeticExpression,
-  type AstArithmeticIdentifier,
   type AstConditionalBinaryExpression,
   type AstConditionalExpression,
   type AstConditionalLogicalExpression,
@@ -28,13 +27,12 @@ import {
   type AstNodeWord,
   BashSyntaxError,
   parse,
-  parseArithmetic,
   type ProtectedRange,
   utils,
 } from '@ein/bash-parser';
 import { getExitCode, getReturnCode, isExitSignal, isReturnSignal, makeExitSignal } from './builtins/exit.ts';
 import { JOB_BUILTINS } from './builtins/jobs.ts';
-import type { BuiltinRegistry } from './builtins/types.ts';
+import { type BuiltinRegistry, SPECIAL_BUILTINS } from './builtins/types.ts';
 import type { ErrorPosition } from './errors.ts';
 import { singleQuoted } from './quote.ts';
 import { contextVariables, evaluateArithmeticText } from './arith.ts';
@@ -48,22 +46,33 @@ import {
   ReadonlyVariableError,
   UnboundVariableError,
   UnknownNodeTypeError,
-  UnsupportedArithmeticNodeError,
   UnsupportedOperatorError,
 } from './errors.ts';
-import { type ExecContextIf, type ExecSyncResult, type ExecuteAndCaptureOptions, SHELL_OPTION_FLAG_MAP, type ShellIf } from './types.ts';
+import { type ExecCommandOptions, type ExecContextIf, type ExecSyncResult, type ExecuteAndCaptureOptions, SHELL_OPTION_FLAG_MAP, type ShellIf } from './types.ts';
 
 // The special parameters, which are set even when nothing has assigned to them
 /** POSIX's special builtins: in POSIX mode an assignment before one outlasts it. */
-const SPECIAL_BUILTINS = new Set(['break', ':', '.', 'continue', 'eval', 'exec', 'exit', 'export', 'readonly', 'return', 'set', 'shift', 'times', 'trap', 'unset']);
 
 const ALWAYS_SET_PARAMS = new Set(['?', '#', '$', '!', '0', '-', '_', '@', '*']);
 
 // What bash exits with when an expansion fails in a non-interactive shell
 const UNBOUND_VARIABLE_CODE = 127 as const;
 
-const CONTINUE_CODE = -10 as const;
-const BREAK_CODE = -11 as const;
+/**
+ * `break N` and `continue N` are carried out of a loop's body as reserved
+ * codes, one per number of loops still to leave: each loop they pass through
+ * takes one off, and the last one breaks or continues.
+ */
+const BREAK_BASE = -3000;
+const CONTINUE_BASE = -4000;
+
+function loopControl(kind: 'break' | 'continue', levels: number): number {
+  return (kind === 'break' ? BREAK_BASE : CONTINUE_BASE) - levels;
+}
+
+function isLoopControl(code: number): boolean {
+  return code < BREAK_BASE && code > CONTINUE_BASE - 1000 && code !== CONTINUE_BASE;
+}
 
 /**
  * Operators that apply to every element of `${a[@]}` rather than to the elements
@@ -214,6 +223,40 @@ export class AstExecutor {
     await this.shell.pipeWrite(ctx.getStderr(), prefix ? text.replace(/^(?=.)(?![\w-]+: usage: )/gm, prefix) : text).catch(() => {});
   }
 
+  /** The file each function was defined in, for its BASH_SOURCE. */
+  private functionSources = new WeakMap<object, string>();
+
+  /** The file running now, as BASH_SOURCE names it: `environment` for a string run as it is. */
+  private currentFile(ctx: ExecContextIf): string {
+    return ctx.getArray('BASH_SOURCE')?.[0] ?? 'environment';
+  }
+
+  /**
+   * Run a function or a sourced file as a frame of the call stack bash keeps
+   * in FUNCNAME, BASH_SOURCE and BASH_LINENO: its name, the file it is from,
+   * and the line it was called on. The arrays are the stack, so a subshell
+   * has its own copy of it.
+   */
+  private async inCallFrame<T>(ctx: ExecContextIf, name: string, source: string, run: () => Promise<T>): Promise<T> {
+    const names = ctx.getArray('FUNCNAME');
+    const sources = ctx.getArray('BASH_SOURCE');
+    const lines = ctx.getArray('BASH_LINENO');
+
+    // `main` is the script itself, shown only once something is above it
+    ctx.setArray('FUNCNAME', [name, ...(names?.length ? names : sources?.length ? ['main'] : [])]);
+    ctx.setArray('BASH_SOURCE', [source, ...(sources ?? [])]);
+    ctx.setArray('BASH_LINENO', [ctx.getParams().LINENO ?? '0', ...(lines ?? [])]);
+
+    try {
+      return await run();
+    } finally {
+      for (const [array, values] of [['FUNCNAME', names], ['BASH_SOURCE', sources], ['BASH_LINENO', lines]] as const) {
+        if (values) ctx.setArray(array, values);
+        else ctx.unsetArray(array);
+      }
+    }
+  }
+
   /**
    * Run source that is not the script — an `eval`'s string, a sourced file —
    * with `$LINENO` counted from where it stands.
@@ -303,7 +346,15 @@ export class AstExecutor {
    *                      at a time ends the shell on it.
    * @returns {Promise<number>} - The exit code of the executed script.
    */
-  public async execute(source: string, ctx: ExecContextIf, opts: { exited?: { value: boolean } } = {}): Promise<number> {
+  public async execute(source: string, ctx: ExecContextIf, opts: { exited?: { value: boolean }; file?: string } = {}): Promise<number> {
+    // A script read from a file is `main` at the bottom of the call stack, and
+    // the file its BASH_SOURCE; a string run as it is has no such frame
+    if (opts.file !== undefined && !ctx.getArray('BASH_SOURCE')?.length) {
+      ctx.setArray('FUNCNAME', []);
+      ctx.setArray('BASH_SOURCE', [opts.file]);
+      ctx.setArray('BASH_LINENO', ['0']);
+    }
+
     const code = await this.executeSource(source, ctx);
 
     if (isExitSignal(code)) {
@@ -343,7 +394,9 @@ export class AstExecutor {
     // that is instead done during execution with resolveExpansions.
     const options = {
       insertLOC: true,
-      resolveAlias: async (name: string) => ctx.getAlias(name),
+      // Aliases expand only under `shopt -s expand_aliases`, which an
+      // interactive bash turns on and a script has to ask for
+      resolveAlias: async (name: string) => ctx.getShellOption('expand_aliases') ? ctx.getAlias(name) : undefined,
 
       resolveHomeUser: this.shell.resolveHomeUser ? (async (username: string | null) => this.shell.resolveHomeUser!(ctx, username)) : undefined,
     };
@@ -536,7 +589,7 @@ export class AstExecutor {
 
       const code = await this.executeNode({ ...node, bang: false } as AstNode, inner);
 
-      if (isExitSignal(code) || isReturnSignal(code) || code === BREAK_CODE || code === CONTINUE_CODE) {
+      if (isExitSignal(code) || isReturnSignal(code) || isLoopControl(code)) {
         return code;
       }
 
@@ -998,6 +1051,26 @@ export class AstExecutor {
         }
       }
 
+      // `-a name` runs the command as `name`, `-l` as a login shell's `-name`, `-c` with no environment
+      const options: ExecCommandOptions = {};
+      let login = false;
+
+      while (words[0] && /^-[acl]+$/.test(words[0].text) && !words[0].expansion?.length) {
+        const flags = words.shift()!.text.slice(1);
+
+        if (flags.includes('c')) options.clearEnv = true;
+        if (flags.includes('l')) login = true;
+
+        if (flags.includes('a')) {
+          if (!words[0]) {
+            await this.diagnose(parentCtx, 'exec: -a: option requires an argument');
+            return 2;
+          }
+
+          options.argv0 = await this.resolveWordValue(words.shift(), parentCtx);
+        }
+      }
+
       if (words[0]?.text === '--') {
         words.shift();
       }
@@ -1005,7 +1078,10 @@ export class AstExecutor {
       // `exec cmd args`: the command takes the shell's place, so the shell ends
       // with its status. The redirections are the command's own.
       if (words.length > 0) {
-        const code = await this.runCommand({ ...node, name: words[0], suffix: [...words.slice(1), ...(redirects ?? [])] }, parentCtx);
+        if (login) options.argv0 = `-${options.argv0 ?? words[0].text}`;
+
+        const command = { ...node, name: words[0], suffix: [...words.slice(1), ...(redirects ?? [])], execOptions: options };
+        const code = await this.runCommand(command, parentCtx);
 
         // A command that could not be run leaves the shell standing only under `shopt -s execfail`
         if ((code === 126 || code === 127) && parentCtx.getShellOption('execfail')) {
@@ -1143,12 +1219,8 @@ export class AstExecutor {
     // Loop control is carried out of the body as a reserved exit code. Only the
     // command *name* means it — `echo break` is an argument that happens to read
     // "break", and used to terminate the enclosing loop.
-    if (cmdName === 'break') {
-      return BREAK_CODE;
-    }
-
-    if (cmdName === 'continue') {
-      return CONTINUE_CODE;
+    if (cmdName === 'break' || cmdName === 'continue') {
+      return this.loopControl(cmdName, args, ctx);
     }
     let code: number;
 
@@ -1158,10 +1230,9 @@ export class AstExecutor {
       if (builtin) {
         // A sourced file counts its own lines; an eval's string goes on from its line
         const execute = (script: string, opts: { file?: string } = {}) =>
-          this.inSourceFrame(
-            opts.file !== undefined ? { base: 0, name: opts.file } : { base: Number(ctx.getParams().LINENO ?? 1) - 1, name: this.sourceFrame.name },
-            () => this.executeSource(script, ctx),
-          );
+          opts.file !== undefined
+            ? this.inCallFrame(ctx, 'source', opts.file, () => this.inSourceFrame({ base: 0, name: opts.file }, () => this.executeSource(script, ctx)))
+            : this.inSourceFrame({ base: Number(ctx.getParams().LINENO ?? 1) - 1, name: this.sourceFrame.name }, () => this.executeSource(script, ctx));
         const result = await builtin(ctx, args || [], this.shell, execute);
 
         code = result.code;
@@ -1192,13 +1263,16 @@ export class AstExecutor {
         if (fn) {
           code = await this.executeFunction(ctx, fn, args || []);
         } else {
-          // Execute external command
+          // Execute external command: a hashed one from the file it was hashed to
+          const hashed = cmdName.includes('/') ? undefined : hashedCommand(ctx, cmdName);
+
           code = await this.shell.execute(
             ctx,
-            cmdName,
+            hashed ?? cmdName,
             args || [],
             {
               async: node.async,
+              ...(node as { execOptions?: ExecCommandOptions }).execOptions,
             },
           );
         }
@@ -1276,15 +1350,24 @@ export class AstExecutor {
     });
 
     const returnTrap = ctx.getTrap('RETURN');
+    const getopts = ctx.getGetoptsState();
+    // A function is in no loop of its own, whatever loop it was called from
+    const loopDepth = this.loopDepth;
 
     this.functionDepth++;
+    this.loopDepth = 0;
 
     let result: number;
 
     try {
-      result = await this.executeNode(fn.body, fnCtx);
+      result = await this.inCallFrame(fnCtx, fn.name, this.functionSources.get(fn.body) ?? 'environment', () => this.executeNode(fn.body, fnCtx));
     } finally {
       this.functionDepth--;
+      this.loopDepth = loopDepth;
+
+      // A function with a `local OPTIND` hands the caller's getopts back as it
+      // found it, so a getopts loop can call one that has a loop of its own
+      if ('OPTIND' in fnCtx.setLocalParams({})) ctx.setGetoptsState(getopts);
     }
 
     // Convert return signal to actual return code
@@ -1560,7 +1643,7 @@ export class AstExecutor {
         return getReturnCode(code);
       }
 
-      return code === BREAK_CODE || code === CONTINUE_CODE ? 0 : code;
+      return isLoopControl(code) ? 0 : code;
     });
 
     ctx.setArray('PIPESTATUS', statuses.map((status) => String(status)));
@@ -1570,7 +1653,7 @@ export class AstExecutor {
     // the shell, and an `exit` or `return` there is the shell's.
     const lastCode = codes[codes.length - 1];
 
-    if (lastpipe && (isExitSignal(lastCode) || isReturnSignal(lastCode) || lastCode === BREAK_CODE || lastCode === CONTINUE_CODE)) {
+    if (lastpipe && (isExitSignal(lastCode) || isReturnSignal(lastCode) || isLoopControl(lastCode))) {
       return lastCode;
     }
 
@@ -1598,7 +1681,7 @@ export class AstExecutor {
    * stage) answers for everything it called, functions included.
    */
   protected async applyErrexit(code: number, ctx: ExecContextIf): Promise<number> {
-    if (code === 0 || isExitSignal(code) || isReturnSignal(code) || code === BREAK_CODE || code === CONTINUE_CODE) {
+    if (code === 0 || isExitSignal(code) || isReturnSignal(code) || isLoopControl(code)) {
       return code;
     }
 
@@ -1804,7 +1887,7 @@ export class AstExecutor {
         lastCode = await this.executeNode(command, ctx);
 
         // Propagate exit, return, break, and continue signals immediately
-        if (isExitSignal(lastCode) || isReturnSignal(lastCode) || lastCode === CONTINUE_CODE || lastCode === BREAK_CODE) {
+        if (isExitSignal(lastCode) || isReturnSignal(lastCode) || isLoopControl(lastCode)) {
           return lastCode;
         }
 
@@ -1829,6 +1912,7 @@ export class AstExecutor {
     const ctx = parentCtx.spawnContext();
     await this.applyRedirections(ctx, node.redirections);
     parentCtx.setFunction(node.name.text, node.body, ctx);
+    this.functionSources.set(node.body, this.currentFile(parentCtx));
 
     return 0;
   }
@@ -1882,6 +1966,36 @@ export class AstExecutor {
     });
   }
 
+  /** How many loops the command running now is inside, in this function: bash's loop_level. */
+  private loopDepth = 0;
+
+  /**
+   * `break [n]` and `continue [n]`: the code that carries them out of the
+   * body, or, outside a loop, a complaint and status 0, as in bash.
+   */
+  private async loopControl(name: 'break' | 'continue', args: string[], ctx: ExecContextIf): Promise<number> {
+    if (this.loopDepth === 0) {
+      await this.diagnose(ctx, `${name}: only meaningful in a \`for', \`while', or \`until' loop`);
+      return 0;
+    }
+
+    const arg = args[0];
+
+    if (arg !== undefined && !/^\s*[+-]?\d+\s*$/.test(arg)) {
+      throw new CommandAbortError(`${name}: ${arg}: numeric argument required`, { code: 'E_NUMERIC_ARGUMENT' });
+    }
+
+    const levels = arg === undefined ? 1 : Number(arg);
+
+    // bash leaves every loop after complaining about a count below one
+    if (levels <= 0) {
+      await this.diagnose(ctx, `${name}: ${arg}: loop count out of range`);
+      return loopControl('break', this.loopDepth);
+    }
+
+    return loopControl(name, Math.min(levels, this.loopDepth));
+  }
+
   /**
    * Run one loop iteration and decide what the loop does next.
    *
@@ -1891,14 +2005,26 @@ export class AstExecutor {
    * change the flow.
    */
   private async runLoopBody(body: AstNode, ctx: ExecContextIf): Promise<{ stop: boolean; code: number }> {
-    const code = await this.executeNode(body, ctx);
+    this.loopDepth++;
 
-    if (code === BREAK_CODE) {
-      return { stop: true, code: 0 };
+    let code: number;
+
+    try {
+      code = await this.executeNode(body, ctx);
+    } finally {
+      this.loopDepth--;
     }
 
-    if (code === CONTINUE_CODE) {
-      return { stop: false, code: 0 };
+    if (isLoopControl(code)) {
+      const breaking = code > CONTINUE_BASE;
+      const levels = breaking ? BREAK_BASE - code : CONTINUE_BASE - code;
+
+      // `break 2` leaves this loop as the one around it still has to
+      if (levels > 1) {
+        return { stop: true, code: loopControl(breaking ? 'break' : 'continue', levels - 1) };
+      }
+
+      return { stop: breaking, code: 0 };
     }
 
     // Propagate exit and return signals
@@ -2121,7 +2247,7 @@ export class AstExecutor {
         status = caseItem.body ? await this.executeNode(caseItem.body, ctx) : 0;
 
         // exit, return, break and continue leave the case as they are
-        if (isExitSignal(status) || isReturnSignal(status) || status === BREAK_CODE || status === CONTINUE_CODE) {
+        if (isExitSignal(status) || isReturnSignal(status) || isLoopControl(status)) {
           return status;
         }
 

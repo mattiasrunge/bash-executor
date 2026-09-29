@@ -38,3 +38,26 @@ export type BuiltinHandler = (
  * Registry mapping builtin names to their handlers.
  */
 export type BuiltinRegistry = Map<string, BuiltinHandler>;
+
+/** POSIX's special builtins: an assignment before one stays, in posix mode an error in one ends the shell. */
+export const SPECIAL_BUILTINS: ReadonlySet<string> = new Set([
+  'break',
+  ':',
+  '.',
+  'continue',
+  'eval',
+  'exec',
+  'exit',
+  'export',
+  'readonly',
+  'return',
+  'set',
+  'shift',
+  'source',
+  'times',
+  'trap',
+  'unset',
+]);
+
+/** Builtins the executor carries out itself, which are in no registry. */
+export const EXECUTOR_BUILTINS: ReadonlySet<string> = new Set(['break', 'continue', 'exec']);

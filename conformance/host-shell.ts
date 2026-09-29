@@ -203,7 +203,6 @@ export class RealShell implements ShellIf {
 
   // ===== External commands =====
 
-  /** Where PATH finds `name`, or null. A name with a slash is taken as a path. */
   /** Where a diagnostic comes from, as a non-interactive bash says it: `./x.sh: line 3: `. */
   private where(ctx: ExecContextIf): string {
     const line = ctx.getParams().LINENO;
@@ -211,14 +210,21 @@ export class RealShell implements ShellIf {
     return `${this.opts.name()}: ${line ? `line ${line}: ` : ''}`;
   }
 
+  /** Where PATH finds `name`, or null. A name with a slash is taken as a path. */
   private async which(ctx: ExecContextIf, name: string): Promise<string | null> {
+    return (await this.lookupCommand(ctx, name))[0] ?? null;
+  }
+
+  async lookupCommand(ctx: ExecContextIf, name: string, search?: string): Promise<string[]> {
     if (name.includes('/')) {
       const path = this.path(ctx, name);
 
-      return (await statOf(path)) ? path : null;
+      return (await statOf(path)) ? [path] : [];
     }
 
-    const search = ctx.getEnv().PATH ?? ctx.getParams().PATH ?? '/usr/local/bin:/usr/bin:/bin';
+    search ??= ctx.getEnv().PATH ?? ctx.getParams().PATH ?? '/usr/local/bin:/usr/bin:/bin';
+
+    const found: string[] = [];
 
     for (const dir of search.split(':')) {
       const candidate = this.path(ctx, join(dir || '.', name));
@@ -227,14 +233,14 @@ export class RealShell implements ShellIf {
         const stat = await Deno.stat(candidate);
 
         if (stat.isFile && ((stat.mode ?? 0) & 0o111)) {
-          return candidate;
+          found.push(candidate);
         }
       } catch {
         // not in this directory
       }
     }
 
-    return null;
+    return found;
   }
 
   async execute(ctx: ExecContextIf, name: string, args: string[], opts: ExecCommandOptions): Promise<number> {
@@ -260,7 +266,7 @@ export class RealShell implements ShellIf {
       return 126;
     }
 
-    const run = this.spawn(ctx, name, path, args);
+    const run = this.spawn(ctx, name, path, args, false, opts);
 
     if (opts.async) {
       this.track(run);
@@ -271,7 +277,7 @@ export class RealShell implements ShellIf {
     return await run;
   }
 
-  private async spawn(ctx: ExecContextIf, name: string, path: string, args: string[], viaSelf = false): Promise<number> {
+  private async spawn(ctx: ExecContextIf, name: string, path: string, args: string[], viaSelf = false, opts: ExecCommandOptions = {}): Promise<number> {
     const stdin = ctx.getStdin();
     const stdout = ctx.getStdout();
     const stderr = ctx.getStderr();
@@ -279,10 +285,12 @@ export class RealShell implements ShellIf {
     let child: Deno.ChildProcess;
 
     try {
+      Deno.umask(ctx.getUmask());
       child = new Deno.Command(viaSelf ? this.opts.selfCommand[0] : path, {
         args: viaSelf ? [...this.opts.selfCommand.slice(1), path, ...args] : args,
         cwd: ctx.getCwd(),
-        env: { ...ctx.getEnv(), ...this.opts.hostEnv },
+        // Deno cannot set a child's argv[0]; bash-ts takes it from the environment
+        env: { ...(opts.clearEnv ? {} : ctx.getEnv()), ...this.opts.hostEnv, ...(opts.argv0 === undefined ? {} : { BASH_TS_ARGV0: opts.argv0 }) },
         clearEnv: true,
         stdin: stdin === '0' ? 'inherit' : 'piped',
         stdout: stdout === '1' ? 'inherit' : 'piped',
@@ -498,6 +506,7 @@ export class RealShell implements ShellIf {
     let file: Deno.FsFile | null = null;
 
     try {
+      Deno.umask(ctx.getUmask());
       file = await Deno.open(this.path(ctx, path), { write: true, create: true, append, truncate: !append });
     } catch (err) {
       await this.error(`${path}: ${describe(err)}`);
@@ -526,6 +535,9 @@ export class RealShell implements ShellIf {
   async fdOpen(ctx: ExecContextIf, path: string, mode: string, fd?: string): Promise<string> {
     const name = fd ?? String(10 + ++this.pipeCounter);
     const writable = mode.includes('w') || mode.includes('+') || mode.includes('a');
+
+    Deno.umask(ctx.getUmask());
+
     const file = await Deno.open(this.path(ctx, path), {
       read: mode.includes('r') || mode.includes('+'),
       write: writable,

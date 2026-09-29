@@ -757,9 +757,7 @@ export const argBuiltin: BuiltinHandler = async (
         // A script that declares its arguments with `arg` knows them as precisely as a compiled
         // command knows its spec, and a caller that asked for JSON — a tool-schema generator,
         // an agent reading `command_help` — wants the structure, not a usage block to parse.
-        const helpText = ctx.getEnv().JSON_OUTPUT === '1'
-          ? JSON.stringify(generateSpec(registry, scriptName))
-          : generateHelp(registry, scriptName);
+        const helpText = ctx.getEnv().JSON_OUTPUT === '1' ? JSON.stringify(generateSpec(registry, scriptName)) : generateHelp(registry, scriptName);
 
         // Clean up registry
         argRegistries.delete(root);

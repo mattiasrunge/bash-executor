@@ -21,6 +21,13 @@ export type FunctionDef = {
  * @property {string} stdout - The standard output stream.
  * @property {string} stderr - The standard error stream.
  */
+/**
+ * Where getopts stands inside a group of options such as `-abc` between two
+ * calls: the argument, and the index of its next option character. bash's
+ * sh_curopt and sh_charindex.
+ */
+export type GetoptsState = { curopt: number; charindex: number };
+
 export type IO = {
   stdin: string;
   stdout: string;
@@ -36,6 +43,10 @@ export type IO = {
  */
 export type ExecCommandOptions = {
   async?: boolean;
+  /** The name to run the command as, its argv[0], when it is not the name: `exec -a`, `exec -l` */
+  argv0?: string;
+  /** Run the command with an empty environment: `exec -c` */
+  clearEnv?: boolean;
 };
 
 /**
@@ -335,6 +346,15 @@ export interface ShellIf {
    * @param path - The path to remove.
    */
   removeTempFile?: (ctx: ExecContextIf, path: string) => Promise<void>;
+
+  /**
+   * The files a command name could run, found on `path` (by default PATH) as
+   * the host finds commands, in the order it looks: the first is the one that
+   * runs, and none means there is no such command. A name with a slash is a
+   * path, found when the file is there. `type`, `command -v` and `hash` ask
+   * this, and ask `which -a` when the host has no answer of its own.
+   */
+  lookupCommand?: (ctx: ExecContextIf, name: string, path?: string) => Promise<string[]>;
 
   /**
    * A callback to resolve path globbing. If specified, the parser calls it whenever it needs to resolve path globbing. It should return the expanded path. If the option is not specified, the parser won't try to resolve any path globbing.
@@ -657,6 +677,22 @@ export interface ExecContextIf {
 
   /** The shell's job table: a subshell has one of its own, empty. */
   getJobTable(): JobTable;
+
+  /**
+   * Where getopts left off inside an argument, or undefined at the start of
+   * one. Assigning or unsetting OPTIND clears it, as it does in bash.
+   */
+  getGetoptsState(): GetoptsState | undefined;
+
+  setGetoptsState(state: GetoptsState | undefined): void;
+
+  /**
+   * The shell's file creation mask, as `umask` sets it: 022 until then. The
+   * executor only keeps it; a host that creates files applies it.
+   */
+  getUmask(): number;
+
+  setUmask(mask: number): void;
 
   /**
    * Gets all aliases from the execution context.

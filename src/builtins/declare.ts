@@ -5,6 +5,7 @@
  */
 
 import { contextVariables, evaluateArithmeticText } from '../arith.ts';
+import { doubleQuoted } from '../quote.ts';
 import type { ExecContextIf, ShellIf } from '../types.ts';
 import type { BuiltinHandler, BuiltinResult } from './types.ts';
 import { assignArrayArg } from './variables.ts';
@@ -23,16 +24,11 @@ function attributes(ctx: ExecContextIf, name: string): string {
   return flags ? `-${flags}` : '--';
 }
 
-/** A value in double quotes, as `declare -p` writes it. */
-function quoted(value: string): string {
-  return `"${value.replace(/(["\\$`])/g, '\\$1')}"`;
-}
-
 /**
  * Render an array the way `declare -p` does: `declare -a a=([0]="x" [1]="y")`.
  */
 function printArray(ctx: ExecContextIf, name: string, values: string[]): string {
-  const elements = Object.entries(values).map(([index, value]) => `[${index}]=${quoted(value)}`);
+  const elements = Object.entries(values).map(([index, value]) => `[${index}]=${doubleQuoted(value)}`);
 
   return `declare ${attributes(ctx, name)} ${name}=(${elements.join(' ')})\n`;
 }
@@ -41,7 +37,7 @@ function printArray(ctx: ExecContextIf, name: string, values: string[]): string 
  * Render an associative array: `declare -A a=([k]="v")`.
  */
 function printAssoc(ctx: ExecContextIf, name: string, values: Record<string, string>): string {
-  const elements = Object.entries(values).map(([key, value]) => `[${key}]=${quoted(value)}`);
+  const elements = Object.entries(values).map(([key, value]) => `[${key}]=${doubleQuoted(value)}`);
 
   return `declare ${attributes(ctx, name)} ${name}=(${elements.join(' ')})\n`;
 }
@@ -186,7 +182,7 @@ export const declareBuiltin: BuiltinHandler = async (
       for (const [name, value] of Object.entries({ ...env, ...params })) {
         if (!isValidName(name)) continue;
 
-        output += `declare ${attributes(ctx, name)} ${name}=${quoted(value)}\n`;
+        output += `declare ${attributes(ctx, name)} ${name}=${doubleQuoted(value)}\n`;
       }
 
       for (const [name, values] of Object.entries(ctx.getArrays())) {
@@ -270,7 +266,7 @@ export const declareBuiltin: BuiltinHandler = async (
       const currentValue = env[name] ?? params[name];
 
       if (currentValue !== undefined) {
-        output += `declare ${attributes(ctx, name)} ${name}=${quoted(currentValue)}\n`;
+        output += `declare ${attributes(ctx, name)} ${name}=${doubleQuoted(currentValue)}\n`;
       } else {
         errors += `declare: ${name}: not found\n`;
         hasError = true;

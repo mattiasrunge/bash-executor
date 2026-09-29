@@ -90,7 +90,7 @@ function parseArgs(argv: string[]): Invocation {
 
   if (readCommand) {
     inv.command = rest[0] ?? '';
-    inv.name = rest[1] ?? 'bash';
+    inv.name = rest[1] ?? Deno.env.get('BASH_TS_ARGV0') ?? 'bash';
     inv.args = rest.slice(2);
   } else if (rest.length > 0) {
     inv.file = rest[0];
@@ -170,6 +170,7 @@ async function main(): Promise<number> {
   const ctx = new ExecContext();
 
   ctx.setCwd(Deno.cwd());
+  ctx.setUmask(Deno.umask());
   ctx.setEnv(Object.fromEntries(Object.entries(Deno.env.toObject()).filter(([name]) => !name.startsWith('BASH_TS_'))));
 
   const positional: Record<string, string> = { '0': inv.name, '#': String(inv.args.length) };
@@ -181,6 +182,8 @@ async function main(): Promise<number> {
     PPID: String(Deno.ppid),
     BASH: self.length === 1 ? self[0] : 'bash-ts',
     BASH_VERSION,
+    OPTIND: '1',
+    OPTERR: '1',
   });
   ctx.setArray('BASH_VERSINFO', ['5', '2', '21', '1', 'release', 'x86_64-pc-linux-gnu']);
 
@@ -207,7 +210,7 @@ async function main(): Promise<number> {
   let code: number;
 
   try {
-    code = getExitCode(await executor.execute(source, ctx));
+    code = getExitCode(await executor.execute(source, ctx, { file: inv.command === undefined ? inv.file : undefined }));
   } catch (err) {
     if (err instanceof BashSyntaxError) {
       // The executor has run the complete commands before the error already

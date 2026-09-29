@@ -1,6 +1,6 @@
 import type { AstNodeCompoundList } from '@ein/bash-parser';
 import { JobTable } from './jobs.ts';
-import { DEFAULT_SHELL_OPTIONS, DEFAULT_SHOPT_OPTIONS, type ExecContextIf, type FunctionDef, type IO } from './types.ts';
+import { DEFAULT_SHELL_OPTIONS, DEFAULT_SHOPT_OPTIONS, type ExecContextIf, type FunctionDef, type GetoptsState, type IO } from './types.ts';
 
 // TODO: We need to define when cwd or params should go to parent or not...
 
@@ -30,6 +30,8 @@ export class ExecContext implements ExecContextIf {
   private alias: Record<string, string> = {};
   private traps: Record<string, string> = {};
   private jobTable = new JobTable();
+  private getoptsState?: GetoptsState;
+  private umask = 0o022;
   private readonlyVars = new Set<string>();
   private integerVars = new Set<string>();
   private dirStack: string[] = [];
@@ -96,6 +98,8 @@ export class ExecContext implements ExecContextIf {
     }
 
     ctx.jobTable = this.getJobTable().copy();
+    ctx.getoptsState = this.getGetoptsState();
+    ctx.umask = this.getUmask();
 
     // A subshell does not run the shell's traps, but what the shell ignores it
     // ignores too, as in bash
@@ -180,6 +184,8 @@ export class ExecContext implements ExecContextIf {
   }
 
   setLocalEnv(values: Record<string, string | null>): Record<string, string> {
+    this.assigningSpecial(values);
+
     for (const key in values) {
       if (values[key] === null) {
         delete this.env[key];
@@ -324,6 +330,8 @@ export class ExecContext implements ExecContextIf {
   setLocalParams(
     values: Record<string, string | null>,
   ): Record<string, string> {
+    this.assigningSpecial(values);
+
     for (const key in values) {
       if (!this.parent && this.dynamic.has(key)) {
         if (values[key] === null) {
@@ -542,6 +550,32 @@ export class ExecContext implements ExecContextIf {
 
   getJobTable(): JobTable {
     return this.parent ? this.parent.getJobTable() : this.jobTable;
+  }
+
+  /**
+   * What assigning a variable does besides: a new OPTIND starts getopts over,
+   * as bash's sv_optind does, and a new PATH empties the table of hashed
+   * commands, as its sv_path does.
+   */
+  private assigningSpecial(values: Record<string, string | null>): void {
+    if ('OPTIND' in values) this.setGetoptsState(undefined);
+    if ('PATH' in values) delete this.root().assocs.BASH_CMDS;
+  }
+
+  getUmask(): number {
+    return this.root().umask;
+  }
+
+  setUmask(mask: number): void {
+    this.root().umask = mask & 0o777;
+  }
+
+  getGetoptsState(): GetoptsState | undefined {
+    return this.root().getoptsState;
+  }
+
+  setGetoptsState(state: GetoptsState | undefined): void {
+    this.root().getoptsState = state;
   }
 
   getTrap(name: string): string | undefined {

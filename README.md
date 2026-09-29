@@ -108,6 +108,15 @@ there; without one it cannot refuse.
 context and act on — job control, background-job reports and what Ctrl-D does at
 a prompt are the host shell's, not the executor's.
 
+`shopt -s expand_aliases` is off by default, as in a bash script: an interactive
+host turns it on, or aliases are defined but never expanded.
+
+Some builtins ask the host what only it knows. `type`, `command -v` and `hash`
+find commands with the `lookupCommand` callback (falling back to running `which
+-a`); `umask` keeps the mask on the context (`getUmask`) for the host to apply to
+what it creates; and `exec -a`/`-c` hand `argv0` and `clearEnv` to `execute` in
+its options.
+
 ## Contributing
 
 Contributions are welcome! Please see the [`CONTRIBUTING.md`](./CONTRIBUTING.md) file for guidelines on how to contribute to this project.

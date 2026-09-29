@@ -9,45 +9,55 @@ import type { BuiltinHandler } from './types.ts';
  * aliases in the form name=value. Without =value, prints the alias for name.
  */
 export const aliasBuiltin: BuiltinHandler = async (ctx, args) => {
-  if (args.length === 0) {
-    // List all aliases
-    const aliases = ctx.getAliases();
-    let output = '';
-    for (const [name, value] of Object.entries(aliases).sort()) {
-      output += `alias ${name}='${value}'\n`;
+  // `-p` lists them all as well, before anything the rest defines or prints
+  let list = args.length === 0;
+
+  while (args[0]?.startsWith('-') && args[0] !== '-') {
+    const option = args.shift()!;
+
+    if (option === '--') break;
+
+    for (const flag of option.slice(1)) {
+      if (flag !== 'p') return { code: 2, stderr: `alias: -${flag}: invalid option\nalias: usage: alias [-p] [name[=value] ... ]\n` };
     }
-    return { code: 0, stdout: output };
+
+    list = true;
   }
 
-  let output = '';
-  let allFound = true;
+  let stdout = '';
+  let stderr = '';
+
+  if (list) {
+    for (const [name, value] of Object.entries(ctx.getAliases()).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) {
+      stdout += `alias ${name}=${aliasQuoted(value)}\n`;
+    }
+  }
 
   for (const arg of args) {
     const eqIdx = arg.indexOf('=');
 
     if (eqIdx > 0) {
       // name=value form - define alias
-      const name = arg.substring(0, eqIdx);
-      const value = arg.substring(eqIdx + 1);
-      ctx.setAlias(name, value);
+      ctx.setAlias(arg.substring(0, eqIdx), arg.substring(eqIdx + 1));
     } else {
       // name only form - print alias if it exists
       const alias = ctx.getAlias(arg);
+
       if (alias !== undefined) {
-        output += `alias ${arg}='${alias}'\n`;
+        stdout += `alias ${arg}=${aliasQuoted(alias)}\n`;
       } else {
-        output += `alias: ${arg}: not found\n`;
-        allFound = false;
+        stderr += `alias: ${arg}: not found\n`;
       }
     }
   }
 
-  if (output) {
-    return { code: allFound ? 0 : 1, stdout: output };
-  }
-
-  return { code: 0 };
+  return { code: stderr ? 1 : 0, stdout, stderr };
 };
+
+/** In single quotes, as bash's sh_single_quote writes an alias's value. */
+function aliasQuoted(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
 
 /**
  * The unalias builtin - remove aliases.

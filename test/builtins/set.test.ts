@@ -30,8 +30,8 @@ Deno.test('set builtin', async (t) => {
     ctx.setEnv({ FOO: 'bar', BAZ: 'qux' });
     const result = await setBuiltin(ctx, [], mockShell, noopExecute);
     assertEquals(result.code, 0);
-    assertStringIncludes(result.stdout || '', "FOO='bar'");
-    assertStringIncludes(result.stdout || '', "BAZ='qux'");
+    assertStringIncludes(result.stdout || '', 'FOO=bar');
+    assertStringIncludes(result.stdout || '', 'BAZ=qux');
   });
 
   await t.step('sets positional parameters with --', async () => {

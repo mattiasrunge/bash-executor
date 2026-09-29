@@ -5,7 +5,7 @@
  */
 
 import { BashSyntaxError } from '../errors.ts';
-import { getReturnCode, isReturnSignal } from './exit.ts';
+import { getReturnCode, isReturnSignal, makeExitSignal } from './exit.ts';
 import type { ExecContextIf, ShellIf } from '../types.ts';
 import type { BuiltinHandler, BuiltinResult } from './types.ts';
 
@@ -41,37 +41,101 @@ export const sourceBuiltin: BuiltinHandler = async (
     };
   }
 
-  const filename = args[0];
-  // Additional arguments would become positional parameters
-  // but execute doesn't support passing them currently
+  const [filename, ...params] = args;
+  const name = filename.includes('/') ? filename : await findSourcePath(ctx, shell, filename);
+
+  // Not on PATH is the end of a POSIX shell, as any error in a special builtin
+  if (name === undefined) {
+    return { code: makeExitSignal(1), stderr: `.: ${filename}: file not found\n` };
+  }
+
+  let content: string;
 
   try {
     if (!shell.readFile) {
       throw new Error(`'could not read file, readFile is not defined in shell`);
     }
 
-    // Use readFile callback if available
-    const content = await shell.readFile(ctx, filename);
+    content = await shell.readFile(ctx, name);
+  } catch (error) {
+    // A file that cannot be read is said the way bash says it, and ends a POSIX shell
+    const status = ctx.getShellOption('posix') ? makeExitSignal(1) : 1;
 
+    if (error instanceof Deno.errors.IsADirectory) return { code: status, stderr: `source: ${filename}: is a directory\n` };
+
+    const reason = error instanceof Deno.errors.NotFound
+      ? 'No such file or directory'
+      : error instanceof Deno.errors.PermissionDenied
+      ? 'Permission denied'
+      : error instanceof Error
+      ? error.message.split('\n')[0]
+      : String(error);
+
+    return { code: status, stderr: `${filename}: ${reason}\n` };
+  }
+
+  // Arguments are the file's positional parameters while it runs; without
+  // any it sees the caller's
+  const saved = params.length > 0 ? positional(ctx) : undefined;
+
+  if (saved) setPositional(ctx, params);
+
+  try {
     // Execute the file content in the current shell context
     const code = await execute(content, { file: filename });
 
     // `return` ends the file, not the function or script around the `source`
     return { code: isReturnSignal(code) ? getReturnCode(code) : code };
   } catch (error) {
-    const message = error instanceof Error ? error.message.split('\n')[0] : String(error);
-
     // A syntax error is 2, as in bash; the script sourcing it carries on
     if (error instanceof BashSyntaxError) {
-      return { code: 2, stderr: `${filename}: syntax error: ${message}\n` };
+      return { code: 2, stderr: `${filename}: syntax error: ${error.message.split('\n')[0]}\n` };
     }
 
-    return {
-      code: 1,
-      stderr: `source: ${filename}: ${message}\n`,
-    };
+    throw error;
+  } finally {
+    if (saved) setPositional(ctx, saved);
   }
 };
+
+/**
+ * Where `source name` finds a name without a slash: on PATH, under `shopt -s
+ * sourcepath`, and otherwise in the current directory — except in POSIX mode,
+ * where not being on PATH is an error, and undefined says so.
+ */
+async function findSourcePath(ctx: ExecContextIf, shell: ShellIf, filename: string): Promise<string | undefined> {
+  if (ctx.getShellOption('sourcepath') && shell.testPath) {
+    const path = ctx.getParams().PATH ?? ctx.getEnv().PATH ?? '';
+
+    for (const dir of path.split(':')) {
+      const candidate = `${dir || '.'}/${filename}`;
+
+      if (await shell.testPath(ctx, candidate, 'REGULAR_FILE')) return candidate;
+    }
+
+    if (ctx.getShellOption('posix')) return undefined;
+  }
+
+  return filename;
+}
+
+/** The positional parameters there are now. */
+function positional(ctx: ExecContextIf): string[] {
+  const params = ctx.getParams();
+
+  return Array.from({ length: Number(params['#'] ?? 0) }, (_, i) => params[String(i + 1)] ?? '');
+}
+
+/** Set the positional parameters, as `set --` does. */
+function setPositional(ctx: ExecContextIf, values: string[]): void {
+  const old = positional(ctx);
+  const update: Record<string, string | null> = { '#': String(values.length) };
+
+  old.forEach((_, i) => update[String(i + 1)] = null);
+  values.forEach((value, i) => update[String(i + 1)] = value);
+
+  ctx.setParams(update);
+}
 
 /**
  * The . builtin command.

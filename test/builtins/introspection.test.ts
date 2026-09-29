@@ -19,9 +19,9 @@ function createMockShell(
       name: string,
       args: string[],
     ): Promise<number> => {
-      // Simulate 'which' command
+      // Simulate 'which -a'
       if (name === 'which' && args.length > 0) {
-        const cmd = args[0];
+        const cmd = args[args.length - 1];
         if (cmd in whichResults) {
           // Write result to stdout pipe
           const stdout = ctx.getStdout();
@@ -65,11 +65,11 @@ Deno.test('type builtin', async (t) => {
   const registry = createBuiltinRegistry();
   const typeBuiltin = createTypeBuiltin(registry);
 
-  await t.step('no arguments returns error', async () => {
+  await t.step('no arguments is not an error', async () => {
     const ctx = new ExecContext();
     const shell = createMockShell();
     const result = await typeBuiltin(ctx, [], shell, noopExecute);
-    assertEquals(result.code, 1);
+    assertEquals(result.code, 0);
   });
 
   await t.step('identifies builtin', async () => {
@@ -90,6 +90,7 @@ Deno.test('type builtin', async (t) => {
 
   await t.step('identifies alias', async () => {
     const ctx = new ExecContext();
+    ctx.setShellOption('expand_aliases', true);
     ctx.setAlias('ll', 'ls -la');
     const shell = createMockShell();
     const result = await typeBuiltin(ctx, ['ll'], shell, noopExecute);
@@ -118,7 +119,7 @@ Deno.test('type builtin', async (t) => {
     const shell = createMockShell();
     const result = await typeBuiltin(ctx, ['nonexistent'], shell, noopExecute);
     assertEquals(result.code, 1);
-    assertStringIncludes(result.stdout || '', 'not found');
+    assertStringIncludes(result.stderr || '', 'not found');
   });
 });
 
