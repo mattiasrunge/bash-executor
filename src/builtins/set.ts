@@ -82,7 +82,7 @@ export const setBuiltin: BuiltinHandler = async (
       i++;
       if (i >= args.length) {
         // `set -o` lists the options as a table, `set +o` as the commands that restore them
-        const options = Object.entries(ctx.getShellOptions()).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
+        const options = Object.entries(ctx.getShellOptions()).filter(([name]) => name in DEFAULT_SHELL_OPTIONS).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
         const output = options.map(([name, value]) => enable ? `${name.padEnd(15)}\t${value ? 'on' : 'off'}\n` : `set ${value ? '-o' : '+o'} ${name}\n`);
 
         return { code: 0, stdout: output.join('') };

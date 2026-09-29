@@ -493,6 +493,9 @@ export class AstExecutor {
     return temporary;
   }
 
+  /** Descriptors handed out by `exec {fd}>file`, so the next one takes another number. */
+  private namedFds = new Set<number>();
+
   /**
    * `exec N>file`, `exec >>file`, `exec <file`: the file is opened once and
    * stays open for everything after, so each command appends where the last one
@@ -647,7 +650,71 @@ export class AstExecutor {
     // every command substitution in it twice — `$(pick-a-command) arg` executed
     // `pick-a-command` two times, side effects included.
     if (node.name && !node.name.expansion?.length && node.name.text === 'exec') {
+      // `exec >file &` runs in a background subshell: it opens the file there,
+      // and the shell's own descriptors stay as they were
+      if (node.async) {
+        const code = await this.runCommand({ ...node, async: false }, parentCtx.subContext());
+
+        return isExitSignal(code) ? getExitCode(code) : code;
+      }
+
       const redirects = node.suffix?.filter((arg) => arg.type === 'Redirect') as AstNodeRedirect[] | undefined;
+      const words = (node.suffix?.filter((arg) => arg.type === 'Word') ?? []) as AstNodeWord[];
+
+      // `exec {fd}>file`: the word before the redirection names a variable for
+      // the shell to put a free descriptor in, 10 or above. `{fd}>&-` closes it.
+      for (const [i, item] of (node.suffix ?? []).entries()) {
+        const name = item.type === 'Word' ? (item as AstNodeWord).text.match(/^\{([A-Za-z_][A-Za-z0-9_]*)\}$/)?.[1] : undefined;
+        const redirect = node.suffix?.[i + 1] as AstNodeRedirect | undefined;
+
+        if (!name || redirect?.type !== 'Redirect' || redirect.numberIo) {
+          continue;
+        }
+
+        words.splice(words.indexOf(item as AstNodeWord), 1);
+        redirects!.splice(redirects!.indexOf(redirect), 1);
+
+        let fd: string;
+
+        if (redirect.file.text === '-') {
+          fd = parentCtx.getParams()[name] ?? '';
+        } else {
+          let n = 10;
+
+          while (this.namedFds.has(n) || parentCtx.getFd(String(n)) !== undefined) n++;
+
+          this.namedFds.add(n);
+          fd = String(n);
+          parentCtx.setParams({ [name]: fd });
+        }
+
+        const numbered = { ...redirect, numberIo: { type: 'io_number', text: fd } } as AstNodeRedirect;
+
+        if (!(await this.openExecRedirection(parentCtx, numbered))) {
+          await this.applyRedirections(parentCtx, [numbered]);
+        }
+
+        if (redirect.file.text === '-') {
+          this.namedFds.delete(Number(fd));
+        }
+      }
+
+      if (words[0]?.text === '--') {
+        words.shift();
+      }
+
+      // `exec cmd args`: the command takes the shell's place, so the shell ends
+      // with its status. The redirections are the command's own.
+      if (words.length > 0) {
+        const code = await this.runCommand({ ...node, name: words[0], suffix: [...words.slice(1), ...(redirects ?? [])] }, parentCtx);
+
+        // A command that could not be run leaves the shell standing only under `shopt -s execfail`
+        if ((code === 126 || code === 127) && parentCtx.getShellOption('execfail')) {
+          return code;
+        }
+
+        return isExitSignal(code) ? code : makeExitSignal(code);
+      }
 
       for (const redirect of redirects ?? []) {
         if (!(await this.openExecRedirection(parentCtx, redirect))) {
@@ -701,8 +768,18 @@ export class AstExecutor {
       await this.applyAssignment(assignment, ctx, Boolean(node?.name));
     }
 
+    // Redirections may stand before the name as well as after it: `>out echo hi`,
+    // `2>/dev/null cmd`, or on their own, `> file`, which creates the file
+    const redirects = [...(node.prefix ?? []), ...(node.suffix ?? [])].filter((arg) => arg.type === 'Redirect') as AstNodeRedirect[];
+
     if (!node?.name) {
-      return this.applyErrexit(assignStatus, ctx);
+      if (redirects.length === 0) {
+        return this.applyErrexit(assignStatus, ctx);
+      }
+
+      const pipes = await this.applyRedirections(ctx, redirects);
+
+      return this.withFileBridging(ctx, async () => await this.applyErrexit(assignStatus, ctx), pipes);
     }
 
     // Create an args list
@@ -734,7 +811,7 @@ export class AstExecutor {
     }
 
     // Apply IO redirections
-    const redirectPipes = await this.applyRedirections(ctx, node.suffix?.filter((arg) => arg.type === 'Redirect'), subs);
+    const redirectPipes = await this.applyRedirections(ctx, redirects, subs);
 
     // A name that expands to nothing leaves the next word to be the command, and
     // one that expands to several makes the rest arguments: `$empty echo hi` runs
@@ -773,14 +850,23 @@ export class AstExecutor {
         const execute = (script: string) => this.execute(script, ctx);
         const result = await builtin(ctx, args || [], this.shell, execute);
 
-        // Write stdout/stderr if present
-        if (result.stdout) {
-          await this.shell.pipeWrite(ctx.getStdout(), result.stdout);
-        }
-        if (result.stderr) {
-          await this.shell.pipeWrite(ctx.getStderr(), result.stderr);
-        }
         code = result.code;
+
+        // Write stdout/stderr if present. Output that cannot be written — stdout
+        // closed with `>&-`, or a descriptor open only for reading — fails the
+        // builtin, as bash's "write error", and not the script.
+        try {
+          if (result.stdout) {
+            await this.shell.pipeWrite(ctx.getStdout(), result.stdout);
+          }
+        } catch (err) {
+          await this.shell.pipeWrite(ctx.getStderr(), `${cmdName}: write error: ${err instanceof Error ? err.message : err}\n`).catch(() => {});
+          code = 1;
+        }
+
+        if (result.stderr) {
+          await this.shell.pipeWrite(ctx.getStderr(), result.stderr).catch(() => {});
+        }
       } else {
         // Check for function
         const fn = ctx.getFunction(cmdName);
@@ -880,9 +966,12 @@ export class AstExecutor {
   protected async executeSubshell(node: AstNodeSubshell, parentCtx: ExecContextIf): Promise<number> {
     // `( … )` is a subshell: env/cwd changes inside must not escape to the parent.
     const ctx = parentCtx.subContext();
-    const code = await this.withFileBridging(ctx, () => {
+    const result = await this.withFileBridging(ctx, () => {
       return this.executeNode(node.list, ctx);
     });
+
+    // `(exit 3)` ends the subshell, not the shell: to the caller it is status 3
+    const code = isExitSignal(result) ? getExitCode(result) : isReturnSignal(result) ? getReturnCode(result) : result;
 
     // To the caller the subshell is one command, so it leaves one status behind —
     // the array its own pipelines built lives and dies with the subshell's context.
@@ -1007,19 +1096,23 @@ export class AstExecutor {
     const fileBridges: Promise<void>[] = [];
     let lastCtx: ExecContextIf | null = null;
     let lastStdoutPipe: string | null = null;
+    // bash runs the last stage in the shell only without job control
+    const lastpipe = ctx.getShellOption('lastpipe') && !ctx.getShellOption('monitor');
 
     try {
       for (let n = 0; n < node.commands.length; n++) {
+        const isFirstCommand = n === 0;
+        const isLastCommand = n === node.commands.length - 1;
+
         // Each pipeline stage is a subshell — isolate env/cwd so a stage can't leak
-        // into the parent (or race the other concurrently-running stages).
-        const cmdCtx = ctx.subContext();
+        // into the parent (or race the other concurrently-running stages). Under
+        // `shopt -s lastpipe` the last one runs in the shell itself, so
+        // `echo x | read v` sets v, as bash does without job control.
+        const cmdCtx = isLastCommand && lastpipe ? ctx.spawnContext() : ctx.subContext();
 
         // A stage failing is the pipeline's business, not the shell's: errexit
         // looks at what finishPipeline makes of them all
         cmdCtx.setErrexitSuppressed(true);
-
-        const isFirstCommand = n === 0;
-        const isLastCommand = n === node.commands.length - 1;
 
         // If not the first command, redirect stdin from the last command's stdout
         if (lastCtx) {
@@ -1077,7 +1170,7 @@ export class AstExecutor {
       // Wait for file bridges to complete
       await Promise.all(fileBridges);
 
-      return this.finishPipeline(node, codes, ctx);
+      return this.finishPipeline(node, codes, ctx, lastpipe);
     } finally {
       for (const pipe of pipes) {
         this.shell.pipeRemove(pipe).catch((err) => console.error('Failed to remove pipe: ', err));
@@ -1095,7 +1188,7 @@ export class AstExecutor {
    * untouched; one from an earlier stage stays swallowed, because in bash that
    * stage is a subshell of its own and its `exit` never reaches the caller.
    */
-  protected finishPipeline(node: AstNodePipeline, codes: number[], ctx: ExecContextIf): number {
+  protected finishPipeline(node: AstNodePipeline, codes: number[], ctx: ExecContextIf, lastpipe = false): number {
     // `break`/`continue` are not statuses at all, and in bash a stage is a subshell
     // the loop control cannot reach out of — so they count as 0 rather than as a
     // failure pipefail would pick up.
@@ -1113,9 +1206,12 @@ export class AstExecutor {
 
     ctx.setArray('PIPESTATUS', statuses.map((status) => String(status)));
 
+    // Every stage is a subshell, the last one too: `echo x | exit 5` ends that
+    // stage, not the shell, and leaves 5 behind. Under lastpipe the last stage is
+    // the shell, and an `exit` or `return` there is the shell's.
     const lastCode = codes[codes.length - 1];
 
-    if (isExitSignal(lastCode) || isReturnSignal(lastCode) || lastCode === BREAK_CODE || lastCode === CONTINUE_CODE) {
+    if (lastpipe && (isExitSignal(lastCode) || isReturnSignal(lastCode) || lastCode === BREAK_CODE || lastCode === CONTINUE_CODE)) {
       return lastCode;
     }
 
@@ -2251,14 +2347,23 @@ export class AstExecutor {
     }
 
     const previous = append ? ctx.getParams()[name] ?? ctx.getEnv()[name] ?? '' : '';
+    let assigned = previous + value;
+
+    // `declare -i` makes the value arithmetic, evaluated now: x=1+2 is 3, x+=4 adds
+    if (ctx.isIntegerVar(name)) {
+      const number = await this.arithmeticValue({ expression: value || '0' }, ctx);
+      const base = append ? await this.arithmeticValue({ expression: previous || '0' }, ctx) : 0;
+
+      assigned = String(base + number);
+    }
 
     if (local) {
-      ctx.setLocalParams({ [name]: previous + value });
+      ctx.setLocalParams({ [name]: assigned });
     } else if (ctx.getShellOption('allexport')) {
       // `set -a` makes a plain assignment an exported one, so a child sees it
-      ctx.setEnv({ [name]: previous + value });
+      ctx.setEnv({ [name]: assigned });
     } else {
-      ctx.setParams({ [name]: previous + value });
+      ctx.setParams({ [name]: assigned });
     }
   }
 

@@ -1,5 +1,5 @@
 import type { AstNodeCompoundList } from '@ein/bash-parser';
-import { DEFAULT_SHELL_OPTIONS, type ExecContextIf, type FunctionDef, type IO } from './types.ts';
+import { DEFAULT_SHELL_OPTIONS, DEFAULT_SHOPT_OPTIONS, type ExecContextIf, type FunctionDef, type IO } from './types.ts';
 
 // TODO: We need to define when cwd or params should go to parent or not...
 
@@ -20,7 +20,7 @@ export class ExecContext implements ExecContextIf {
   private integerVars = new Set<string>();
   private dirStack: string[] = [];
   private fds: Record<string, string> = {};
-  private options: Record<string, boolean> = { ...DEFAULT_SHELL_OPTIONS };
+  private options: Record<string, boolean> = { ...DEFAULT_SHELL_OPTIONS, ...DEFAULT_SHOPT_OPTIONS };
   private abortSignal?: AbortSignal;
   // undefined means "whatever the shell above says"; set explicitly, it decides
   private errexitSuppressed?: boolean;
@@ -235,13 +235,9 @@ export class ExecContext implements ExecContextIf {
 
   private paramOwner(key: string): ExecContext {
     const positional = /^([1-9]\d*|#|@|\*)$/.test(key);
-    let ctx: ExecContext = this;
+    const holds = positional ? '#' in this.params : key in this.params;
 
-    while (ctx.parent && !(positional ? '#' in ctx.params : key in ctx.params)) {
-      ctx = ctx.parent;
-    }
-
-    return ctx;
+    return holds || !this.parent ? this : this.parent.paramOwner(key);
   }
 
   setLocalParams(

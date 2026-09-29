@@ -39,6 +39,7 @@ export { readBuiltin } from './read.ts';
 export { readonlyBuiltin } from './readonly.ts';
 export { setBuiltin } from './set.ts';
 export { shiftBuiltin } from './shift.ts';
+export { shoptBuiltin } from './shopt.ts';
 export { dotBuiltin, sourceBuiltin } from './source.ts';
 export { bracketBuiltin, testBuiltin } from './test.ts';
 export { colonBuiltin, falseBuiltin, trueBuiltin } from './trivial.ts';
@@ -61,6 +62,7 @@ import { readBuiltin } from './read.ts';
 import { readonlyBuiltin } from './readonly.ts';
 import { setBuiltin } from './set.ts';
 import { shiftBuiltin } from './shift.ts';
+import { shoptBuiltin } from './shopt.ts';
 import { dotBuiltin, sourceBuiltin } from './source.ts';
 import { bracketBuiltin, testBuiltin } from './test.ts';
 import { colonBuiltin, falseBuiltin, trueBuiltin } from './trivial.ts';
@@ -98,6 +100,7 @@ export function createBuiltinRegistry(): BuiltinRegistry {
 
   // Phase 3: Script execution
   registry.set('eval', evalBuiltin);
+  registry.set('shopt', shoptBuiltin);
   registry.set('source', sourceBuiltin);
   registry.set('.', dotBuiltin);
 

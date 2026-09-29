@@ -135,3 +135,9 @@ Deno.test('Variable Unset', async (t) => {
     assertEquals(result.stdout, 'X=\n');
   });
 });
+
+Deno.test('assigning to a declare -i variable evaluates the value', async () => {
+  const shell = new TestShell();
+  const result = await shell.runAndCapture('declare -i x; x=1+2; echo $x; x+=4; echo $x; b=5; x=b*2; echo $x');
+  assertEquals(result.stdout, '3\n7\n10\n');
+});

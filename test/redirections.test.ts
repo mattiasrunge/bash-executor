@@ -338,3 +338,60 @@ Deno.test('N>file on a command redirects fd N, not stdout', async () => {
   assertEquals(result.stdout, 'to-stdout\n');
   assertEquals(shell.getFile('/tmp/three'), 'to-three\n');
 });
+
+Deno.test('exec {name}>file puts a free descriptor in name', async () => {
+  const shell = new TestShell();
+  const result = await shell.runAndCapture(`
+    exec {v}>/tmp/named
+    echo "v=$v"
+    echo hi >&$v
+    exec {v}>&-
+  `);
+  assertEquals(result.stdout, 'v=10\n');
+  assertEquals(shell.getFile('/tmp/named'), 'hi\n');
+});
+
+Deno.test('redirections before the command name', async (t) => {
+  await t.step('>file cmd writes cmd\'s output to the file', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('>/tmp/pre echo hi');
+    assertEquals(result.stdout, '');
+    assertEquals(shell.getFile('/tmp/pre'), 'hi\n');
+  });
+
+  await t.step('a redirection alone creates the file', async () => {
+    const shell = new TestShell();
+    await shell.runAndCapture('> /tmp/empty');
+    assertEquals(shell.getFile('/tmp/empty'), '');
+  });
+
+  await t.step('beside an assignment, which still happens', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('x=1 >/tmp/made; echo "x=$x"');
+    assertEquals(result.stdout, 'x=1\n');
+    assertEquals(shell.getFile('/tmp/made'), '');
+  });
+});
+
+Deno.test('a builtin whose output cannot be written fails, and the script goes on', async () => {
+  const shell = new TestShell();
+  shell.setFile('/tmp/in', 'x\n');
+
+  // A descriptor the host cannot write to, as a file opened only for reading
+  const write = shell.pipeWrite.bind(shell);
+  shell.pipeWrite = async (name: string, data: string) => {
+    if (name === '3') throw new Error('Bad file descriptor');
+    await write(name, data);
+  };
+
+  const result = await shell.runAndCapture('exec 3<>/tmp/in; echo hi >&3; echo "st=$?"');
+  assertEquals(result.stdout, 'st=1\n');
+  assertEquals(result.stderr, 'echo: write error: Bad file descriptor\n');
+});
+
+Deno.test('exec in the background leaves the shell\'s descriptors alone', async () => {
+  const shell = new TestShell();
+  const result = await shell.runAndCapture('exec >/tmp/bg &\necho still; exec true &\necho alive');
+  assertEquals(result.stdout, 'still\nalive\n');
+  assertEquals(shell.getFile('/tmp/bg'), '');
+});

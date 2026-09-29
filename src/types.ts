@@ -102,6 +102,25 @@ export const DEFAULT_SHELL_OPTIONS: Record<string, boolean> = {
 };
 
 /**
+ * `shopt`'s options with bash 5.2's defaults. They share the context's option
+ * store with `set -o`'s, since no name is in both. The executor acts on
+ * `lastpipe`; the rest are recorded for scripts to set and test.
+ */
+export const DEFAULT_SHOPT_OPTIONS: Record<string, boolean> = Object.fromEntries(
+  ('autocd:0 assoc_expand_once:0 cdable_vars:0 cdspell:0 checkhash:0 checkjobs:0 checkwinsize:1 cmdhist:1 compat31:0 compat32:0 ' +
+    'compat40:0 compat41:0 compat42:0 compat43:0 compat44:0 complete_fullquote:1 direxpand:0 dirspell:0 dotglob:0 execfail:0 ' +
+    'expand_aliases:0 extdebug:0 extglob:0 extquote:1 failglob:0 force_fignore:1 globasciiranges:1 globskipdots:1 globstar:0 ' +
+    'gnu_errfmt:0 histappend:0 histreedit:0 histverify:0 hostcomplete:1 huponexit:0 inherit_errexit:0 interactive_comments:1 ' +
+    'lastpipe:0 lithist:0 localvar_inherit:0 localvar_unset:0 login_shell:0 mailwarn:0 no_empty_cmd_completion:0 nocaseglob:0 ' +
+    'nocasematch:0 noexpand_translation:0 nullglob:0 patsub_replacement:1 progcomp:1 progcomp_alias:0 promptvars:1 ' +
+    'restricted_shell:0 shift_verbose:0 sourcepath:1 varredir_close:0 xpg_echo:0').split(' ').map((entry) => {
+      const [name, on] = entry.split(':');
+
+      return [name, on === '1'];
+    }),
+);
+
+/**
  * Short `set` flags mapped to the option they name. `pipefail` has no short
  * flag, in bash either.
  */

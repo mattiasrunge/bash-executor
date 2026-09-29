@@ -79,3 +79,48 @@ echo "after loop"
     assertEquals(result.stdout.includes('after loop'), false);
   });
 });
+
+Deno.test('exit in a subshell ends the subshell, not the shell', async (t) => {
+  await t.step('( exit 3 ) is status 3 and the script goes on', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('(exit 3); echo "st=$?"');
+    assertEquals(result.stdout, 'st=3\n');
+  });
+
+  await t.step('exit in a pipeline stage, the last one too', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('exit 3 | cat; echo "a=$?"; echo x | { exit 5; }; echo "b=$? ${PIPESTATUS[*]}"');
+    assertEquals(result.stdout, 'a=0\nb=5 0 5\n');
+  });
+
+  await t.step('exit in a command substitution', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('v=$(echo out; exit 7); echo "$v $?"');
+    assertEquals(result.stdout, 'out 7\n');
+  });
+});
+
+Deno.test('exec with a command', async (t) => {
+  await t.step('the shell ends with the command, whose status it takes', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('echo before; exec false; echo NOT');
+    assertEquals(result.stdout, 'before\n');
+    assertEquals(result.exitCode, 1);
+  });
+
+  await t.step('a command that cannot run ends the shell, unless execfail is set', async () => {
+    const shell = new TestShell();
+    const ended = await shell.runAndCapture('exec nosuch-command; echo NOT');
+    assertEquals(ended.stdout, '');
+    assertEquals(ended.exitCode, 127);
+
+    const kept = await new TestShell().runAndCapture('shopt -s execfail; exec nosuch-command; echo "after $?"');
+    assertEquals(kept.stdout, 'after 127\n');
+  });
+
+  await t.step('in a subshell only the subshell ends', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('(exec echo in; echo NOT); echo "st=$?"');
+    assertEquals(result.stdout, 'in\nst=0\n');
+  });
+});

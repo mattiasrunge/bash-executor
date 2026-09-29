@@ -251,3 +251,24 @@ Deno.test('Pipeline loop control', async (t) => {
     assertEquals(result.stdout, '1\n2\n');
   });
 });
+
+Deno.test('shopt -s lastpipe runs the last stage in the shell', async (t) => {
+  await t.step('without it, read in the last stage sets nothing', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('echo a b | read v; echo "[$v]"');
+    assertEquals(result.stdout, '[]\n');
+  });
+
+  await t.step('with it, the variable is set', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('shopt -s lastpipe; echo a b | read v; echo "[$v]"');
+    assertEquals(result.stdout, '[a b]\n');
+  });
+
+  await t.step('and an exit there ends the shell', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('shopt -s lastpipe; echo x | exit 4; echo NOT');
+    assertEquals(result.stdout, '');
+    assertEquals(result.exitCode, 4);
+  });
+});
