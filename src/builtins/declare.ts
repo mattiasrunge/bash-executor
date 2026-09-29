@@ -11,21 +11,40 @@ import type { BuiltinHandler, BuiltinResult } from './types.ts';
 import { assignArrayArg } from './variables.ts';
 
 /**
+ * A variable's attributes as `declare -p` writes them, in bash's order:
+ * `-a`, `-A`, `-i`, `-r`, `-x`, or `--` for none.
+ */
+function attributes(ctx: ExecContextIf, name: string): string {
+  const flags = (ctx.getArray(name) ? 'a' : '') +
+    (ctx.getAssoc(name) ? 'A' : '') +
+    (ctx.isIntegerVar(name) ? 'i' : '') +
+    (ctx.isReadonlyVar(name) ? 'r' : '') +
+    (ctx.getParams()[name] === undefined && name in ctx.getEnv() ? 'x' : '');
+
+  return flags ? `-${flags}` : '--';
+}
+
+/** A value in double quotes, as `declare -p` writes it. */
+function quoted(value: string): string {
+  return `"${value.replace(/(["\\$`])/g, '\\$1')}"`;
+}
+
+/**
  * Render an array the way `declare -p` does: `declare -a a=([0]="x" [1]="y")`.
  */
-function printArray(name: string, values: string[]): string {
-  const elements = Object.entries(values).map(([index, value]) => `[${index}]="${value}"`);
+function printArray(ctx: ExecContextIf, name: string, values: string[]): string {
+  const elements = Object.entries(values).map(([index, value]) => `[${index}]=${quoted(value)}`);
 
-  return `declare -a ${name}=(${elements.join(' ')})\n`;
+  return `declare ${attributes(ctx, name)} ${name}=(${elements.join(' ')})\n`;
 }
 
 /**
  * Render an associative array: `declare -A a=([k]="v")`.
  */
-function printAssoc(name: string, values: Record<string, string>): string {
-  const elements = Object.entries(values).map(([key, value]) => `[${key}]="${value}"`);
+function printAssoc(ctx: ExecContextIf, name: string, values: Record<string, string>): string {
+  const elements = Object.entries(values).map(([key, value]) => `[${key}]=${quoted(value)}`);
 
-  return `declare -A ${name}=(${elements.join(' ')})\n`;
+  return `declare ${attributes(ctx, name)} ${name}=(${elements.join(' ')})\n`;
 }
 
 /**
@@ -168,19 +187,15 @@ export const declareBuiltin: BuiltinHandler = async (
       for (const [name, value] of Object.entries({ ...env, ...params })) {
         if (!isValidName(name)) continue;
 
-        let attrs = '--';
-        if (ctx.isReadonlyVar(name)) attrs = '-r';
-        if (ctx.isIntegerVar(name)) attrs = '-i';
-
-        output += `declare ${attrs} ${name}="${value}"\n`;
+        output += `declare ${attributes(ctx, name)} ${name}=${quoted(value)}\n`;
       }
 
       for (const [name, values] of Object.entries(ctx.getArrays())) {
-        output += printArray(name, values);
+        output += printArray(ctx, name, values);
       }
 
       for (const [name, values] of Object.entries(ctx.getAssocs())) {
-        output += printAssoc(name, values);
+        output += printAssoc(ctx, name, values);
       }
 
       return { code: 0, stdout: output };
@@ -197,6 +212,7 @@ export const declareBuiltin: BuiltinHandler = async (
   // Process variable arguments
   let hasError = false;
   let output = '';
+  let errors = '';
 
   for (const arg of varArgs) {
     // An associative array has to exist before an element list can be read as
@@ -209,15 +225,17 @@ export const declareBuiltin: BuiltinHandler = async (
       }
     }
 
-    // `declare -a x=(1 2)` — the element list survives quote removal as one word
-    if (assignArrayArg(ctx, arg, false)) {
+    // `declare -a x=(1 2)` — the element list survives quote removal as one
+    // word; in a function the array is the function's, as with local
+    if (assignArrayArg(scope ?? ctx, arg, Boolean(scope))) {
+      if (setReadonly) ctx.setReadonlyVar(parseAssignment(arg).name, true);
       continue;
     }
 
     const { name, value } = parseAssignment(arg);
 
     if (!isValidName(name)) {
-      output += `declare: \`${arg}': not a valid identifier\n`;
+      errors += `declare: \`${arg}': not a valid identifier\n`;
       hasError = true;
       continue;
     }
@@ -237,14 +255,14 @@ export const declareBuiltin: BuiltinHandler = async (
       const assoc = ctx.getAssoc(name);
 
       if (assoc) {
-        output += printAssoc(name, assoc);
+        output += printAssoc(ctx, name, assoc);
         continue;
       }
 
       const array = ctx.getArray(name);
 
       if (array) {
-        output += printArray(name, array);
+        output += printArray(ctx, name, array);
         continue;
       }
 
@@ -253,13 +271,9 @@ export const declareBuiltin: BuiltinHandler = async (
       const currentValue = env[name] ?? params[name];
 
       if (currentValue !== undefined) {
-        let attrs = '--';
-        if (ctx.isReadonlyVar(name)) attrs = '-r';
-        if (ctx.isIntegerVar(name)) attrs = '-i';
-
-        output += `declare ${attrs} ${name}="${currentValue}"\n`;
+        output += `declare ${attributes(ctx, name)} ${name}=${quoted(currentValue)}\n`;
       } else {
-        output += `declare: ${name}: not found\n`;
+        errors += `declare: ${name}: not found\n`;
         hasError = true;
       }
       continue;
@@ -267,7 +281,7 @@ export const declareBuiltin: BuiltinHandler = async (
 
     // Check if trying to modify readonly variable
     if (ctx.isReadonlyVar(name) && !unsetReadonly) {
-      output += `declare: ${name}: readonly variable\n`;
+      errors += `declare: ${name}: readonly variable\n`;
       hasError = true;
       continue;
     }
@@ -299,7 +313,7 @@ export const declareBuiltin: BuiltinHandler = async (
       // An integer's value is arithmetic: `declare -i n=5+3` is 8
       if (ctx.isIntegerVar(name) || setInteger) {
         try {
-          finalValue = String(await evaluateArithmetic(parseArithmetic(value || '0'), ctx, { useEnvForAssignment: true }));
+          finalValue = String(await evaluateArithmetic(parseArithmetic(value || '0'), ctx));
         } catch {
           finalValue = '0';
         }
@@ -334,7 +348,7 @@ export const declareBuiltin: BuiltinHandler = async (
   return {
     code: hasError ? 1 : 0,
     stdout: output || undefined,
-    stderr: hasError ? output : undefined,
+    stderr: errors || undefined,
   };
 };
 

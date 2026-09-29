@@ -6,7 +6,29 @@
  */
 
 import type { AstArithmeticExpression, AstNode } from '@ein/bash-parser';
+import { ArithmeticError, ReadonlyVariableError } from './errors.ts';
 import type { ExecContextIf, ShellIf } from './types.ts';
+
+/**
+ * Assign a variable from arithmetic, as any assignment: into the environment
+ * when it is exported there, not at all when it is readonly.
+ */
+function assign(ctx: ExecContextIf, name: string, value: number): void {
+  if (ctx.isReadonlyVar(name)) {
+    throw new ReadonlyVariableError(name);
+  }
+
+  ctx.assignVariable(name, String(value));
+}
+
+/** Dividing by zero is an error in bash, not a value. */
+function divisor(value: number): number {
+  if (value === 0) {
+    throw new ArithmeticError('division by 0 (error token is "0")');
+  }
+
+  return value;
+}
 
 /**
  * Options for the arithmetic evaluator.
@@ -16,7 +38,7 @@ export type EvaluateArithmeticOptions = {
   shell?: ShellIf;
   /** Function to execute an AST node (for command substitution) */
   executeNode?: (node: AstNode, ctx: ExecContextIf) => Promise<number>;
-  /** Use setEnv instead of setParams for variable assignment (for let builtin) */
+  /** No longer used: an assignment goes wherever the variable lives */
   useEnvForAssignment?: boolean;
 };
 
@@ -77,9 +99,9 @@ export async function evaluateArithmetic(
         case '*':
           return left * right;
         case '/':
-          return right === 0 ? 0 : Math.trunc(left / right);
+          return Math.trunc(left / divisor(right));
         case '%':
-          return right === 0 ? 0 : left % right;
+          return left % divisor(right);
         case '**':
           return Math.pow(left, right);
         case '&':
@@ -152,10 +174,10 @@ export async function evaluateArithmetic(
             value = currentValue * rightValue;
             break;
           case '/=':
-            value = rightValue === 0 ? 0 : Math.trunc(currentValue / rightValue);
+            value = Math.trunc(currentValue / divisor(rightValue));
             break;
           case '%=':
-            value = rightValue === 0 ? 0 : currentValue % rightValue;
+            value = currentValue % divisor(rightValue);
             break;
           case '&=':
             value = currentValue & rightValue;
@@ -177,12 +199,7 @@ export async function evaluateArithmetic(
         }
       }
 
-      // Use setEnv for let builtin, setParams for executor
-      if (options?.useEnvForAssignment) {
-        ctx.setEnv({ [varName]: String(value) });
-      } else {
-        ctx.setParams({ [varName]: String(value) });
-      }
+      assign(ctx, varName, value);
       return value;
     }
 
@@ -190,12 +207,7 @@ export async function evaluateArithmetic(
       const varName = node.argument.name;
       const currentValue = await evaluateArithmetic(node.argument, ctx, options);
       const newValue = node.operator === '++' ? currentValue + 1 : currentValue - 1;
-      // Use setEnv for let builtin, setParams for executor
-      if (options?.useEnvForAssignment) {
-        ctx.setEnv({ [varName]: String(newValue) });
-      } else {
-        ctx.setParams({ [varName]: String(newValue) });
-      }
+      assign(ctx, varName, newValue);
       return node.prefix ? newValue : currentValue;
     }
 

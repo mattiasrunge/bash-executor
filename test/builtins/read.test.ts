@@ -34,7 +34,7 @@ Deno.test('read builtin', async (t) => {
     const shell = createMockShell('hello world\n');
     const result = await readBuiltin(ctx, [], shell, noopExecute);
     assertEquals(result.code, 0);
-    assertEquals(ctx.getEnv()['REPLY'], 'hello world');
+    assertEquals(ctx.getParams()['REPLY'], 'hello world');
   });
 
   await t.step('reads into named variable', async () => {
@@ -42,7 +42,7 @@ Deno.test('read builtin', async (t) => {
     const shell = createMockShell('hello\n');
     const result = await readBuiltin(ctx, ['name'], shell, noopExecute);
     assertEquals(result.code, 0);
-    assertEquals(ctx.getEnv()['name'], 'hello');
+    assertEquals(ctx.getParams()['name'], 'hello');
   });
 
   await t.step('splits input into multiple variables', async () => {
@@ -50,9 +50,9 @@ Deno.test('read builtin', async (t) => {
     const shell = createMockShell('John 25 Engineer\n');
     const result = await readBuiltin(ctx, ['name', 'age', 'job'], shell, noopExecute);
     assertEquals(result.code, 0);
-    assertEquals(ctx.getEnv()['name'], 'John');
-    assertEquals(ctx.getEnv()['age'], '25');
-    assertEquals(ctx.getEnv()['job'], 'Engineer');
+    assertEquals(ctx.getParams()['name'], 'John');
+    assertEquals(ctx.getParams()['age'], '25');
+    assertEquals(ctx.getParams()['job'], 'Engineer');
   });
 
   await t.step('last variable gets remaining words', async () => {
@@ -60,8 +60,8 @@ Deno.test('read builtin', async (t) => {
     const shell = createMockShell('a b c d e\n');
     const result = await readBuiltin(ctx, ['first', 'rest'], shell, noopExecute);
     assertEquals(result.code, 0);
-    assertEquals(ctx.getEnv()['first'], 'a');
-    assertEquals(ctx.getEnv()['rest'], 'b c d e');
+    assertEquals(ctx.getParams()['first'], 'a');
+    assertEquals(ctx.getParams()['rest'], 'b c d e');
   });
 
   await t.step('handles fewer words than variables', async () => {
@@ -69,9 +69,9 @@ Deno.test('read builtin', async (t) => {
     const shell = createMockShell('one\n');
     const result = await readBuiltin(ctx, ['a', 'b', 'c'], shell, noopExecute);
     assertEquals(result.code, 0);
-    assertEquals(ctx.getEnv()['a'], 'one');
-    assertEquals(ctx.getEnv()['b'], '');
-    assertEquals(ctx.getEnv()['c'], '');
+    assertEquals(ctx.getParams()['a'], 'one');
+    assertEquals(ctx.getParams()['b'], '');
+    assertEquals(ctx.getParams()['c'], '');
   });
 
   await t.step('returns 1 on empty input', async () => {
@@ -88,7 +88,7 @@ Deno.test('read builtin', async (t) => {
       const result = await readBuiltin(ctx, ['-p', 'Name: ', 'name'], shell, noopExecute);
       assertEquals(result.code, 0);
       assertEquals(shell.writtenOutput, 'Name: ');
-      assertEquals(ctx.getEnv()['name'], 'John');
+      assertEquals(ctx.getParams()['name'], 'John');
     });
   });
 
@@ -98,7 +98,7 @@ Deno.test('read builtin', async (t) => {
       const shell = createMockShell('path\\file\n');
       const result = await readBuiltin(ctx, ['-r', 'path'], shell, noopExecute);
       assertEquals(result.code, 0);
-      assertEquals(ctx.getEnv()['path'], 'path\\file');
+      assertEquals(ctx.getParams()['path'], 'path\\file');
     });
 
     await t.step('without -r processes backslashes', async () => {
@@ -109,7 +109,7 @@ Deno.test('read builtin', async (t) => {
       const shell = createMockShell('hello\\nworld\n');
       const result = await readBuiltin(ctx, ['text'], shell, noopExecute);
       assertEquals(result.code, 0);
-      assertEquals(ctx.getEnv()['text'], 'hello world');
+      assertEquals(ctx.getParams()['text'], 'hello world');
     });
   });
 
@@ -120,9 +120,9 @@ Deno.test('read builtin', async (t) => {
       const shell = createMockShell('a:b:c\n');
       const result = await readBuiltin(ctx, ['x', 'y', 'z'], shell, noopExecute);
       assertEquals(result.code, 0);
-      assertEquals(ctx.getEnv()['x'], 'a');
-      assertEquals(ctx.getEnv()['y'], 'b');
-      assertEquals(ctx.getEnv()['z'], 'c');
+      assertEquals(ctx.getParams()['x'], 'a');
+      assertEquals(ctx.getParams()['y'], 'b');
+      assertEquals(ctx.getParams()['z'], 'c');
     });
 
     await t.step('empty IFS means no splitting', async () => {
@@ -131,7 +131,7 @@ Deno.test('read builtin', async (t) => {
       const shell = createMockShell('a b c\n');
       const result = await readBuiltin(ctx, ['line'], shell, noopExecute);
       assertEquals(result.code, 0);
-      assertEquals(ctx.getEnv()['line'], 'a b c');
+      assertEquals(ctx.getParams()['line'], 'a b c');
     });
   });
 
@@ -140,9 +140,9 @@ Deno.test('read builtin', async (t) => {
     const shell = createMockShell('  a   b   c  \n');
     const result = await readBuiltin(ctx, ['x', 'y', 'z'], shell, noopExecute);
     assertEquals(result.code, 0);
-    assertEquals(ctx.getEnv()['x'], 'a');
-    assertEquals(ctx.getEnv()['y'], 'b');
-    assertEquals(ctx.getEnv()['z'], 'c');
+    assertEquals(ctx.getParams()['x'], 'a');
+    assertEquals(ctx.getParams()['y'], 'b');
+    assertEquals(ctx.getParams()['z'], 'c');
   });
 
   await t.step('-n reads limited characters', async () => {
@@ -150,7 +150,7 @@ Deno.test('read builtin', async (t) => {
     const shell = createMockShell('hello world\n');
     const result = await readBuiltin(ctx, ['-n', '5', 'chars'], shell, noopExecute);
     assertEquals(result.code, 0);
-    assertEquals(ctx.getEnv()['chars'], 'hello');
+    assertEquals(ctx.getParams()['chars'], 'hello');
   });
 });
 

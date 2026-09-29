@@ -161,9 +161,16 @@ export const unsetBuiltin: BuiltinHandler = async (ctx, args) => {
     }
   }
 
+  let stderr = '';
+
   for (const name of names) {
     if (unsetFunctions) {
       ctx.unsetFunction(name);
+      continue;
+    }
+
+    if (ctx.isReadonlyVar(name.replace(/\[.*$/, ''))) {
+      stderr += `unset: ${name}: cannot unset: readonly variable\n`;
       continue;
     }
 
@@ -191,7 +198,7 @@ export const unsetBuiltin: BuiltinHandler = async (ctx, args) => {
     ctx.unsetAssoc(name);
   }
 
-  return { code: 0 };
+  return stderr ? { code: 1, stderr } : { code: 0 };
 };
 
 /**

@@ -179,17 +179,49 @@ export class UnboundVariableError extends BashExecutorError {
 }
 
 /**
+ * An error that ends the command the shell is running, as bash's jump back to
+ * its top level does: the rest of the line the command is on is dropped, the
+ * status is 1, and the script carries on with the next line. A subshell — `( )`,
+ * a pipeline stage, `$( )` — is a top level of its own.
+ */
+export class CommandAbortError extends BashExecutorError {}
+
+/**
  * An arithmetic expression that is not one once expanded: `$(( 1 + ))`,
  * `(( a b ))`. Bash checks arithmetic only when it runs, so this is a run-time
- * failure of the one command, status 1, with the shell carrying on.
+ * failure, status 1; `((` and `let` fail, an expansion aborts its command.
  */
-export class ArithmeticSyntaxError extends BashExecutorError {
+export class ArithmeticSyntaxError extends CommandAbortError {
   readonly expression: string;
 
   constructor(expression: string, detail: string) {
     super(`${expression}: syntax error: ${detail}`, { code: 'E_ARITHMETIC_SYNTAX' });
     this.name = 'ArithmeticSyntaxError';
     this.expression = expression;
+  }
+}
+
+/**
+ * An arithmetic expression that cannot be evaluated: `1/0`. The evaluator does
+ * not know the expression's text; whoever has it adds it with `in`.
+ */
+export class ArithmeticError extends CommandAbortError {
+  constructor(readonly detail: string, readonly expression?: string) {
+    super(expression === undefined ? detail : `${expression}: ${detail}`, { code: 'E_ARITHMETIC' });
+    this.name = 'ArithmeticError';
+  }
+
+  /** The same error, told which expression it was in. */
+  in(expression: string): ArithmeticError {
+    return this.expression === undefined ? new ArithmeticError(this.detail, expression) : this;
+  }
+}
+
+/** An assignment to a readonly variable: `x: readonly variable`. */
+export class ReadonlyVariableError extends CommandAbortError {
+  constructor(readonly variable: string) {
+    super(`${variable}: readonly variable`, { code: 'E_READONLY' });
+    this.name = 'ReadonlyVariableError';
   }
 }
 

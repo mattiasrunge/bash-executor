@@ -36,8 +36,19 @@ import { getExitCode, getReturnCode, isExitSignal, isReturnSignal, makeExitSigna
 import { JOB_BUILTINS } from './builtins/jobs.ts';
 import type { BuiltinRegistry } from './builtins/types.ts';
 import type { ErrorPosition } from './errors.ts';
+import { singleQuoted } from './quote.ts';
 import { bracketExpression, globToRegExp, globToRegexSource, posixRegexToSource, quoteGlob, quoteRegex } from './pattern.ts';
-import { ArithmeticSyntaxError, NoClobberError, UnboundVariableError, UnknownNodeTypeError, UnsupportedArithmeticNodeError, UnsupportedOperatorError } from './errors.ts';
+import {
+  ArithmeticError,
+  ArithmeticSyntaxError,
+  CommandAbortError,
+  NoClobberError,
+  ReadonlyVariableError,
+  UnboundVariableError,
+  UnknownNodeTypeError,
+  UnsupportedArithmeticNodeError,
+  UnsupportedOperatorError,
+} from './errors.ts';
 import { type ExecContextIf, type ExecSyncResult, type ExecuteAndCaptureOptions, SHELL_OPTION_FLAG_MAP, type ShellIf } from './types.ts';
 
 // The special parameters, which are set even when nothing has assigned to them
@@ -82,20 +93,6 @@ const DECLARATION_COMMANDS = new Set(['declare', 'typeset', 'local', 'export', '
  * Attaching a no-op catch marks the promise handled without consuming it: the
  * reference kept in the array still rejects normally for the Promise.all.
  */
-/**
- * A value as a word that reads back as itself, the way `${x@Q}` and `declare -p`
- * write it: in single quotes, or as `$'…'` when it holds control characters.
- */
-function shellQuote(value: string): string {
-  if (!/[\x00-\x1f\x7f]/.test(value)) {
-    return `'${value.replaceAll("'", "'\\''")}'`;
-  }
-
-  const escapes: Record<string, string> = { '\n': '\\n', '\t': '\\t', '\r': '\\r', '\x1b': '\\E', '\\': '\\\\', "'": "\\'" };
-
-  return `$'${[...value].map((c) => escapes[c] ?? (/[\x00-\x1f\x7f]/.test(c) ? `\\${c.charCodeAt(0).toString(8).padStart(3, '0')}` : c)).join('')}'`;
-}
-
 function handled<T>(promise: Promise<T>): Promise<T> {
   promise.catch(() => {});
   return promise;
@@ -793,8 +790,17 @@ export class AstExecutor {
 
   private async runScriptCommands(node: AstNodeScript, ctx: ExecContextIf): Promise<number> {
     let lastCode = 0;
+    // The line a command that was aborted stood on: the rest of it does not run
+    let skipRow: number | undefined;
 
     for (const command of node.commands) {
+      // A script with no locations — a `$( )` is parsed without — is one line
+      if (skipRow !== undefined && (command.loc?.start?.row ?? -1) === skipRow) {
+        continue;
+      }
+
+      skipRow = undefined;
+
       await this.echoSource(command, ctx);
 
       // `set -n` reads the rest without running it. There is no turning it back
@@ -803,7 +809,17 @@ export class AstExecutor {
         return lastCode;
       }
 
-      lastCode = await this.executeNode(command, ctx);
+      try {
+        lastCode = await this.executeNode(command, ctx);
+      } catch (err) {
+        if (!(err instanceof CommandAbortError)) {
+          throw err;
+        }
+
+        // What is left of the line goes too, as in bash
+        lastCode = await this.abortStatus(err, ctx);
+        skipRow = command.loc?.start?.row ?? -1;
+      }
 
       // `exit` stops the script, and the signal goes up to whatever ends the shell
       if (isExitSignal(lastCode)) {
@@ -827,6 +843,16 @@ export class AstExecutor {
     return lastCode;
   }
 
+  /**
+   * A command that was aborted — an arithmetic error, an assignment to a
+   * readonly variable — says why, and leaves 1 behind; `set -e` gets its say.
+   */
+  protected async abortStatus(err: CommandAbortError, ctx: ExecContextIf): Promise<number> {
+    await this.shell.pipeWrite(ctx.getStderr(), `${err.message}\n`).catch(() => {});
+
+    return this.applyErrexit(1, ctx);
+  }
+
   protected async executeCommand(node: AstNodeCommand, parentCtx: ExecContextIf): Promise<number> {
     // The DEBUG trap runs before every simple command; in a function only
     // under `set -T`, since functions do not inherit it otherwise
@@ -841,13 +867,6 @@ export class AstExecutor {
     try {
       return await this.runCommand(node, parentCtx);
     } catch (err) {
-      // An arithmetic expansion that is no expression fails this command the same way
-      if (err instanceof ArithmeticSyntaxError) {
-        await this.shell.pipeWrite(parentCtx.getStderr(), `${err.message}\n`).catch(() => {});
-
-        return this.applyErrexit(1, parentCtx);
-      }
-
       // `set -C` refusing a redirection fails this command and nothing else —
       // the shell carries on, and errexit gets its say like any other failure
       return await this.noClobberStatus(err, parentCtx);
@@ -1209,9 +1228,10 @@ export class AstExecutor {
   protected async executeSubshell(node: AstNodeSubshell, parentCtx: ExecContextIf): Promise<number> {
     // `( … )` is a subshell: env/cwd changes inside must not escape to the parent.
     const ctx = parentCtx.subContext();
+    // A subshell is a top level of its own: an aborted command ends it, not the shell
     const result = await this.withFileBridging(ctx, () => {
       return this.executeNode(node.list, ctx);
-    });
+    }).catch((err) => err instanceof CommandAbortError ? this.abortStatus(err, ctx) : Promise.reject(err));
 
     // `(exit 3)` ends the subshell, not the shell: to the caller it is status 3.
     // Its EXIT trap runs as it ends.
@@ -1410,7 +1430,10 @@ export class AstExecutor {
 
         executions.push(
           handled(
-            this.executeNode(node.commands[n], cmdCtx).finally(() => {
+            this.executeNode(node.commands[n], cmdCtx).catch((err) =>
+              // A stage is a subshell, and an aborted command ends only it — unless lastpipe made it the shell
+              err instanceof CommandAbortError && !(isLastCommand && lastpipe) ? this.abortStatus(err, cmdCtx) : Promise.reject(err)
+            ).finally(() => {
               if (stdoutRedirected) {
                 this.shell.pipeClose(cmdCtx.getStdout()).catch((err) => console.error('Failed to close pipe: ', err));
               }
@@ -1854,11 +1877,17 @@ export class AstExecutor {
 
       let last = 0;
 
+      if (ctx.isReadonlyVar(node.name.text)) {
+        await this.shell.pipeWrite(ctx.getStderr(), `${node.name.text}: readonly variable\n`).catch(() => {});
+
+        return this.applyErrexit(1, ctx);
+      }
+
       for (const value of values) {
         // bash repeats the `for` line once per iteration, not once per loop
         await this.trace(ctx, traceLine);
 
-        ctx.setParams({ [node.name.text]: value });
+        ctx.assignVariable(node.name.text, value);
 
         const { stop, code } = await this.runLoopBody(node.do, ctx);
         last = code;
@@ -2055,7 +2084,8 @@ export class AstExecutor {
         text: text.slice(xp.loc.start, xp.loc.end + 1),
         expansion: [{ ...xp, loc: { start: 0, end: xp.loc.end - xp.loc.start } }],
       } as AstNodeWord;
-      const { values } = await this.resolveExpansions(synthetic, ctx);
+      // A pattern is one word: no splitting, no globbing — `"$x"` keeps its blanks
+      const { values } = await this.resolveExpansions(synthetic, ctx, undefined, { split: false, glob: false });
       evaluated.set(xp.loc.start, { end: xp.loc.end, value: values.join(' ') });
     }
 
@@ -2161,11 +2191,14 @@ export class AstExecutor {
 
   /** `((` and `for ((` report a bad expression as bash does, `((: 1 + : syntax error: …`, and fail with 1. */
   private async arithmeticCommandStatus(err: unknown, ctx: ExecContextIf): Promise<number> {
-    if (!(err instanceof ArithmeticSyntaxError)) {
+    if (!(err instanceof CommandAbortError)) {
       throw err;
     }
 
-    await this.shell.pipeWrite(ctx.getStderr(), `((: ${err.message}\n`).catch(() => {});
+    // A readonly variable is said as any assignment to one says it
+    const prefix = err instanceof ReadonlyVariableError ? '' : '((: ';
+
+    await this.shell.pipeWrite(ctx.getStderr(), `${prefix}${err.message}\n`).catch(() => {});
 
     return this.applyErrexit(1, ctx);
   }
@@ -2177,6 +2210,15 @@ export class AstExecutor {
    * always does first, and parsed now.
    */
   protected async arithmeticValue(part: { expression: string; arithmeticAST?: AstArithmeticExpression }, ctx: ExecContextIf): Promise<number> {
+    try {
+      return await this.evaluateArithmeticPart(part, ctx);
+    } catch (err) {
+      // `1/0: division by 0` — the evaluator does not have the text, this does
+      throw err instanceof ArithmeticError ? err.in(part.expression.trim()) : err;
+    }
+  }
+
+  private async evaluateArithmeticPart(part: { expression: string; arithmeticAST?: AstArithmeticExpression }, ctx: ExecContextIf): Promise<number> {
     if (part.arithmeticAST) {
       return await this.evaluateArithmetic(part.arithmeticAST, ctx);
     }
@@ -2612,6 +2654,18 @@ export class AstExecutor {
   protected async applyAssignment(assignment: Assignment, ctx: ExecContextIf, local: boolean): Promise<void> {
     const { name, subscript, append, values, list } = assignment;
 
+    // A readonly variable cannot be assigned. Before a command that is said and
+    // the command runs without it, as in bash; anywhere else the command ends
+    if (ctx.isReadonlyVar(name)) {
+      if (local) {
+        await this.shell.pipeWrite(ctx.getStderr(), `${name}: readonly variable\n`).catch(() => {});
+
+        return;
+      }
+
+      throw new ReadonlyVariableError(name);
+    }
+
     if (list) {
       // `a=([k]=v …)` on an associative array, and `a=([2]=x)` on an indexed one
       if (ctx.getAssoc(name)) {
@@ -3016,7 +3070,7 @@ export class AstExecutor {
       case 'Q':
       case 'K':
       case 'k':
-        return shellQuote(value);
+        return singleQuoted(value);
       case 'E':
         return utils.unquoteWord(`$'${value.replaceAll("'", "\\'")}'`).values[0] ?? '';
       case 'P':
@@ -3024,7 +3078,7 @@ export class AstExecutor {
       case 'A': {
         const flags = attributes();
 
-        return flags ? `declare -${flags} ${name}=${shellQuote(value)}` : `${name}=${shellQuote(value)}`;
+        return flags ? `declare -${flags} ${name}=${singleQuoted(value)}` : `${name}=${singleQuoted(value)}`;
       }
       case 'a':
         return attributes();
@@ -3572,8 +3626,13 @@ export class AstExecutor {
   }
 
   private async writeArithmeticVariable(node: AstArithmeticIdentifier, value: number, ctx: ExecContextIf): Promise<void> {
+    if (ctx.isReadonlyVar(node.name)) {
+      throw new ReadonlyVariableError(node.name);
+    }
+
     if (node.subscript === undefined) {
-      ctx.setParams({ [node.name]: String(value) });
+      ctx.assignVariable(node.name, String(value));
+
       return;
     }
 
@@ -3585,6 +3644,15 @@ export class AstExecutor {
     const array = ctx.getArray(node.name);
 
     ctx.setArrayElement(node.name, await this.arithmeticIndex(node, array?.length ?? 0, ctx), String(value));
+  }
+
+  /** Dividing by zero is an error in bash, not a value. */
+  private divisor(value: number): number {
+    if (value === 0) {
+      throw new ArithmeticError('division by 0 (error token is "0")');
+    }
+
+    return value;
   }
 
   /** An associative subscript is a key: expanded, not evaluated. */
@@ -3638,9 +3706,9 @@ export class AstExecutor {
           case '*':
             return left * right;
           case '/':
-            return right === 0 ? 0 : Math.trunc(left / right);
+            return Math.trunc(left / this.divisor(right));
           case '%':
-            return right === 0 ? 0 : left % right;
+            return left % this.divisor(right);
           case '**':
             return Math.pow(left, right);
           case '&':
@@ -3712,10 +3780,10 @@ export class AstExecutor {
               value = currentValue * rightValue;
               break;
             case '/=':
-              value = rightValue === 0 ? 0 : Math.trunc(currentValue / rightValue);
+              value = Math.trunc(currentValue / this.divisor(rightValue));
               break;
             case '%=':
-              value = rightValue === 0 ? 0 : currentValue % rightValue;
+              value = currentValue % this.divisor(rightValue);
               break;
             case '&=':
               value = currentValue & rightValue;

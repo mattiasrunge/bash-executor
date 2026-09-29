@@ -4,6 +4,7 @@
  * Formats and prints arguments according to a format string.
  */
 
+import { backslashQuoted } from '../quote.ts';
 import { sprintf } from '@std/fmt/printf';
 import type { ExecContextIf, ShellIf } from '../types.ts';
 import type { BuiltinHandler, BuiltinResult } from './types.ts';
@@ -240,7 +241,7 @@ function convertValues(format: string, values: string[]): unknown[] {
         }
         break;
       case 'q':
-        result.push(shellQuote(value));
+        result.push(backslashQuoted(value));
         break;
       case 's':
       default:
@@ -268,21 +269,4 @@ function integerArgument(value: string): number {
   if (/^[+-]?0[0-7]+$/.test(text)) return Number.parseInt(text, 8);
 
   return Number.parseInt(text, 10) || 0;
-}
-
-/**
- * `%q`: the value quoted so the shell reads it back as itself — as bash writes
- * it, a backslash before each special character, or `$'…'` when it holds a
- * control character.
- */
-function shellQuote(value: string): string {
-  if (value === '') return "''";
-
-  if (/[\x00-\x1f\x7f]/.test(value)) {
-    const escapes: Record<string, string> = { '\n': '\\n', '\t': '\\t', '\r': '\\r', '\x1b': '\\E', '\\': '\\\\', "'": "\\'" };
-
-    return `$'${[...value].map((c) => escapes[c] ?? (/[\x00-\x1f\x7f]/.test(c) ? `\\${c.charCodeAt(0).toString(8).padStart(3, '0')}` : c)).join('')}'`;
-  }
-
-  return value.replace(/[^A-Za-z0-9_./,:@%+=^-]/g, '\\$&').replace(/^~/, '\\~');
 }

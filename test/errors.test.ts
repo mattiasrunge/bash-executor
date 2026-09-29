@@ -118,9 +118,9 @@ Deno.test('Arithmetic errors happen at run time, as in bash', async (t) => {
   // bash checks arithmetic only after expansion: a bad expression fails its
   // command with 1 and a message, and the script carries on
 
-  await t.step('$(( )) fails the command it is in, and the next one runs', async () => {
+  await t.step('$(( )) ends the line it is on, and the next one runs', async () => {
     const shell = new TestShell();
-    const result = await shell.runAndCapture('echo a $((1 + )); echo "s=$?"');
+    const result = await shell.runAndCapture('echo a $((1 + )); echo same line\necho "s=$?"');
     assertEquals(result.stdout, 's=1\n');
     assertEquals(result.stderr.includes('1 + : syntax error'), true);
   });
@@ -134,7 +134,7 @@ Deno.test('Arithmetic errors happen at run time, as in bash', async (t) => {
 
   await t.step('an assignment from a bad expression is not made', async () => {
     const shell = new TestShell();
-    const result = await shell.runAndCapture('x=1\nx=$((x + )); echo "x=$x s=$?"');
+    const result = await shell.runAndCapture('x=1\nx=$((x + ))\necho "x=$x s=$?"');
     assertEquals(result.stdout, 'x=1 s=1\n');
   });
 

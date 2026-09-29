@@ -788,6 +788,12 @@ export interface ExecContextIf {
   getFunctionScope: () => ExecContextIf | undefined;
 
   /**
+   * Set a variable as a plain `name=value` does: in the environment when it is
+   * exported there, as a shell variable otherwise. Readonly is the caller's to check.
+   */
+  assignVariable: (name: string, value: string) => void;
+
+  /**
    * Gets the target for an arbitrary file descriptor (0-2 map to stdin/stdout/stderr).
    * @param {string} fd - The file descriptor number.
    * @returns {string | undefined} The target pipe/file name or undefined if not set.

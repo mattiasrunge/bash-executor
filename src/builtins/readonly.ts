@@ -36,6 +36,6 @@ export const readonlyBuiltin: BuiltinHandler = async (
     return declareBuiltin(ctx, ['-r', '-p', ...args.filter((a) => a !== '-p')], shell, execute);
   }
 
-  // Otherwise, prepend -r to all arguments and delegate to declare
-  return declareBuiltin(ctx, ['-r', ...args], shell, execute);
+  // Otherwise declare -r, which in a function is global: readonly is not local
+  return declareBuiltin(ctx, ['-g', '-r', ...args], shell, execute);
 };

@@ -206,7 +206,16 @@ export const readBuiltin: BuiltinHandler = async (
     }
   }
 
-  ctx.setEnv(updates);
+  // Readonly ones are not read into; the rest are set as any assignment sets them
+  const readonly = Object.keys(updates).filter((name) => ctx.isReadonlyVar(name));
+
+  if (readonly.length > 0) {
+    return { code: 1, stderr: readonly.map((name) => `${name}: readonly variable\n`).join('') };
+  }
+
+  for (const [name, value] of Object.entries(updates)) {
+    ctx.assignVariable(name, value);
+  }
 
   return { code: 0 };
 };

@@ -6,6 +6,7 @@
 
 import { parseArithmetic } from '@ein/bash-parser';
 import { evaluateArithmetic } from '../arithmetic-eval.ts';
+import { ReadonlyVariableError } from '../errors.ts';
 import type { ExecContextIf, ShellIf } from '../types.ts';
 import type { BuiltinHandler, BuiltinResult } from './types.ts';
 
@@ -42,8 +43,13 @@ export const letBuiltin: BuiltinHandler = async (
       // Parse the arithmetic expression using bash-parser
       const ast = parseArithmetic(arg);
       // Evaluate the AST (use setEnv for variable assignment in let builtin)
-      lastResult = await evaluateArithmetic(ast, ctx, { useEnvForAssignment: true });
+      lastResult = await evaluateArithmetic(ast, ctx);
     } catch (error) {
+      // A readonly variable is said as any assignment says it, without let's name
+      if (error instanceof ReadonlyVariableError) {
+        return { code: 1, stderr: `${error.message}\n` };
+      }
+
       const message = error instanceof Error ? error.message : String(error);
       return {
         code: 1,

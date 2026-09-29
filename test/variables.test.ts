@@ -199,3 +199,29 @@ Deno.test('Variables as bash scopes and exports them', async (t) => {
     assertEquals(await run('Y=1 :; echo "Y=$Y"; set -o posix; Z=1 :; echo "Z=$Z"'), 'Y=\nZ=1\n');
   });
 });
+
+Deno.test('readonly variables stay as they are', async (t) => {
+  const run = async (script: string) => {
+    const result = await new TestShell().runAndCapture(script);
+    return [result.stdout, result.stderr];
+  };
+
+  await t.step('assigning one ends the line, and the next one runs', async () => {
+    assertEquals(await run('readonly r=1\nr=2; echo same line\necho "r=$r $?"'), ['r=1 1\n', 'r: readonly variable\n']);
+  });
+
+  await t.step('before a command it is said, and the command runs without it', async () => {
+    assertEquals(await run('readonly r=1; r=3 echo hi; echo "r=$r $?"'), ['hi\nr=1 0\n', 'r: readonly variable\n']);
+  });
+
+  await t.step('for, read, let, (( )), unset and declare fail on it', async () => {
+    const [stdout] = await run(
+      'readonly r=1; for r in a; do :; done; echo "for $?"; read r <<< x; echo "read $?"; let r=2; echo "let $?"; ((r++)); echo "(( $?"; unset r; echo "unset $?"; declare r=5; echo "declare $? $r"',
+    );
+    assertEquals(stdout, 'for 1\nread 1\nlet 1\n(( 1\nunset 1\ndeclare 1 1\n');
+  });
+
+  await t.step('readonly arrays too, and readonly in a function is global', async () => {
+    assertEquals(await run('f() { readonly a=(1); }; f\na[0]=2\necho "${a[0]}"; declare -p a'), ['1\ndeclare -ar a=([0]="1")\n', 'a: readonly variable\n']);
+  });
+});

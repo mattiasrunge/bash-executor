@@ -309,16 +309,18 @@ Deno.test('Arithmetic Command (( ))', async (t) => {
 });
 
 Deno.test('Arithmetic Edge Cases', async (t) => {
-  await t.step('division by zero returns 0', async () => {
+  await t.step('division by zero is an error that ends the line', async () => {
     const shell = new TestShell();
-    const result = await shell.runAndCapture('echo $((10 / 0))');
-    assertEquals(result.stdout, '0\n');
+    const result = await shell.runAndCapture('echo $((10 / 0)); echo same line\necho "next $?"');
+    assertEquals(result.stdout, 'next 1\n');
+    assertEquals(result.stderr, '10 / 0: division by 0 (error token is "0")\n');
   });
 
-  await t.step('modulo by zero returns 0', async () => {
+  await t.step('modulo by zero too, and (( )) only fails', async () => {
     const shell = new TestShell();
-    const result = await shell.runAndCapture('echo $((10 % 0))');
-    assertEquals(result.stdout, '0\n');
+    const result = await shell.runAndCapture('((10 % 0)); echo "st $?"');
+    assertEquals(result.stdout, 'st 1\n');
+    assertEquals(result.stderr, '((: 10 % 0: division by 0 (error token is "0")\n');
   });
 
   await t.step('undefined variable in arithmetic is 0', async () => {

@@ -650,6 +650,14 @@ export class ExecContext implements ExecContextIf {
     return this.parent;
   }
 
+  assignVariable(name: string, value: string): void {
+    if (this.getParams()[name] === undefined && name in this.getEnv()) {
+      this.setEnv({ [name]: value });
+    } else {
+      this.setParams({ [name]: value });
+    }
+  }
+
   getFunctionScope(): ExecContextIf | undefined {
     // A function's context is the one below the shell's that holds positional
     // parameters of its own; a block or a command's context holds none
