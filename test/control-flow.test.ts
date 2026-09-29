@@ -733,3 +733,9 @@ Deno.test('ANSI-C and locale strings in patterns', async () => {
   const result = await shell.runAndCapture(`z=$'\\t'; case "$z" in $'\\t') echo tab;; esac; case x in $"x") echo loc;; esac; [[ $'a\\tb' =~ ^a$'\\t'b$ ]] && echo re`);
   assertEquals(result.stdout, 'tab\nloc\nre\n');
 });
+
+Deno.test('a case subject is neither split nor globbed', async () => {
+  const shell = new TestShell();
+  const result = await shell.runAndCapture('set -- a b c; IFS=:; case $* in a:b:c) echo one;; esac; x=a:b; case $x in *\\:*) echo two;; esac; IFS=" "; case * in \\*) echo three;; esac');
+  assertEquals(result.stdout, 'one\ntwo\nthree\n');
+});

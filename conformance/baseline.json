@@ -42,7 +42,7 @@
     "array25.sub": true,
     "array26.sub": true,
     "array27.sub": true,
-    "array28.sub": false,
+    "array28.sub": true,
     "array29.sub": true,
     "array3.sub": true,
     "array30.sub": true,
@@ -74,7 +74,7 @@
     "attr.tests": true,
     "attr1.sub": true,
     "attr2.sub": true,
-    "braces.tests": false,
+    "braces.tests": true,
     "builtins.tests": true,
     "builtins1.sub": true,
     "builtins2.sub": true,
@@ -104,7 +104,7 @@
     "comsub-posix3.sub": true,
     "comsub-posix5.sub": false,
     "comsub-posix6.sub": true,
-    "comsub.tests": false,
+    "comsub.tests": true,
     "comsub1.sub": true,
     "comsub2.sub": true,
     "comsub3.sub": true,
@@ -118,7 +118,7 @@
     "coproc.tests": false,
     "cprint.tests": true,
     "dbg-support.sub": true,
-    "dbg-support.tests": false,
+    "dbg-support.tests": true,
     "dbg-support2.tests": true,
     "dbg-support3.sub": true,
     "dollar-at-star1.sub": true,
@@ -130,7 +130,7 @@
     "dollar-at-star5.sub": true,
     "dollar-at-star6.sub": true,
     "dollar-at-star7.sub": true,
-    "dollar-at-star8.sub": false,
+    "dollar-at-star8.sub": true,
     "dollar-at-star9.sub": true,
     "dollar-at1.sub": true,
     "dollar-at2.sub": true,
@@ -158,7 +158,7 @@
     "errors3.sub": true,
     "errors4.sub": true,
     "errors5.sub": true,
-    "errors6.sub": false,
+    "errors6.sub": true,
     "errors7.sub": true,
     "errors8.sub": true,
     "errors9.sub": true,
@@ -287,7 +287,7 @@
     "mapfile.tests": true,
     "mapfile1.sub": true,
     "mapfile2.sub": true,
-    "more-exp.tests": false,
+    "more-exp.tests": true,
     "nameref.tests": true,
     "nameref1.sub": true,
     "nameref10.sub": true,
@@ -310,9 +310,9 @@
     "nameref5.sub": true,
     "nameref6.sub": true,
     "nameref7.sub": true,
-    "nameref8.sub": false,
+    "nameref8.sub": true,
     "nameref9.sub": true,
-    "new-exp.tests": false,
+    "new-exp.tests": true,
     "new-exp1.sub": true,
     "new-exp10.sub": true,
     "new-exp11.sub": true,
@@ -451,14 +451,14 @@
     "varenv16.sub": true,
     "varenv17.sub": true,
     "varenv18.sub": true,
-    "varenv19.sub": false,
+    "varenv19.sub": true,
     "varenv2.sub": true,
     "varenv20.sub": true,
     "varenv21.sub": true,
     "varenv22.sub": true,
     "varenv3.sub": true,
     "varenv4.sub": true,
-    "varenv5.sub": false,
+    "varenv5.sub": true,
     "varenv6.sub": true,
     "varenv7.sub": true,
     "varenv8.sub": true,
@@ -523,9 +523,9 @@
       "reference": "pass"
     },
     "run-braces": {
-      "upstream": 0,
+      "upstream": 0.338,
       "pass": false,
-      "stdout": 0,
+      "stdout": 0.338,
       "reference": "pass"
     },
     "run-builtins": {
@@ -553,9 +553,9 @@
       "reference": "pass"
     },
     "run-comsub": {
-      "upstream": 0,
+      "upstream": 0.743,
       "pass": false,
-      "stdout": 0,
+      "stdout": 0.782,
       "reference": "pass"
     },
     "run-comsub-eof": {
@@ -589,9 +589,9 @@
       "reference": "pass"
     },
     "run-dbg-support": {
-      "upstream": 0,
+      "upstream": 0.043,
       "pass": false,
-      "stdout": 0,
+      "stdout": 0.046,
       "reference": "pass"
     },
     "run-dbg-support2": {
@@ -607,9 +607,9 @@
       "reference": "pass"
     },
     "run-dollars": {
-      "upstream": 0.681,
+      "upstream": 0.675,
       "pass": false,
-      "stdout": 0.682,
+      "stdout": 0.675,
       "reference": "pass"
     },
     "run-dynvar": {
@@ -625,9 +625,9 @@
       "reference": "pass"
     },
     "run-execscript": {
-      "upstream": 0.632,
+      "upstream": 0.637,
       "pass": false,
-      "stdout": 0.789,
+      "stdout": 0.796,
       "reference": "env"
     },
     "run-exp-tests": {
@@ -709,9 +709,9 @@
       "reference": "pass"
     },
     "run-ifs": {
-      "upstream": 0.643,
+      "upstream": 0.833,
       "pass": false,
-      "stdout": 0.75,
+      "stdout": 0.833,
       "reference": "pass"
     },
     "run-ifs-posix": {
@@ -764,21 +764,21 @@
       "reference": "pass"
     },
     "run-more-exp": {
-      "upstream": 0,
+      "upstream": 0.638,
       "pass": false,
-      "stdout": 0,
+      "stdout": 0.793,
       "reference": "pass"
     },
     "run-nameref": {
-      "upstream": 0.151,
+      "upstream": 0.156,
       "pass": false,
-      "stdout": 0.198,
+      "stdout": 0.203,
       "reference": "pass"
     },
     "run-new-exp": {
-      "upstream": 0,
+      "upstream": 0.103,
       "pass": false,
-      "stdout": 0,
+      "stdout": 0.193,
       "reference": "pass"
     },
     "run-nquote": {
@@ -963,9 +963,9 @@
       "reference": "pass"
     },
     "run-varenv": {
-      "upstream": 0.3,
+      "upstream": 0.313,
       "pass": false,
-      "stdout": 0.362,
+      "stdout": 0.372,
       "reference": "pass"
     },
     "run-vredir": {

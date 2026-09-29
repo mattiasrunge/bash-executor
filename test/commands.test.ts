@@ -67,10 +67,10 @@ Deno.test('Bang Operator', async (t) => {
     assertEquals(result.exitCode, 0);
   });
 
-  await t.step('bang with non-zero exit code', async () => {
+  await t.step('bang does not invert an exit: the shell ends with its status', async () => {
     const shell = new TestShell();
     const result = await shell.runAndCapture('! exit 5');
-    assertEquals(result.exitCode, 0);
+    assertEquals(result.exitCode, 5);
   });
 
   // Note: Bang with pipelines/compound commands is not fully implemented

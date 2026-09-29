@@ -124,3 +124,9 @@ Deno.test('exec with a command', async (t) => {
     assertEquals(result.stdout, 'in\nst=0\n');
   });
 });
+
+Deno.test('! leaves exit and return alone', async () => {
+  const shell = new TestShell();
+  const result = await shell.runAndCapture('( ! exit 42 ); echo $?; f() { ! return 3; }; f; echo $?; ! true; echo $?');
+  assertEquals(result.stdout, '42\n3\n1\n');
+});

@@ -893,7 +893,10 @@ export class AstExecutor {
         ctx.setArray('PIPESTATUS', [String(code)]);
       }
 
-      return this.applyErrexit(node.bang ? (code === 0 ? 1 : 0) : code, ctx);
+      // `!` inverts a status; an `exit` or `return` is no status yet: `( ! exit 42 )` is 42
+      const signal = isExitSignal(code) || isReturnSignal(code);
+
+      return this.applyErrexit(node.bang && !signal ? (code === 0 ? 1 : 0) : code, ctx);
     }, redirectPipes).finally(() => this.finishProcessSubstitutions(subs, ctx));
   }
 
@@ -1564,9 +1567,10 @@ export class AstExecutor {
 
   protected async executeCase(node: AstNodeCase, parentCtx: ExecContextIf): Promise<number> {
     return this.withCompoundRedirections(node, parentCtx, async (ctx) => {
-      // Expand the clause value
-      const clauseExpanded = await this.resolveExpansions(node.clause, ctx);
-      const clauseValue = clauseExpanded.values[0] || '';
+      // The subject is one word, neither split nor globbed: `case $x in` with
+      // IFS=: and x=a:b matches against a:b, `case * in` against *
+      const clauseExpanded = await this.resolveExpansions(node.clause, ctx, undefined, { split: false, glob: false });
+      const clauseValue = clauseExpanded.values.join(' ');
 
       for (const caseItem of node.cases || []) {
         // Check if any pattern matches (patterns undergo expansion and quote
@@ -2839,10 +2843,16 @@ export class AstExecutor {
     return { text: rValue.text, protectedRanges: rValue.protectedRanges, status, emptyList };
   }
 
+  /**
+   * @param opts - `split: false` and `glob: false` leave out field splitting
+   *               and pathname expansion, for the places bash does: a `case`
+   *               subject is expanded like a word in double quotes, less the quotes.
+   */
   protected async resolveExpansions(
     node: AstNodeWord | AstNodeAssignmentWord,
     ctx: ExecContextIf,
     subs?: ProcessSubstitutions,
+    opts: { split?: boolean; glob?: boolean } = {},
   ): Promise<{ values: string[]; status: number }> {
     if (!node.expansion || node.expansion.length === 0) {
       // Quotes AND escapes are already processed by the parser's quote-removal
@@ -2868,12 +2878,12 @@ export class AstExecutor {
     // Use unquoteWordWithProtectedRanges to preserve quotes that came from expansions
     // (e.g., JSON content like {"key":"value"} should keep its quotes)
     // This also applies IFS field splitting, to unquoted expansion results only
-    const unquotedResult = utils.unquoteWordWithProtectedRanges(value, protectedRanges, this.getIfs(ctx));
+    const unquotedResult = utils.unquoteWordWithProtectedRanges(value, protectedRanges, opts.split === false ? '' : this.getIfs(ctx));
     const result = { values: unquotedResult.values, status };
 
     // Path globbing expansion must be done last, and `set -f` turns it off — the
     // pattern is then just a word, which is also what an unmatched one becomes
-    if (hasPathExpansion && this.shell.resolvePath && !ctx.getShellOption('noglob')) {
+    if (hasPathExpansion && opts.glob !== false && this.shell.resolvePath && !ctx.getShellOption('noglob')) {
       const newValues: string[] = [];
 
       for (const path of result.values) {
