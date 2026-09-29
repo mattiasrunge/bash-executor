@@ -199,25 +199,49 @@ export class ExecContext implements ExecContextIf {
   }
 
   getParams(): Record<string, string> {
-    if (this.parent) {
-      return {
-        ...this.parent.getParams(),
-        ...this.params,
-      };
+    if (!this.parent) {
+      return this.params;
     }
 
-    return this.params;
+    const params = { ...this.parent.getParams(), ...this.params };
+
+    // A function frame's positional parameters are the whole set: after `shift`
+    // its $3 is gone, not the caller's $3 showing through
+    if ('#' in this.params) {
+      for (const key of Object.keys(params)) {
+        if (/^[1-9]\d*$/.test(key) && !(key in this.params)) {
+          delete params[key];
+        }
+      }
+    }
+
+    return params;
   }
 
+  /**
+   * Assign where bash would: dynamic scoping sends a name to the nearest context
+   * that has it — a function's `local x` takes `x=2` in that function and in
+   * what it calls — and to the shell itself when none does. The positional
+   * parameters belong, as one set, to the nearest function frame, so `shift`
+   * and `set --` there leave the caller's arguments alone.
+   */
   setParams(values: Record<string, string | null>): Record<string, string> {
-    if (this.parent) {
-      return {
-        ...this.parent.setParams(values),
-        ...this.params,
-      };
+    for (const [key, value] of Object.entries(values)) {
+      this.paramOwner(key).setLocalParams({ [key]: value });
     }
 
-    return this.setLocalParams(values);
+    return this.getParams();
+  }
+
+  private paramOwner(key: string): ExecContext {
+    const positional = /^([1-9]\d*|#|@|\*)$/.test(key);
+    let ctx: ExecContext = this;
+
+    while (ctx.parent && !(positional ? '#' in ctx.params : key in ctx.params)) {
+      ctx = ctx.parent;
+    }
+
+    return ctx;
   }
 
   setLocalParams(

@@ -228,3 +228,41 @@ Deno.test('Function in Pipeline', async (t) => {
     assertEquals(result.stdout, 'got: 42\n');
   });
 });
+
+Deno.test('dynamic scoping of assignments', async (t) => {
+  await t.step('assigning a local changes the local, not the global', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('x=0; f() { local x=1; x=2; echo "in=$x"; }; f; echo "out=$x"');
+    assertEquals(result.stdout, 'in=2\nout=0\n');
+  });
+
+  await t.step('a function called from one with a local sees and sets that local', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('x=0; g() { x=3; }; f() { local x=1; g; echo "in=$x"; }; f; echo "out=$x"');
+    assertEquals(result.stdout, 'in=3\nout=0\n');
+  });
+
+  await t.step('a name no scope has goes to the shell', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('f() { y=5; }; f; echo "y=$y"');
+    assertEquals(result.stdout, 'y=5\n');
+  });
+
+  await t.step('shift and set -- in a function leave the caller\'s arguments', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('set -- top1 top2; f() { shift; echo "f=$1 $#"; set -- p; echo "f=$1 $#"; }; f a b; echo "top=$1 $#"');
+    assertEquals(result.stdout, 'f=b 1\nf=p 1\ntop=top1 2\n');
+  });
+
+  await t.step('a function sees its own arguments only, not its caller\'s', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('set -- a b c; f() { echo "[$3] $#"; }; f x y');
+    assertEquals(result.stdout, '[] 2\n');
+  });
+
+  await t.step('a recursive function that shifts terminates', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('f() { echo $1; shift; [ $# -gt 0 ] && f "$@"; }; f 1 2 3');
+    assertEquals(result.stdout, '1\n2\n3\n');
+  });
+});

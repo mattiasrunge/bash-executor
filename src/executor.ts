@@ -831,7 +831,12 @@ export class AstExecutor {
     fn: { name: string; body: AstNodeCompoundList; ctx: ExecContextIf },
     args: string[],
   ): Promise<number> {
-    const fnCtx = fn.ctx.spawnContext();
+    // bash scopes dynamically: the frame hangs off the caller, so a function
+    // sees and assigns its caller's locals, and one called in a subshell or a
+    // pipeline stage stays inside it. Hanging it off the context the function
+    // was defined in let `g` miss `f`'s locals and wrote a stage's assignments
+    // back into the shell.
+    const fnCtx = ctx.spawnContext();
 
     // Where a function was *defined* says nothing about errexit; where it is
     // called says everything. `if f; then` has to exempt what f runs, and a
