@@ -255,9 +255,9 @@ Deno.test('Associative arrays', async (t) => {
     assertEquals(result.stdout, '1\n');
   });
 
-  await t.step('${!m[@]} is the keys and ${m[@]} the values', async () => {
-    const result = await run('declare -A m; m[a]=1; m[b]=2; echo "${!m[@]} / ${m[@]}"');
-    assertEquals(result.stdout, 'a b / 1 2\n');
+  await t.step("${!m[@]} is the keys and ${m[@]} the values, in bash's hash order", async () => {
+    const result = await run('declare -A m; m[a]=1; m[b]=2; m[x]=3; m[y]=4; m[z]=5; echo "${!m[@]} / ${m[@]}"');
+    assertEquals(result.stdout, 'z y x b a / 5 4 3 2 1\n');
   });
 
   await t.step('a literal takes [key]=value elements', async () => {
@@ -272,7 +272,8 @@ Deno.test('Associative arrays', async (t) => {
 
   await t.step('declare -p prints it as an associative array', async () => {
     const result = await run('declare -A m; m[a]=1; declare -p m');
-    assertEquals(result.stdout, 'declare -A m=([a]="1")\n');
+    // bash ends each associative element with a space
+    assertEquals(result.stdout, 'declare -A m=([a]="1" )\n');
   });
 
   await t.step('local -A keeps it inside the function', async () => {

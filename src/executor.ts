@@ -33,11 +33,12 @@ import {
 import { getExitCode, getReturnCode, isExitSignal, isReturnSignal, makeExitSignal } from './builtins/exit.ts';
 import { JOB_BUILTINS } from './builtins/jobs.ts';
 import { type BuiltinRegistry, SPECIAL_BUILTINS } from './builtins/types.ts';
+import { assocKeys } from './builtins/variable-listing.ts';
 import type { ErrorPosition } from './errors.ts';
 import { exportedFunctionName, exportedFunctionText, functionEnvName } from './print-command.ts';
 import { singleQuoted } from './quote.ts';
 import { contextVariables, evaluateArithmeticText } from './arith.ts';
-import { bracketExpression, globToRegExp, globToRegexSource, posixRegexToSource, quoteGlob, quoteRegex } from './pattern.ts';
+import { bracketExpression, globToRegExp, globToRegexSource, posixRegexToSource, quoteGlob, quoteRegex, unquoteGlob } from './pattern.ts';
 import {
   ArithmeticError,
   ArithmeticSyntaxError,
@@ -49,7 +50,15 @@ import {
   UnknownNodeTypeError,
   UnsupportedOperatorError,
 } from './errors.ts';
-import { type ExecCommandOptions, type ExecContextIf, type ExecSyncResult, type ExecuteAndCaptureOptions, SHELL_OPTION_FLAG_MAP, type ShellIf } from './types.ts';
+import {
+  type ExecCommandOptions,
+  type ExecContextIf,
+  type ExecSyncResult,
+  type ExecuteAndCaptureOptions,
+  QUOTED_LIST_MARK,
+  SHELL_OPTION_FLAG_MAP,
+  type ShellIf,
+} from './types.ts';
 
 // The special parameters, which are set even when nothing has assigned to them
 /** POSIX's special builtins: in POSIX mode an assignment before one outlasts it. */
@@ -88,6 +97,9 @@ const DISTRIBUTING_OPS = new Set([
   'caseChange',
   'substring',
 ]);
+
+/** Where what matched goes in the replacement of `${x/p/s}`: an unquoted `&`. A noncharacter, which no text holds. */
+const MATCH_MARK = '\uFDD3';
 
 /** Builtins whose arguments are assignments rather than ordinary words */
 const DECLARATION_COMMANDS = new Set(['declare', 'typeset', 'local', 'export', 'readonly']);
@@ -1399,10 +1411,18 @@ export class AstExecutor {
   protected async executeSubshell(node: AstNodeSubshell, parentCtx: ExecContextIf): Promise<number> {
     // `( … )` is a subshell: env/cwd changes inside must not escape to the parent.
     const ctx = parentCtx.subContext();
-    // A subshell is a top level of its own: an aborted command ends it, not the shell
+    // A subshell is a top level of its own: an aborted command ends it, not the
+    // shell, and so does an unset parameter under `set -u`
     const result = await this.withFileBridging(ctx, () => {
       return this.executeNode(node.list, ctx);
-    }).catch((err) => err instanceof CommandAbortError ? this.abortStatus(err, ctx) : Promise.reject(err));
+    }).catch(async (err) => {
+      if (err instanceof CommandAbortError) return this.abortStatus(err, ctx);
+      if (!(err instanceof UnboundVariableError)) return Promise.reject(err);
+
+      await this.diagnose(ctx, err.message);
+
+      return ctx.getShellOption('errexit') ? 1 : UNBOUND_VARIABLE_CODE;
+    });
 
     // `(exit 3)` ends the subshell, not the shell: to the caller it is status 3.
     // Its EXIT trap runs as it ends.
@@ -2324,6 +2344,16 @@ export class AstExecutor {
    * no filename expansion or field splitting is applied.
    */
   protected async expandCasePattern(word: AstNodeWord, ctx: ExecContextIf): Promise<RegExp> {
+    return globToRegExp(await this.patternGlob(word, ctx));
+  }
+
+  /**
+   * The glob a pattern word stands for, written raw (quotes still in its text):
+   * quoted and escaped characters are quoted in it, so they match themselves.
+   * With `ampersand`, an unquoted `&` becomes MATCH_MARK instead — the
+   * replacement of `${x/p/s}`, where it stands for what matched.
+   */
+  protected async patternGlob(word: AstNodeWord, ctx: ExecContextIf, ampersand = false): Promise<string> {
     const text = word.text;
 
     // Pre-evaluate non-glob expansions by their location in the raw text,
@@ -2353,7 +2383,8 @@ export class AstExecutor {
     for (let i = 0; i < text.length; i++) {
       const expansion = !inSingle ? evaluated.get(i) : undefined;
       if (expansion) {
-        glob += inDouble ? quoteGlob(expansion.value) : expansion.value;
+        // In a replacement, an `&` an unquoted expansion brings is the match too, as in bash
+        glob += inDouble ? quoteGlob(expansion.value) : ampersand ? expansion.value.replaceAll('&', MATCH_MARK) : expansion.value;
         i = expansion.end;
         continue;
       }
@@ -2372,12 +2403,84 @@ export class AstExecutor {
         inSingle = !inSingle;
       } else if (!inSingle && c === '"') {
         inDouble = !inDouble;
+      } else if (ampersand && c === '&' && !inSingle && !inDouble) {
+        glob += MATCH_MARK;
       } else {
         glob += inSingle || inDouble ? quoteGlob(c) : c;
       }
     }
 
-    return globToRegExp(glob);
+    return glob;
+  }
+
+  /**
+   * An operator's word as written: parsed, a word with no expansions has lost
+   * its quotes, and whether a character was quoted decides what it matches.
+   */
+  protected writtenWord(word: unknown, source: unknown): AstNodeWord {
+    const parsed = word as AstNodeWord | undefined;
+
+    return parsed?.expansion?.length ? parsed : { type: 'Word', text: String(source ?? parsed?.text ?? ''), expansion: [] } as unknown as AstNodeWord;
+  }
+
+  /**
+   * `${x/pattern/string}`, as bash's pat_subst: the longest match, the first
+   * or every one; `#` and `%` anchor it at the start or the end. An unquoted
+   * `&` in the string is what matched (patsub_replacement, on by default).
+   */
+  protected async replacePattern(xp: Record<string, unknown>, value: string, ctx: ExecContextIf): Promise<string> {
+    const glob = await this.patternGlob(this.writtenWord(xp.pattern, xp.patternSource), ctx);
+    const anchor = xp.anchor as '#' | '%' | undefined;
+
+    // An empty pattern replaces nothing, unless anchored: `${x/#/p}` prefixes
+    if (glob === '' && !anchor) return value;
+
+    const template = xp.replacement === undefined
+      ? ''
+      : await this.patternGlob(this.writtenWord(xp.replacement, xp.replacementSource), ctx, ctx.getShellOption('patsub_replacement'));
+    // The glob-quoting the walk added is for patterns; a replacement is text
+    const replacement = (match: string) => unquoteGlob(template).split(MATCH_MARK).join(match);
+    const matches = globToRegExp(glob);
+    const full = (text: string) => matches.test(text);
+
+    if (anchor === '#') {
+      for (let end = value.length; end >= 0; end--) {
+        if (full(value.slice(0, end))) return replacement(value.slice(0, end)) + value.slice(end);
+      }
+
+      return value;
+    }
+
+    if (anchor === '%') {
+      for (let start = 0; start <= value.length; start++) {
+        if (full(value.slice(start))) return value.slice(0, start) + replacement(value.slice(start));
+      }
+
+      return value;
+    }
+
+    // An empty value is matched as it is, `${x/*/y}` with x empty is y
+    if (value === '') return full('') ? replacement('') : value;
+
+    let out = '';
+    let at = 0;
+
+    while (at < value.length) {
+      let end = value.length;
+
+      while (end > at && !full(value.slice(at, end))) end--;
+
+      if (end > at) {
+        out += replacement(value.slice(at, end));
+        at = end;
+
+        if (!xp.globally) return out + value.slice(at);
+      } else {
+        out += value[at++];
+      }
+    }
+
+    return out;
   }
 
   /**
@@ -2863,6 +2966,21 @@ export class AstExecutor {
    * boundaries still marked and split again on the other side.
    */
   protected async resolveDeclarationArg(node: AstNodeWord, ctx: ExecContextIf, parts: utils.AssignmentParts): Promise<string> {
+    // `c='(3)'` reads as `c=(3)` once quotes are gone; the source says which it was
+    const written = this.currentSource !== undefined && node.loc?.start?.char !== undefined && node.loc.end?.char !== undefined
+      ? this.currentSource.slice(node.loc.start.char, node.loc.end.char + 1)
+      : undefined;
+    // Written as a list only when the word itself starts `name=(`, unquoted
+    const quotedList = parts.list && written !== undefined && !(utils.isAssignmentPrefix(written) && written[written.indexOf('=') + 1] === '(');
+
+    if (quotedList) {
+      const { values } = await this.resolveExpansions({ ...node, type: 'AssignmentWord' } as AstNodeAssignmentWord, ctx);
+      const text = values[0] ?? '';
+      const eq = text.indexOf('=');
+
+      return `${text.slice(0, eq + 1)}${QUOTED_LIST_MARK}${text.slice(eq + 1)}`;
+    }
+
     if (parts.list) {
       const { values } = await this.resolveArrayElements(node as unknown as AstNodeAssignmentWord, ctx, parts);
 
@@ -2900,8 +3018,11 @@ export class AstExecutor {
       // empty element was written as '' or "" and survives quote removal instead
       if (element !== '') {
         const ranges = utils.sliceRanges(protectedRanges, offset, offset + element.length);
+        // `[key]=value` is an assignment of its own: neither side is split into fields
+        const keyed = /^\[[^\]]*\]\+?=/.test(element);
+        const unquoted = utils.unquoteWordWithProtectedRanges(element, ranges, keyed ? '' : ifs).values;
 
-        values.push(...utils.unquoteWordWithProtectedRanges(element, ranges, ifs).values);
+        values.push(...(keyed ? [unquoted.join(' ')] : unquoted));
       }
 
       offset += element.length + utils.ARRAY_ELEMENT_SEPARATOR.length;
@@ -2913,10 +3034,23 @@ export class AstExecutor {
   /**
    * Split an element written as `[key]=value`, or return null for a plain one.
    */
-  protected keyedElement(element: string): { key: string; value: string } | null {
-    const match = element.match(/^\[([^\]]*)\]=(.*)$/s);
+  protected keyedElement(element: string): { key: string; value: string; append: boolean } | null {
+    const match = element.match(/^\[([^\]]*)\](\+?)=(.*)$/s);
 
-    return match ? { key: match[1], value: match[2] } : null;
+    return match ? { key: match[1], value: match[3], append: match[2] === '+' } : null;
+  }
+
+  /**
+   * A value as the variable takes it: arithmetic for one declared -i, where
+   * `+=` adds; otherwise the text, `+=` appending it.
+   */
+  protected async assignedValue(ctx: ExecContextIf, name: string, previous: string | undefined, text: string, append: boolean): Promise<string> {
+    if (!ctx.isIntegerVar(name)) return append ? (previous ?? '') + text : text;
+
+    const number = await this.arithmeticBig({ expression: text || '0' }, ctx);
+    const base = append ? await this.arithmeticBig({ expression: previous || '0' }, ctx) : 0n;
+
+    return String(BigInt.asIntN(64, base + number));
   }
 
   /**
@@ -2952,7 +3086,9 @@ export class AstExecutor {
           const keyed = this.keyedElement(element);
 
           if (keyed) {
-            entries[keyed.key] = keyed.value;
+            entries[keyed.key] = await this.assignedValue(ctx, name, entries[keyed.key], keyed.value, keyed.append);
+          } else {
+            await this.diagnose(ctx, `${name}: ${element}: must use subscript when assigning associative array`);
           }
         }
 
@@ -2967,14 +3103,16 @@ export class AstExecutor {
 
       const existing = append ? (ctx.getArray(name) ?? []).slice() : [];
 
+      // `[2]+=x` appends to what that element holds so far — nothing, unless the list is itself appended
+      let next = existing.length;
+
       for (const element of values) {
         const keyed = this.keyedElement(element);
+        const index = keyed ? await this.resolveIndex(keyed.key, existing.length, ctx) : next;
+        const previous = keyed?.append ? existing[index] : undefined;
 
-        if (keyed) {
-          existing[await this.resolveIndex(keyed.key, existing.length, ctx)] = keyed.value;
-        } else {
-          existing.push(element);
-        }
+        existing[index] = await this.assignedValue(ctx, name, previous, keyed ? keyed.value : element, keyed?.append ?? false);
+        next = index + 1;
       }
 
       if (local) {
@@ -2993,7 +3131,7 @@ export class AstExecutor {
     if (subscript !== undefined && ctx.getAssoc(name)) {
       const assoc = ctx.getAssoc(name)!;
       const key = await this.expandSubscript(subscript, ctx);
-      const element = append ? (assoc[key] ?? '') + value : value;
+      const element = await this.assignedValue(ctx, name, assoc[key], value, append);
 
       if (local) {
         ctx.setLocalAssoc(name, { ...assoc, [key]: element });
@@ -3007,7 +3145,7 @@ export class AstExecutor {
     if (subscript !== undefined) {
       const array = ctx.getArray(name);
       const index = await this.resolveIndex(subscript, array?.length ?? 0, ctx);
-      const element = append ? (array?.[index] ?? '') + value : value;
+      const element = await this.assignedValue(ctx, name, array?.[index], value, append);
 
       if (local) {
         // A prefix assignment is scoped to the command it precedes, so the array
@@ -3027,9 +3165,7 @@ export class AstExecutor {
 
     // A plain assignment to an array name writes element 0 and leaves the rest
     if (ctx.getArray(name)) {
-      const previous = append ? ctx.getArray(name)?.[0] ?? '' : '';
-
-      ctx.setArrayElement(name, 0, previous + value);
+      ctx.setArrayElement(name, 0, await this.assignedValue(ctx, name, ctx.getArray(name)?.[0], value, append));
 
       return;
     }
@@ -3219,7 +3355,8 @@ export class AstExecutor {
     const assoc = ctx.getAssoc(name);
 
     if (assoc) {
-      return Object.values(assoc);
+      // In the order bash walks its hash table, as ${!a[@]} lists the keys
+      return assocKeys(assoc).map((key) => assoc[key]);
     }
 
     const array = ctx.getArray(name);
@@ -3383,31 +3520,20 @@ export class AstExecutor {
       case 'transformation':
         return this.transformValue(String(xp.transform ?? ''), String(xp.parameter ?? ''), value, ctx);
 
-      case 'stringReplace': {
-        // ${var/pattern/string}
-        const pattern = String(xp.substitute ?? '');
-        const replacement = String(xp.replace ?? '');
-
-        if (xp.globally) {
-          return value.split(pattern).join(replacement);
-        }
-
-        const idx = value.indexOf(pattern);
-
-        return idx === -1 ? value : value.slice(0, idx) + replacement + value.slice(idx + pattern.length);
-      }
+      case 'stringReplace':
+        return this.replacePattern(xp, value, ctx);
 
       case 'removeSmallestSuffixPattern':
-        return this.removeSuffix(value, await this.resolveWordValue(xp.word, ctx), false);
+        return this.removeSuffix(value, await this.patternGlob(this.writtenWord(xp.word, xp.wordSource), ctx), false);
 
       case 'removeLargestSuffixPattern':
-        return this.removeSuffix(value, await this.resolveWordValue(xp.word, ctx), true);
+        return this.removeSuffix(value, await this.patternGlob(this.writtenWord(xp.word, xp.wordSource), ctx), true);
 
       case 'removeSmallestPrefixPattern':
-        return this.removePrefix(value, await this.resolveWordValue(xp.word, ctx), false);
+        return this.removePrefix(value, await this.patternGlob(this.writtenWord(xp.word, xp.wordSource), ctx), false);
 
       case 'removeLargestPrefixPattern':
-        return this.removePrefix(value, await this.resolveWordValue(xp.word, ctx), true);
+        return this.removePrefix(value, await this.patternGlob(this.writtenWord(xp.word, xp.wordSource), ctx), true);
 
       case 'caseChange':
         return this.changeCase(value, String(xp.pattern ?? '?'), xp.case === 'upper', Boolean(xp.globally));
@@ -3512,7 +3638,7 @@ export class AstExecutor {
       const name = String(xp.parameter);
       const assoc = ctx.getAssoc(name);
       const array = ctx.getArray(name);
-      const keys = assoc ? Object.keys(assoc) : array ? Object.keys(array) : params[name] !== undefined ? ['0'] : [];
+      const keys = assoc ? assocKeys(assoc) : array ? Object.keys(array) : params[name] !== undefined ? ['0'] : [];
 
       return { values: keys, join: xp.expandWords ? 'field' : 'ifs' };
     }
@@ -3705,7 +3831,8 @@ export class AstExecutor {
             // ${#var}, and ${#a[@]} for the number of elements
             const { name, subscript } = this.splitSubscript(xp.parameter!);
 
-            this.assertParameterSet(xp.parameter!, isSet, ctx);
+            // `${#a[4]}` of an unset one names the array, as bash does
+            this.assertParameterSet(name, isSet, ctx);
 
             if (name === '@' || name === '*') {
               // ${#@} and ${#*}: the number of positional parameters, as $#

@@ -76,7 +76,7 @@ export function createHashBuiltin(registry: BuiltinRegistry): BuiltinHandler {
     }
 
     if (expunge) {
-      ctx.unsetAssoc('BASH_CMDS');
+      ctx.setAssoc('BASH_CMDS', {});
     }
 
     let stdout = '';

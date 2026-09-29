@@ -38,6 +38,11 @@ export function backslashQuoted(value: string): string {
   return value.replace(/[^A-Za-z0-9_./,:@%+=^-]/g, '\\$&').replace(/^~/, '\\~');
 }
 
+/** `$'…'` when the value holds a control character (bash's ansic_shouldquote), else undefined. */
+export function ansiCIfNeeded(value: string): string | undefined {
+  return CONTROL.test(value) ? ansiC(value) : undefined;
+}
+
 /** As `declare -p` writes a value: in double quotes. */
 export function doubleQuoted(value: string): string {
   return `"${value.replace(/(["\\$`])/g, '\\$1')}"`;

@@ -31,6 +31,42 @@ export type FunctionDef = {
  */
 export type GetoptsState = { curopt: number; charindex: number };
 
+/**
+ * Put after the `=` of a declaration builtin's argument whose value only looks
+ * like an element list: `declare c='(3)'` was quoted, so it is the string
+ * `(3)` — unless it lands in an array, where bash reads it as a list after all.
+ * A Unicode noncharacter, which no text holds.
+ */
+export const QUOTED_LIST_MARK = '\uFDD2';
+
+/** What a variable holds: a string, an indexed array or an associative one. */
+export type VariableKind = 'scalar' | 'array' | 'assoc';
+
+/**
+ * A variable as `declare -p` sees it. `value` is absent while it is only
+ * declared (`declare x`, `local -a y`); `attributes` are declare's letters in
+ * bash's order — i integer, l lower case, n name reference, r readonly,
+ * t trace, u upper case, x exported — and `local` says a function holds it.
+ */
+export type VariableInfo = {
+  kind: VariableKind;
+  value?: string | string[] | Record<string, string>;
+  attributes: string;
+  local: boolean;
+};
+
+/** What `declareVariable` makes of a name. */
+export type DeclareOptions = {
+  /** Make it this kind, converting a scalar's value to element 0 */
+  kind?: VariableKind;
+  /** Attribute letters to give it */
+  add?: string;
+  /** Attribute letters to take away */
+  remove?: string;
+  /** Declare it in this context — a function's own, as `local` does — rather than where it is */
+  local?: boolean;
+};
+
 export type IO = {
   stdin: string;
   stdout: string;
@@ -704,6 +740,40 @@ export interface ExecContextIf {
    * @returns {Record<string, string>} All alias definitions.
    */
   getAliases: () => Record<string, string>;
+
+  /**
+   * The nearest variable of that name, set or only declared, or undefined.
+   * @param {string} name - The variable's name.
+   * @returns {VariableInfo | undefined} Its kind, value and attributes.
+   */
+  getVariable: (name: string) => VariableInfo | undefined;
+
+  /**
+   * Every variable this context sees, each the nearest of its name.
+   * @returns {Record<string, VariableInfo>} By name.
+   */
+  getVariables: () => Record<string, VariableInfo>;
+
+  /**
+   * The variables this context holds itself: a function's locals, in its frame.
+   * @returns {Record<string, VariableInfo>} By name.
+   */
+  getOwnVariables: () => Record<string, VariableInfo>;
+
+  /**
+   * Declare a variable, `declare -ai x` without a value: made unset where it
+   * does not exist, converted to another kind, attributes given or taken.
+   * @param {string} name - The variable's name.
+   * @param {DeclareOptions} opts - The kind, the attributes, and whether it is local.
+   */
+  declareVariable: (name: string, opts?: DeclareOptions) => void;
+
+  /**
+   * Unset a variable, whatever its kind. A function's local stays local, unset,
+   * so assigning it again sets the function's own, as in bash.
+   * @param {string} name - The variable's name.
+   */
+  unsetVariable: (name: string) => void;
 
   /**
    * Checks if a variable is marked as readonly.

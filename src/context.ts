@@ -1,7 +1,17 @@
 import type { AstNodeCompoundList } from '@ein/bash-parser';
 import type { FunctionDefinition } from './print-command.ts';
 import { JobTable } from './jobs.ts';
-import { DEFAULT_SHELL_OPTIONS, DEFAULT_SHOPT_OPTIONS, type ExecContextIf, type FunctionDef, type GetoptsState, type IO } from './types.ts';
+import {
+  type DeclareOptions,
+  DEFAULT_SHELL_OPTIONS,
+  DEFAULT_SHOPT_OPTIONS,
+  type ExecContextIf,
+  type FunctionDef,
+  type GetoptsState,
+  type IO,
+  type VariableInfo,
+  type VariableKind,
+} from './types.ts';
 
 // TODO: We need to define when cwd or params should go to parent or not...
 
@@ -19,22 +29,61 @@ const DYNAMIC_PARAMS = ['SECONDS', 'EPOCHSECONDS', 'EPOCHREALTIME', 'RANDOM', 'S
  */
 export const VOLATILE_PARAMS: ReadonlySet<string> = new Set(['?', 'LINENO', 'BASH_COMMAND', ...DYNAMIC_PARAMS]);
 
+/**
+ * A shell variable as a scope holds it: a string, an indexed array (sparse, as
+ * bash's are) or an associative one — or no value at all while it is only
+ * declared, `declare x`, `local -a y` — and its attributes, as declare's letters.
+ */
+type Variable = {
+  kind: VariableKind;
+  value?: string | string[] | Record<string, string>;
+  attrs: Set<string>;
+};
+
+const newVariable = (kind: VariableKind): Variable => ({ kind, attrs: new Set() });
+
+const copyVariable = (variable: Variable): Variable => ({
+  kind: variable.kind,
+  value: Array.isArray(variable.value) ? variable.value.slice() : typeof variable.value === 'object' ? { ...variable.value } : variable.value,
+  attrs: new Set(variable.attrs),
+});
+
+/** bash's order of attribute letters, as declare -p writes them. */
+const ATTRIBUTE_ORDER = 'aAfinrtxclu';
+
+const variableInfo = (variable: Variable, local: boolean): VariableInfo => ({
+  kind: variable.kind,
+  value: variable.value,
+  attributes: [...variable.attrs].sort((a, b) => ATTRIBUTE_ORDER.indexOf(a) - ATTRIBUTE_ORDER.indexOf(b)).join(''),
+  local,
+});
+
+/** A value as a variable with `-l`, `-u` or `-c` keeps it. */
+const cased = (variable: Variable, value: string): string =>
+  variable.attrs.has('l')
+    ? value.toLowerCase()
+    : variable.attrs.has('u')
+    ? value.toUpperCase()
+    : variable.attrs.has('c')
+    ? value.charAt(0).toUpperCase() + value.slice(1).toLowerCase()
+    : value;
+
+/** `$1`, `$#`, `$?` and the like: parameters, but no variables. */
+const isSpecialParam = (name: string): boolean => /^(\d+|[#@*?$!-])$/.test(name);
+
 export class ExecContext implements ExecContextIf {
   private cwd = '/';
   private parent?: ExecContext;
   private io: IO;
-  private env: Record<string, string> = {};
-  private params: Record<string, string> = {};
-  private arrays: Record<string, string[]> = {};
-  private assocs: Record<string, Record<string, string>> = {};
+  /** The positional and special parameters, `$1` `$#` `$?` …, which are no variables */
+  private special: Record<string, string> = {};
+  /** The variables this scope holds: the shell's, a function's locals, a command's own environment */
+  private vars = new Map<string, Variable>();
   private fns: Record<string, FunctionDef> = {};
-  private alias: Record<string, string> = {};
   private traps: Record<string, string> = {};
   private jobTable = new JobTable();
   private getoptsState?: GetoptsState;
   private umask = 0o022;
-  private readonlyVars = new Set<string>();
-  private integerVars = new Set<string>();
   private dirStack: string[] = [];
   private fds: Record<string, string> = {};
   private options: Record<string, boolean> = { ...DEFAULT_SHELL_OPTIONS, ...DEFAULT_SHOPT_OPTIONS };
@@ -60,9 +109,13 @@ export class ExecContext implements ExecContextIf {
       // `$#` is 0 in a shell nobody passed arguments to, not the empty string a
       // never-assigned parameter gives. Only the shell itself carries it: a
       // spawned context with its own would shadow whatever `set --` wrote.
-      this.params['#'] = '0';
+      this.special['#'] = '0';
       // And `$?` is 0 before anything has run
-      this.params['?'] = '0';
+      this.special['?'] = '0';
+
+      // The shell's own tables, as bash shows them: the aliases and the hashed commands
+      this.vars.set('BASH_ALIASES', { kind: 'assoc', value: {}, attrs: new Set() });
+      this.vars.set('BASH_CMDS', { kind: 'assoc', value: {}, attrs: new Set() });
     }
   }
 
@@ -74,16 +127,15 @@ export class ExecContext implements ExecContextIf {
     const ctx = new ExecContext();
 
     ctx.setCwd(this.getCwd());
-    ctx.setEnv(this.getEnv());
-    ctx.setParams(this.getParams());
 
-    // slice() so the subshell cannot mutate the caller's array, and so holes stay holes
-    for (const [name, values] of Object.entries(this.getArrays())) {
-      ctx.setArray(name, values.slice());
+    // Every variable the subshell can see becomes its own, copied so it cannot
+    // write back: slice() keeps an array's holes holes
+    for (const [name, variable] of this.visibleVariables()) {
+      ctx.vars.set(name, copyVariable(variable));
     }
 
-    for (const [name, values] of Object.entries(this.getAssocs())) {
-      ctx.setAssoc(name, { ...values });
+    for (const [name, value] of Object.entries(this.getParams())) {
+      if (isSpecialParam(name)) ctx.special[name] = value;
     }
 
     ctx.redirectStdin(this.getStdin());
@@ -108,14 +160,6 @@ export class ExecContext implements ExecContextIf {
       if (action === '') {
         ctx.setTrap(name, '');
       }
-    }
-
-    // Copy variable attributes
-    for (const name of this.readonlyVars) {
-      ctx.setReadonlyVar(name, true);
-    }
-    for (const name of this.integerVars) {
-      ctx.setIntegerVar(name, true);
     }
 
     // Copy directory stack
@@ -163,39 +207,42 @@ export class ExecContext implements ExecContextIf {
   }
 
   getEnv(): Record<string, string> {
-    if (this.parent) {
-      return {
-        ...this.parent.getEnv(),
-        ...this.env,
-      };
+    const env: Record<string, string> = {};
+
+    for (const [name, variable] of this.visibleVariables()) {
+      if (variable.attrs.has('x') && typeof variable.value === 'string') env[name] = variable.value;
     }
 
-    return this.env;
+    return env;
   }
 
   setEnv(values: Record<string, string | null>): Record<string, string> {
-    if (this.parent) {
-      return {
-        ...this.parent.setEnv(values),
-        ...this.env,
-      };
+    this.assigningSpecial(values);
+
+    for (const [name, value] of Object.entries(values)) {
+      if (value === null) {
+        // What is exported goes; one that is not was never in the environment
+        if (this.lookup(name)?.variable.attrs.has('x')) this.unsetVariable(name);
+      } else {
+        this.assign(this.ownerOf(name), name, value).attrs.add('x');
+      }
     }
 
-    return this.setLocalEnv(values);
+    return this.getEnv();
   }
 
   setLocalEnv(values: Record<string, string | null>): Record<string, string> {
     this.assigningSpecial(values);
 
-    for (const key in values) {
-      if (values[key] === null) {
-        delete this.env[key];
+    for (const [name, value] of Object.entries(values)) {
+      if (value === null) {
+        if (this.vars.get(name)?.attrs.has('x')) this.vars.delete(name);
       } else {
-        this.env[key] = values[key];
+        this.assign(this, name, value).attrs.add('x');
       }
     }
 
-    return this.env;
+    return this.getEnv();
   }
 
   getShellOption(name: string): boolean {
@@ -260,7 +307,7 @@ export class ExecContext implements ExecContextIf {
       case 'SRANDOM':
         return String(crypto.getRandomValues(new Uint32Array(1))[0]);
       default:
-        return this.params['0'] ?? '';
+        return this.special['0'] ?? '';
     }
   }
 
@@ -272,35 +319,36 @@ export class ExecContext implements ExecContextIf {
     } else if (name === 'RANDOM') {
       this.randomSeed = (Number.parseInt(value, 10) || 0) % 2 ** 31;
     } else if (name === 'BASH_ARGV0') {
-      this.params['0'] = value;
+      this.special['0'] = value;
     }
   }
 
   getParams(): Record<string, string> {
-    if (!this.parent) {
-      if (this.dynamic.size === 0) {
-        return this.params;
-      }
+    const params: Record<string, string> = {};
+    const chain = this.chain();
 
-      const params = { ...this.params };
-
-      for (const name of this.dynamic) {
-        params[name] = this.dynamicValue(name);
-      }
-
-      return params;
-    }
-
-    const params = { ...this.parent.getParams(), ...this.params };
-
-    // A function frame's positional parameters are the whole set: after `shift`
-    // its $3 is gone, not the caller's $3 showing through
-    if ('#' in this.params) {
-      for (const key of Object.keys(params)) {
-        if (/^[1-9]\d*$/.test(key) && !(key in this.params)) {
-          delete params[key];
+    for (const scope of chain) {
+      // A function frame's positional parameters are the whole set: after `shift`
+      // its $3 is gone, not the caller's $3 showing through
+      if (scope.parent && '#' in scope.special) {
+        for (const key of Object.keys(params)) {
+          if (/^[1-9]\d*$/.test(key)) delete params[key];
         }
       }
+
+      Object.assign(params, scope.special);
+    }
+
+    const visible = this.visibleVariables();
+
+    for (const [name, variable] of visible) {
+      if (!variable.attrs.has('x') && typeof variable.value === 'string') params[name] = variable.value;
+    }
+
+    const root = chain[0];
+
+    for (const name of root.dynamic) {
+      if (!visible.has(name)) params[name] = root.dynamicValue(name);
     }
 
     return params;
@@ -314,8 +362,24 @@ export class ExecContext implements ExecContextIf {
    * and `set --` there leave the caller's arguments alone.
    */
   setParams(values: Record<string, string | null>): Record<string, string> {
+    this.assigningSpecial(values);
+
     for (const [key, value] of Object.entries(values)) {
-      this.paramOwner(key).setLocalParams({ [key]: value });
+      if (isSpecialParam(key)) {
+        this.paramOwner(key).setLocalParams({ [key]: value });
+        continue;
+      }
+
+      const root = this.root();
+
+      if (root.dynamic.has(key) && !this.lookup(key)) {
+        root.setLocalParams({ [key]: value });
+      } else if (value === null) {
+        // Unsetting a scalar; an array of that name is `unset`'s to remove
+        if (this.lookup(key)?.variable.kind === 'scalar') this.unsetVariable(key);
+      } else {
+        this.assignVariableValue(key, value);
+      }
     }
 
     return this.getParams();
@@ -323,171 +387,299 @@ export class ExecContext implements ExecContextIf {
 
   private paramOwner(key: string): ExecContext {
     const positional = /^([1-9]\d*|#|@|\*)$/.test(key);
-    const holds = positional ? '#' in this.params : key in this.params;
+    const holds = positional ? '#' in this.special : key in this.special;
 
     return holds || !this.parent ? this : this.parent.paramOwner(key);
   }
 
+  /** This scope's own: its positional and special parameters, and its scalar variables. */
   setLocalParams(
     values: Record<string, string | null>,
   ): Record<string, string> {
     this.assigningSpecial(values);
 
     for (const key in values) {
-      if (!this.parent && this.dynamic.has(key)) {
-        if (values[key] === null) {
+      const value = values[key];
+
+      if (isSpecialParam(key)) {
+        if (value === null) delete this.special[key];
+        else this.special[key] = value;
+      } else if (!this.parent && this.dynamic.has(key)) {
+        if (value === null) {
           this.dynamic.delete(key);
         } else {
-          this.setDynamic(key, values[key]!);
+          this.setDynamic(key, value);
         }
-
-        continue;
-      }
-
-      if (values[key] === null) {
-        delete this.params[key];
+      } else if (value === null) {
+        if (this.vars.get(key)?.kind === 'scalar') this.vars.delete(key);
       } else {
-        this.params[key] = values[key];
+        this.assign(this, key, value);
       }
     }
 
-    return this.params;
+    const own: Record<string, string> = { ...this.special };
+
+    for (const [name, variable] of this.vars) {
+      if (typeof variable.value === 'string') own[name] = variable.value;
+    }
+
+    return own;
   }
 
   getArray(name: string): string[] | undefined {
-    if (this.arrays[name]) {
-      return this.arrays[name];
-    }
+    const variable = this.lookup(name)?.variable;
 
-    return this.parent?.getArray(name);
+    if (variable?.kind !== 'array') return undefined;
+
+    // Declared and not yet assigned, `declare -a x`: an array with nothing in it
+    return Array.isArray(variable.value) ? variable.value : [];
   }
 
   getArrays(): Record<string, string[]> {
-    if (this.parent) {
-      return {
-        ...this.parent.getArrays(),
-        ...this.arrays,
-      };
+    const arrays: Record<string, string[]> = {};
+
+    for (const [name, variable] of this.visibleVariables()) {
+      if (variable.kind === 'array' && Array.isArray(variable.value)) arrays[name] = variable.value;
     }
 
-    return this.arrays;
+    return arrays;
   }
 
   setArray(name: string, values: string[]): void {
-    if (this.parent) {
-      this.parent.setArray(name, values);
-      return;
-    }
-
-    this.setLocalArray(name, values);
+    this.storeArray(this.ownerOf(name), name, values);
   }
 
   setLocalArray(name: string, values: string[]): void {
-    this.arrays[name] = values;
+    this.storeArray(this, name, values);
   }
 
   setArrayElement(name: string, index: number, value: string): void {
-    // The element goes where the array already is, so `a[0]=x` updates the array
-    // it can see instead of shadowing it. A new array lands in the shell context,
-    // the same place a plain assignment goes.
-    const owner = this.ownerOfArray(name) ?? this.root();
+    // The element goes where the variable already is, so `a[0]=x` updates the
+    // array it can see instead of shadowing it; a new one lands in the shell.
+    const owner = this.ownerOf(name);
+    const variable = owner.vars.get(name) ?? newVariable('array');
 
-    if (!owner.arrays[name]) {
-      // A variable that was a plain one becomes the array's element 0
-      const scalar = this.getParams()[name] ?? this.getEnv()[name];
+    owner.vars.set(name, variable);
 
-      owner.arrays[name] = scalar === undefined ? [] : [scalar];
-
-      if (scalar !== undefined) {
-        this.setParams({ [name]: null });
-      }
+    if (variable.kind === 'assoc') {
+      (variable.value as Record<string, string> | undefined ?? (variable.value = {}))[String(index)] = cased(variable, value);
+      return;
     }
 
-    owner.arrays[name][index] = value;
+    // A variable that was a plain one becomes the array's element 0
+    if (variable.kind === 'scalar') {
+      variable.value = typeof variable.value === 'string' ? [variable.value] : [];
+      variable.kind = 'array';
+    }
+
+    if (!Array.isArray(variable.value)) variable.value = [];
+
+    variable.value[index] = cased(variable, value);
   }
 
   unsetArray(name: string): void {
-    delete this.arrays[name];
-    this.parent?.unsetArray(name);
+    if (this.lookup(name)?.variable.kind === 'array') this.unsetVariable(name);
   }
 
   unsetArrayElement(name: string, index: number): void {
-    const owner = this.ownerOfArray(name);
+    const variable = this.lookup(name)?.variable;
 
-    if (owner) {
-      delete owner.arrays[name][index];
+    if (variable?.kind === 'array' && Array.isArray(variable.value)) {
+      delete variable.value[index];
     }
   }
 
   getAssoc(name: string): Record<string, string> | undefined {
-    if (this.assocs[name]) {
-      return this.assocs[name];
-    }
+    const variable = this.lookup(name)?.variable;
 
-    return this.parent?.getAssoc(name);
+    if (variable?.kind !== 'assoc') return undefined;
+
+    // Declared and not yet assigned, `declare -A h`: it takes `[key]=value` elements already
+    return variable.value && typeof variable.value === 'object' && !Array.isArray(variable.value) ? variable.value : {};
   }
 
   getAssocs(): Record<string, Record<string, string>> {
-    if (this.parent) {
-      return {
-        ...this.parent.getAssocs(),
-        ...this.assocs,
-      };
+    const assocs: Record<string, Record<string, string>> = {};
+
+    for (const [name, variable] of this.visibleVariables()) {
+      if (variable.kind === 'assoc' && variable.value && typeof variable.value === 'object' && !Array.isArray(variable.value)) {
+        assocs[name] = variable.value;
+      }
     }
 
-    return this.assocs;
+    return assocs;
   }
 
   setAssoc(name: string, values: Record<string, string>): void {
-    if (this.parent) {
-      this.parent.setAssoc(name, values);
-      return;
-    }
-
-    this.setLocalAssoc(name, values);
+    this.storeAssoc(this.ownerOf(name), name, values);
   }
 
   setLocalAssoc(name: string, values: Record<string, string>): void {
-    this.assocs[name] = values;
+    this.storeAssoc(this, name, values);
   }
 
   setAssocElement(name: string, key: string, value: string): void {
-    const owner = this.ownerOfAssoc(name) ?? this.root();
+    const owner = this.ownerOf(name);
+    const variable = owner.vars.get(name) ?? newVariable('assoc');
 
-    if (!owner.assocs[name]) {
-      owner.assocs[name] = {};
+    owner.vars.set(name, variable);
+
+    if (variable.kind !== 'assoc' || !variable.value || typeof variable.value !== 'object' || Array.isArray(variable.value)) {
+      variable.kind = 'assoc';
+      variable.value = {};
     }
 
-    owner.assocs[name][key] = value;
+    variable.value[key] = cased(variable, value);
   }
 
   unsetAssoc(name: string): void {
-    delete this.assocs[name];
-    this.parent?.unsetAssoc(name);
+    if (this.lookup(name)?.variable.kind === 'assoc') this.unsetVariable(name);
   }
 
   unsetAssocElement(name: string, key: string): void {
-    const owner = this.ownerOfAssoc(name);
+    const variable = this.lookup(name)?.variable;
 
-    if (owner) {
-      delete owner.assocs[name][key];
+    if (variable?.kind === 'assoc' && variable.value && typeof variable.value === 'object' && !Array.isArray(variable.value)) {
+      delete variable.value[key];
     }
   }
 
-  private ownerOfAssoc(name: string): ExecContext | undefined {
-    if (this.assocs[name]) {
-      return this;
-    }
+  getVariable(name: string): VariableInfo | undefined {
+    const found = this.lookup(name);
 
-    return this.parent?.ownerOfAssoc(name);
+    return found ? variableInfo(found.variable, found.scope !== this.root()) : undefined;
   }
 
-  private ownerOfArray(name: string): ExecContext | undefined {
-    if (this.arrays[name]) {
-      return this;
+  getVariables(): Record<string, VariableInfo> {
+    const root = this.root();
+    const infos: Record<string, VariableInfo> = {};
+
+    for (const scope of this.chain()) {
+      for (const [name, variable] of scope.vars) infos[name] = variableInfo(variable, scope !== root);
     }
 
-    return this.parent?.ownerOfArray(name);
+    return infos;
+  }
+
+  getOwnVariables(): Record<string, VariableInfo> {
+    const infos: Record<string, VariableInfo> = {};
+
+    for (const [name, variable] of this.vars) infos[name] = variableInfo(variable, Boolean(this.parent));
+
+    return infos;
+  }
+
+  declareVariable(name: string, opts: DeclareOptions = {}): void {
+    const found = this.lookup(name);
+    // `local x` is a variable of the function's own, whatever the caller has
+    const owner = opts.local ? this : found?.scope ?? this.root();
+    let variable = owner.vars.get(name);
+
+    if (!variable) {
+      variable = newVariable(opts.kind ?? 'scalar');
+      owner.vars.set(name, variable);
+    }
+
+    if (opts.kind && opts.kind !== variable.kind) {
+      // A scalar's value is element 0 of what it becomes
+      const scalar = typeof variable.value === 'string' ? variable.value : undefined;
+
+      variable.value = scalar === undefined ? undefined : opts.kind === 'array' ? [scalar] : opts.kind === 'assoc' ? { '0': scalar } : scalar;
+      variable.kind = opts.kind;
+    }
+
+    for (const attr of opts.remove ?? '') variable.attrs.delete(attr);
+
+    for (const attr of opts.add ?? '') {
+      // Upper, lower and capitalized case exclude each other: the one given last wins
+      if ('luc'.includes(attr)) { for (const other of 'luc') variable.attrs.delete(other); }
+      variable.attrs.add(attr);
+    }
+  }
+
+  unsetVariable(name: string): void {
+    const found = this.lookup(name);
+
+    if (!found) return;
+
+    if (found.scope.parent) {
+      // A local stays local once unset: assigning it again sets the function's own, as in bash
+      found.scope.vars.set(name, newVariable('scalar'));
+    } else {
+      found.scope.vars.delete(name);
+    }
+  }
+
+  // -- the variable store --------------------------------------------------------------------
+
+  /** The contexts from the shell's own down to this one. */
+  private chain(): ExecContext[] {
+    return this.parent ? [...this.parent.chain(), this] : [this];
+  }
+
+  /** The nearest variable of that name, and the context holding it. */
+  private lookup(name: string): { scope: ExecContext; variable: Variable } | undefined {
+    const variable = this.vars.get(name);
+
+    return variable ? { scope: this, variable } : this.parent?.lookup(name);
+  }
+
+  /** Where assigning `name` goes: the context that has it, or the shell. */
+  private ownerOf(name: string): ExecContext {
+    return this.lookup(name)?.scope ?? this.root();
+  }
+
+  /** Every variable this context sees, each the nearest of its name. */
+  private visibleVariables(): Map<string, Variable> {
+    const visible = new Map<string, Variable>();
+
+    for (const scope of this.chain()) {
+      for (const [name, variable] of scope.vars) visible.set(name, variable);
+    }
+
+    return visible;
+  }
+
+  /** `name=value` on the variable `scope` holds, made there if it has none; an array takes it as element 0. */
+  private assign(scope: ExecContext, name: string, value: string): Variable {
+    const variable = scope.vars.get(name) ?? newVariable('scalar');
+
+    scope.vars.set(name, variable);
+
+    if (variable.kind === 'array') {
+      if (!Array.isArray(variable.value)) variable.value = [];
+      variable.value[0] = cased(variable, value);
+    } else if (variable.kind === 'assoc') {
+      if (!variable.value || typeof variable.value !== 'object' || Array.isArray(variable.value)) variable.value = {};
+      variable.value['0'] = cased(variable, value);
+    } else {
+      variable.value = cased(variable, value);
+    }
+
+    return variable;
+  }
+
+  /** Assign a variable wherever it is, or in the shell when it is nowhere. */
+  private assignVariableValue(name: string, value: string): void {
+    this.assign(this.ownerOf(name), name, value);
+  }
+
+  private storeArray(scope: ExecContext, name: string, values: string[]): void {
+    const variable = scope.vars.get(name) ?? newVariable('array');
+
+    variable.kind = 'array';
+    variable.value = ['l', 'u', 'c'].some((attr) => variable.attrs.has(attr)) ? values.map((value) => cased(variable, value)) : values;
+    scope.vars.set(name, variable);
+  }
+
+  private storeAssoc(scope: ExecContext, name: string, values: Record<string, string>): void {
+    const variable = scope.vars.get(name) ?? newVariable('assoc');
+
+    variable.kind = 'assoc';
+    variable.value = ['l', 'u', 'c'].some((attr) => variable.attrs.has(attr))
+      ? Object.fromEntries(Object.entries(values).map(([key, value]) => [key, cased(variable, value)]))
+      : values;
+    scope.vars.set(name, variable);
   }
 
   private root(): ExecContext {
@@ -535,20 +727,17 @@ export class ExecContext implements ExecContextIf {
     return this.fns;
   }
 
+  /** The aliases are BASH_ALIASES, as in bash: assigning an element defines one. */
+  private aliasTable(): Record<string, string> | undefined {
+    return this.root().getAssoc('BASH_ALIASES');
+  }
+
   setAlias(name: string, alias: string): void {
-    if (this.parent) {
-      this.parent.setAlias(name, alias);
-    } else {
-      this.alias[name] = alias;
-    }
+    this.root().setAssocElement('BASH_ALIASES', name, alias);
   }
 
   unsetAlias(name: string): void {
-    if (this.parent) {
-      this.parent.unsetAlias(name);
-    } else {
-      delete this.alias[name];
-    }
+    this.root().unsetAssocElement('BASH_ALIASES', name);
   }
 
   getJobTable(): JobTable {
@@ -557,12 +746,14 @@ export class ExecContext implements ExecContextIf {
 
   /**
    * What assigning a variable does besides: a new OPTIND starts getopts over,
-   * as bash's sv_optind does, and a new PATH empties the table of hashed
-   * commands, as its sv_path does.
+   * as bash's sv_optind does, a new PATH empties the table of hashed
+   * commands, as its sv_path does, and POSIXLY_CORRECT turns posix mode on
+   * while it is set, as sv_strict_posix does.
    */
   private assigningSpecial(values: Record<string, string | null>): void {
     if ('OPTIND' in values) this.setGetoptsState(undefined);
-    if ('PATH' in values) delete this.root().assocs.BASH_CMDS;
+    if ('POSIXLY_CORRECT' in values) this.setShellOption('posix', values.POSIXLY_CORRECT !== null);
+    if ('PATH' in values) this.root().setLocalAssoc('BASH_CMDS', {});
   }
 
   getUmask(): number {
@@ -600,55 +791,29 @@ export class ExecContext implements ExecContextIf {
   }
 
   getAlias(name: string): string | undefined {
-    if (this.parent) {
-      return this.parent.getAlias(name);
-    }
+    const table = this.aliasTable();
 
-    return this.alias[name];
+    return table && Object.hasOwn(table, name) ? table[name] : undefined;
   }
 
   getAliases(): Record<string, string> {
-    if (this.parent) {
-      return this.parent.getAliases();
-    }
-
-    return { ...this.alias };
+    return { ...this.aliasTable() };
   }
 
   isReadonlyVar(name: string): boolean {
-    if (this.parent) {
-      return this.parent.isReadonlyVar(name);
-    }
-
-    return this.readonlyVars.has(name);
+    return this.lookup(name)?.variable.attrs.has('r') ?? false;
   }
 
   setReadonlyVar(name: string, readonly: boolean): void {
-    if (this.parent) {
-      this.parent.setReadonlyVar(name, readonly);
-    } else if (readonly) {
-      this.readonlyVars.add(name);
-    } else {
-      this.readonlyVars.delete(name);
-    }
+    this.declareVariable(name, readonly ? { add: 'r' } : { remove: 'r' });
   }
 
   isIntegerVar(name: string): boolean {
-    if (this.parent) {
-      return this.parent.isIntegerVar(name);
-    }
-
-    return this.integerVars.has(name);
+    return this.lookup(name)?.variable.attrs.has('i') ?? false;
   }
 
   setIntegerVar(name: string, integer: boolean): void {
-    if (this.parent) {
-      this.parent.setIntegerVar(name, integer);
-    } else if (integer) {
-      this.integerVars.add(name);
-    } else {
-      this.integerVars.delete(name);
-    }
+    this.declareVariable(name, integer ? { add: 'i' } : { remove: 'i' });
   }
 
   getDirStack(): string[] {
@@ -771,11 +936,8 @@ export class ExecContext implements ExecContextIf {
   }
 
   assignVariable(name: string, value: string): void {
-    if (this.getParams()[name] === undefined && name in this.getEnv()) {
-      this.setEnv({ [name]: value });
-    } else {
-      this.setParams({ [name]: value });
-    }
+    // An exported variable stays exported: the attribute is the variable's
+    this.setParams({ [name]: value });
   }
 
   getFunctionScope(): ExecContextIf | undefined {
@@ -785,6 +947,6 @@ export class ExecContext implements ExecContextIf {
       return undefined;
     }
 
-    return '#' in this.params ? this : this.parent.getFunctionScope();
+    return '#' in this.special ? this : this.parent.getFunctionScope();
   }
 }

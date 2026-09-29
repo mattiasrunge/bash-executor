@@ -117,6 +117,14 @@ find commands with the `lookupCommand` callback (falling back to running `which
 what it creates; and `exec -a`/`-c` hand `argv0` and `clearEnv` to `execute` in
 its options.
 
+A variable is one record in the scope that holds it — a string, an indexed or an
+associative array, or nothing yet (`declare x`, `local -a y`) — with its
+attributes as `declare`'s letters, so `local -r`, `declare -i` and `export` belong
+to the variable and not to its name. `getVariable`/`getVariables` show them,
+`declareVariable` and `unsetVariable` change them; `getEnv()` is the exported
+strings and `getParams()` the rest, as before. `BASH_ALIASES` is the alias table
+and `BASH_CMDS` the hash table, as in bash.
+
 `type`, `declare -f` and `set` print a function as bash does (`printFunction`),
 from the source it was defined in. `export -f name` hands it to the commands the
 shell runs as `BASH_FUNC_name%%`, the variable bash reads it back from; a host

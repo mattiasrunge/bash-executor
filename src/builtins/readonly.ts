@@ -6,7 +6,7 @@
 
 import type { ExecContextIf, ShellIf } from '../types.ts';
 import type { BuiltinHandler, BuiltinResult } from './types.ts';
-import { declareBuiltin } from './declare.ts';
+import { declareCommand } from './declare.ts';
 
 /**
  * The readonly builtin command.
@@ -25,17 +25,4 @@ import { declareBuiltin } from './declare.ts';
  * readonly PATH        -> mark existing PATH as readonly
  * readonly -p          -> list all readonly variables
  */
-export const readonlyBuiltin: BuiltinHandler = async (
-  ctx: ExecContextIf,
-  args: string[],
-  shell: ShellIf,
-  execute: (script: string) => Promise<number>,
-): Promise<BuiltinResult> => {
-  // If -p is specified, just pass through to declare
-  if (args.includes('-p')) {
-    return declareBuiltin(ctx, ['-r', '-p', ...args.filter((a) => a !== '-p')], shell, execute);
-  }
-
-  // Otherwise declare -r, which in a function is global: readonly is not local
-  return declareBuiltin(ctx, ['-g', '-r', ...args], shell, execute);
-};
+export const readonlyBuiltin: BuiltinHandler = (ctx: ExecContextIf, args: string[], _shell: ShellIf): Promise<BuiltinResult> => declareCommand('readonly', ctx, args);

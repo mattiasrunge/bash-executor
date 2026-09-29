@@ -1,376 +1,507 @@
 /**
- * Implementation of the declare and typeset builtins.
+ * declare, typeset, local, readonly and export: the builtins that declare
+ * variables and give them attributes, after bash's declare.def and setattr.def.
  *
- * Declares variables and/or gives them attributes.
+ * All five come down to the same steps for each `name[=value]`: find or make
+ * the variable — a function's own for `local`, and for `declare` in a
+ * function — refuse what bash refuses, convert it to the kind asked for, set
+ * and clear attributes, and assign the value as the variable now takes it.
  */
 
+import { utils } from '@ein/bash-parser';
 import { contextVariables, evaluateArithmeticText } from '../arith.ts';
+import { CommandAbortError } from '../errors.ts';
 import { functionEnvName, functionText } from '../print-command.ts';
-import { doubleQuoted } from '../quote.ts';
-import type { ExecContextIf, ShellIf } from '../types.ts';
+import { type ExecContextIf, QUOTED_LIST_MARK, type ShellIf, type VariableInfo } from '../types.ts';
 import type { BuiltinHandler, BuiltinResult } from './types.ts';
-import { assignArrayArg, exportFunctions } from './variables.ts';
+import { declareLine, setListing, sortedVariables } from './variable-listing.ts';
+import { exportFunctions } from './variables.ts';
 
-/**
- * A variable's attributes as `declare -p` writes them, in bash's order:
- * `-a`, `-A`, `-i`, `-r`, `-x`, or `--` for none.
- */
-function attributes(ctx: ExecContextIf, name: string): string {
-  const flags = (ctx.getArray(name) ? 'a' : '') +
-    (ctx.getAssoc(name) ? 'A' : '') +
-    (ctx.isIntegerVar(name) ? 'i' : '') +
-    (ctx.isReadonlyVar(name) ? 'r' : '') +
-    (ctx.getParams()[name] === undefined && name in ctx.getEnv() ? 'x' : '');
+type Command = 'declare' | 'typeset' | 'local' | 'readonly' | 'export';
 
-  return flags ? `-${flags}` : '--';
-}
-
-/**
- * Render an array the way `declare -p` does: `declare -a a=([0]="x" [1]="y")`.
- */
-function printArray(ctx: ExecContextIf, name: string, values: string[]): string {
-  const elements = Object.entries(values).map(([index, value]) => `[${index}]=${doubleQuoted(value)}`);
-
-  return `declare ${attributes(ctx, name)} ${name}=(${elements.join(' ')})\n`;
-}
-
-/**
- * Render an associative array: `declare -A a=([k]="v")`.
- */
-function printAssoc(ctx: ExecContextIf, name: string, values: Record<string, string>): string {
-  const elements = Object.entries(values).map(([key, value]) => `[${key}]=${doubleQuoted(value)}`);
-
-  return `declare ${attributes(ctx, name)} ${name}=(${elements.join(' ')})\n`;
-}
-
-/**
- * Parse a variable assignment from an argument.
- *
- * @param arg - The argument to parse (e.g., "foo=bar" or "foo")
- * @returns The variable name and optional value
- */
-function parseAssignment(arg: string): { name: string; value?: string } {
-  const eqIndex = arg.indexOf('=');
-  if (eqIndex === -1) {
-    return { name: arg };
-  }
-  return {
-    name: arg.slice(0, eqIndex),
-    value: arg.slice(eqIndex + 1),
-  };
-}
-
-/**
- * Check if a variable name is valid.
- *
- * @param name - The variable name to check
- * @returns True if the name is valid
- */
-function isValidName(name: string): boolean {
-  return /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name);
-}
-
-/**
- * The declare builtin command.
- *
- * Declares variables and/or gives them attributes. Without any arguments,
- * displays all variables. With -p, displays variables with their values.
- *
- * Options:
- * -p    Display the attributes and values of variables
- * -r    Make variables readonly
- * -x    Export variables to the environment
- * -i    Treat variables as integers
- * -a    Declare indexed array variables
- * -A    Declare associative array variables
- * -f    Display function definitions (limited support)
- * -F    Display function names only (limited support)
- * +r/+x/+i  Remove attributes (where applicable)
- *
- * @example
- * declare x=5            -> declares x=5
- * declare -r CONST=10    -> declares readonly CONST=10
- * declare -x PATH        -> exports PATH
- * declare -i num=5+3     -> declares num as integer, evaluates to 8
- * declare -p x           -> prints "declare -- x=5"
- */
-export const declareBuiltin: BuiltinHandler = async (
-  ctx: ExecContextIf,
-  args: string[],
-  _shell: ShellIf,
-): Promise<BuiltinResult> => {
-  // Options
-  let printMode = false;
-  let setReadonly = false;
-  let setExport = false;
-  let setInteger = false;
-  let setArray = false;
-  let setAssoc = false;
-  let unsetReadonly = false;
-  let unsetExport = false;
-  let showFunctions = false;
-  let showFunctionNames = false;
-  let global = false;
-
-  const varArgs: string[] = [];
-
-  // Parse arguments
-  for (const arg of args) {
-    if (arg.startsWith('-') || arg.startsWith('+')) {
-      const remove = arg.startsWith('+');
-      for (const char of arg.slice(1)) {
-        switch (char) {
-          case 'p':
-            printMode = true;
-            break;
-          case 'r':
-            if (remove) unsetReadonly = true;
-            else setReadonly = true;
-            break;
-          case 'x':
-            if (remove) unsetExport = true;
-            else setExport = true;
-            break;
-          case 'i':
-            setInteger = !remove;
-            break;
-          case 'a':
-            setArray = !remove;
-            break;
-          case 'A':
-            setAssoc = !remove;
-            break;
-          case 'f':
-            showFunctions = true;
-            break;
-          case 'F':
-            showFunctionNames = true;
-            break;
-          case 'g':
-            global = true;
-            break;
-        }
-      }
-    } else {
-      varArgs.push(arg);
-    }
-  }
-
-  // -f prints functions as bash would read them back, -F only their names:
-  // the ones named, or all of them sorted. A name that is no function fails quietly.
-  if (showFunctions || showFunctionNames) {
-    // `declare -fx name` exports it, as `export -f name` does
-    if (varArgs.length && (setExport || unsetExport)) return await exportFunctions(ctx, varArgs, unsetExport);
-
-    const functions = ctx.getFunctions();
-    const env = ctx.getEnv();
-    const exported = (name: string) => functionEnvName(name) in env;
-    // `declare -xF` lists the exported ones only
-    const names = varArgs.length ? varArgs : Object.keys(functions).sort().filter((name) => !setExport || exported(name));
-    let output = '';
-    let code = 0;
-
-    for (const name of names) {
-      const fn = functions[name];
-      const listing = varArgs.length === 0;
-      const declaration = `declare -f${exported(name) ? 'x' : ''} ${name}\n`;
-
-      if (!fn) {
-        code = 1;
-      } else if (showFunctionNames) {
-        output += listing ? declaration : `${name}\n`;
-      } else {
-        output += `${await functionText(fn, ctx.getShellOption('posix'))}\n`;
-        if (listing && exported(name)) output += declaration;
-      }
-    }
-
-    return { code, stdout: output };
-  }
-
-  // No variable arguments - display variables
-  if (varArgs.length === 0) {
-    if (printMode) {
-      // Print all variables
-      const env = ctx.getEnv();
-      const params = ctx.getParams();
-      let output = '';
-
-      for (const [name, value] of Object.entries({ ...env, ...params })) {
-        if (!isValidName(name)) continue;
-
-        output += `declare ${attributes(ctx, name)} ${name}=${doubleQuoted(value)}\n`;
-      }
-
-      for (const [name, values] of Object.entries(ctx.getArrays())) {
-        output += printArray(ctx, name, values);
-      }
-
-      for (const [name, values] of Object.entries(ctx.getAssocs())) {
-        output += printAssoc(ctx, name, values);
-      }
-
-      return { code: 0, stdout: output };
-    }
-
-    // No args and no -p: just return success
-    return { code: 0 };
-  }
-
-  // In a function, what declare sets is the function's own, as with local
-  const scope = global ? undefined : ctx.getFunctionScope();
-  const attributesOnly = setReadonly || setExport || setInteger || unsetReadonly || unsetExport;
-
-  // Process variable arguments
-  let hasError = false;
-  let output = '';
-  let errors = '';
-
-  for (const arg of varArgs) {
-    // An associative array has to exist before an element list can be read as
-    // keys, so the declaration is made first
-    if (setAssoc) {
-      const assocName = parseAssignment(arg).name;
-
-      if (isValidName(assocName) && !ctx.getAssoc(assocName)) {
-        ctx.setAssoc(assocName, {});
-      }
-    }
-
-    // `declare -a x=(1 2)` — the element list survives quote removal as one
-    // word; in a function the array is the function's, as with local
-    if (assignArrayArg(scope ?? ctx, arg, Boolean(scope))) {
-      if (setReadonly) ctx.setReadonlyVar(parseAssignment(arg).name, true);
-      continue;
-    }
-
-    const { name, value } = parseAssignment(arg);
-
-    if (!isValidName(name)) {
-      errors += `declare: \`${arg}': not a valid identifier\n`;
-      hasError = true;
-      continue;
-    }
-
-    // -a/-A with no value declares an empty array, keeping any already there
-    if (setArray && value === undefined && !printMode) {
-      ctx.setArray(name, ctx.getArray(name) ?? []);
-      continue;
-    }
-
-    if (setAssoc && value === undefined && !printMode) {
-      continue;
-    }
-
-    // Print mode: show variable declaration
-    if (printMode && value === undefined) {
-      const assoc = ctx.getAssoc(name);
-
-      if (assoc) {
-        output += printAssoc(ctx, name, assoc);
-        continue;
-      }
-
-      const array = ctx.getArray(name);
-
-      if (array) {
-        output += printArray(ctx, name, array);
-        continue;
-      }
-
-      const env = ctx.getEnv();
-      const params = ctx.getParams();
-      const currentValue = env[name] ?? params[name];
-
-      if (currentValue !== undefined) {
-        output += `declare ${attributes(ctx, name)} ${name}=${doubleQuoted(currentValue)}\n`;
-      } else {
-        errors += `declare: ${name}: not found\n`;
-        hasError = true;
-      }
-      continue;
-    }
-
-    // Check if trying to modify readonly variable
-    if (ctx.isReadonlyVar(name) && !unsetReadonly) {
-      errors += `declare: ${name}: readonly variable\n`;
-      hasError = true;
-      continue;
-    }
-
-    // Set attributes
-    if (setReadonly) {
-      ctx.setReadonlyVar(name, true);
-    }
-    if (unsetReadonly) {
-      ctx.setReadonlyVar(name, false);
-    }
-    if (setInteger) {
-      ctx.setIntegerVar(name, true);
-    }
-    if (unsetExport) {
-      // Remove export attribute - move from env to params
-      const env = ctx.getEnv();
-      if (env[name] !== undefined) {
-        const currentValue = env[name];
-        ctx.setEnv({ [name]: null }); // Remove from env
-        ctx.setParams({ [name]: currentValue }); // Keep as local param
-      }
-    }
-
-    // Set value if provided
-    if (value !== undefined) {
-      let finalValue = value;
-
-      // An integer's value is arithmetic: `declare -i n=5+3` is 8
-      if (ctx.isIntegerVar(name) || setInteger) {
-        try {
-          finalValue = String(await evaluateArithmeticText(value || '0', contextVariables(ctx)));
-        } catch {
-          finalValue = '0';
-        }
-      }
-
-      const exported = setExport || (ctx.getParams()[name] === undefined && name in ctx.getEnv());
-
-      if (scope) {
-        // In a function, declare makes the variable the function's own, as local does
-        scope.setLocalParams({ [name]: exported ? null : finalValue });
-
-        if (exported) {
-          scope.setLocalEnv({ [name]: finalValue });
-        }
-      } else if (exported) {
-        ctx.setEnv({ [name]: finalValue });
-      } else {
-        ctx.setParams({ [name]: finalValue });
-      }
-    } else if (scope && !printMode && !attributesOnly && !ctx.getArray(name) && !ctx.getAssoc(name)) {
-      // `declare x` in a function: a local of its own, empty until assigned
-      scope.setLocalParams({ [name]: '' });
-    } else if (setExport) {
-      // Export existing variable
-      const env = ctx.getEnv();
-      const params = ctx.getParams();
-      const currentValue = env[name] ?? params[name] ?? '';
-      ctx.setEnv({ [name]: currentValue });
-    }
-  }
-
-  return {
-    code: hasError ? 1 : 0,
-    stdout: output || undefined,
-    stderr: errors || undefined,
-  };
+/** The options each takes, as bash's getopt strings. */
+const OPTIONS: Record<Command, string> = {
+  declare: 'aAfFgiIlnprtuxc',
+  typeset: 'aAfFgiIlnprtuxc',
+  local: 'aAfFgiIlnprtuxc',
+  readonly: 'aAfnp',
+  export: 'aAfnp',
 };
 
+/** Letters that are attributes a variable carries; the rest steer the builtin. */
+const ATTRIBUTES = 'ilnrtuxc';
+
+type Options = {
+  on: Set<string>;
+  off: Set<string>;
+  print: boolean;
+  global: boolean;
+};
+
+type Result = { code: number; stdout: string; stderr: string };
+
+const isIdentifier = (name: string): boolean => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name);
+
+/** The shell's own context, below every function and command. */
+const rootOf = (ctx: ExecContextIf): ExecContextIf => {
+  let root = ctx;
+
+  while (root.getParent()) root = root.getParent()!;
+
+  return root;
+};
+
+/** `(a "b c")` given as a string, as bash reads one assigned to an array: split into words, quotes removed. */
+function wordsOf(list: string): string[] {
+  const inner = list.trim().replace(/^\(/, '').replace(/\)$/, '');
+  const words: string[] = [];
+  let current = '';
+  let quote = '';
+  let started = false;
+
+  for (let i = 0; i < inner.length; i++) {
+    const c = inner[i];
+
+    if (quote) {
+      if (c === quote) quote = '';
+      else if (c === '\\' && quote === '"' && i + 1 < inner.length) current += inner[++i];
+      else current += c;
+    } else if (c === "'" || c === '"') {
+      quote = c;
+      started = true;
+    } else if (c === '\\' && i + 1 < inner.length) {
+      current += inner[++i];
+      started = true;
+    } else if (/\s/.test(c)) {
+      if (started) words.push(current);
+      current = '';
+      started = false;
+    } else {
+      current += c;
+      started = true;
+    }
+  }
+
+  if (started) words.push(current);
+
+  return words;
+}
+
+class Declaration {
+  private stdout = '';
+  private stderr = '';
+  private failed = false;
+  private assignError = false;
+
+  constructor(
+    private readonly command: Command,
+    private readonly ctx: ExecContextIf,
+    private readonly opts: Options,
+  ) {}
+
+  private error(message: string, assignment = false): void {
+    this.stderr += `${message}\n`;
+    if (assignment) this.assignError = true;
+    else this.failed = true;
+  }
+
+  result(): Result {
+    return { code: this.failed || this.assignError ? 1 : 0, stdout: this.stdout, stderr: this.stderr };
+  }
+
+  private get posix(): boolean {
+    return this.ctx.getShellOption('posix');
+  }
+
+  // -- showing ---------------------------------------------------------------------------------
+
+  /** `declare -p name`: the variable, or `not found`. */
+  showName(name: string): void {
+    const info = this.ctx.getVariable(name);
+
+    if (!info) {
+      this.error(`${this.command}: ${name}: not found`);
+      return;
+    }
+
+    this.stdout += declareLine(name, info, { command: this.command, posix: this.posix });
+  }
+
+  /** `declare -p`: every variable. */
+  showAll(): void {
+    for (const [name, info] of sortedVariables(this.ctx)) {
+      this.stdout += declareLine(name, info, { command: this.command, posix: this.posix });
+    }
+  }
+
+  /**
+   * `declare -r`, `readonly`, `export -p`: the variables with any of the
+   * attributes; with `-a` or `-A`, only arrays of that kind.
+   */
+  showWithAttributes(): void {
+    const arrays = this.opts.on.has('a');
+    const assocs = this.opts.on.has('A');
+    const letters = [...this.opts.on].filter((letter) => ATTRIBUTES.includes(letter));
+
+    for (const [name, info] of sortedVariables(this.ctx)) {
+      if (arrays && info.kind !== 'array') continue;
+      if (assocs && info.kind !== 'assoc') continue;
+      if (letters.length && !letters.some((letter) => info.attributes.includes(letter))) continue;
+
+      this.stdout += declareLine(name, info, { command: this.command, posix: this.posix });
+    }
+  }
+
+  /** `local` alone: the function's own variables. */
+  showLocals(scope: ExecContextIf): void {
+    const own = Object.entries(scope.getOwnVariables()).filter(([name]) => isIdentifier(name)).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
+
+    for (const [name, info] of own) {
+      this.stdout += declareLine(name, info);
+    }
+  }
+
+  // -- declaring -------------------------------------------------------------------------------
+
+  /**
+   * Where the variable is declared: in the function for `local` (and `declare`
+   * there without -g), in the shell with -g, and otherwise wherever it is.
+   */
+  private scopeFor(): { target: ExecContextIf; local: boolean } {
+    const fnScope = this.ctx.getFunctionScope();
+
+    if (this.command === 'local' || ((this.command === 'declare' || this.command === 'typeset') && fnScope && !this.opts.global)) {
+      return { target: fnScope ?? this.ctx, local: Boolean(fnScope) };
+    }
+
+    return { target: this.opts.global ? rootOf(this.ctx) : this.ctx, local: false };
+  }
+
+  async declare(arg: string): Promise<void> {
+    const parts = utils.parseAssignmentWord(arg);
+    const assigning = parts !== null;
+    let name = parts?.name ?? arg;
+    let subscript = parts?.subscript;
+    let value = parts?.value;
+    let quotedList = false;
+
+    if (value?.startsWith(QUOTED_LIST_MARK)) {
+      value = value.slice(QUOTED_LIST_MARK.length);
+      quotedList = true;
+    }
+
+    const compound = parts?.list === true && !quotedList;
+
+    // `declare a[3]` with no value names an element: the array is made, nothing assigned
+    if (!assigning) {
+      const element = arg.match(/^([A-Za-z_][A-Za-z0-9_]*)\[(.*)\]$/s);
+
+      if (element) {
+        name = element[1];
+        subscript = element[2];
+      }
+    }
+
+    if (!isIdentifier(name)) {
+      this.error(`${this.command}: \`${assigning ? `${name}${subscript !== undefined ? `[${subscript}]` : ''}` : arg}': not a valid identifier`, assigning);
+      return;
+    }
+
+    const { on, off } = this.opts;
+    const { target, local } = this.scopeFor();
+    const own = local ? target.getOwnVariables()[name] : undefined;
+    let info: VariableInfo | undefined = local ? own : target.getVariable(name);
+    const creatingArray = on.has('a') || on.has('A');
+    const arrayExists = info !== undefined && info.kind !== 'scalar';
+
+    // Readonly: it keeps the attribute, and takes no value
+    if (info?.attributes.includes('r') && off.has('r')) {
+      this.error(`${this.command}: ${name}: readonly variable`);
+      return;
+    }
+
+    if (info?.attributes.includes('r') && assigning) {
+      // A plain `readonly x=1` fails as the assignment it is, and so does a
+      // written list, which bash assigns as it expands it; the rest is
+      // declare's own refusal, which says who refused
+      // A written list is assigned as bash expands the word, so failing it
+      // abandons the rest of the line, as an expansion error does
+      if (compound) throw new CommandAbortError(`${name}: readonly variable`, { code: 'E_READONLY' });
+
+      const plain = (this.command === 'readonly' || this.command === 'export') && !creatingArray;
+      this.error(plain ? `${name}: readonly variable` : `${this.command}: ${name}: readonly variable`, true);
+      return;
+    }
+
+    if ((off.has('a') && info?.kind === 'array') || (off.has('A') && info?.kind === 'assoc')) {
+      this.error(`${this.command}: ${name}: cannot destroy array variables in this way`);
+      return;
+    }
+
+    if (on.has('a') && info?.kind === 'assoc') {
+      this.error(`${this.command}: ${name}: cannot convert associative to indexed array`);
+      return;
+    }
+
+    if (on.has('A') && info?.kind === 'array') {
+      this.error(`${this.command}: ${name}: cannot convert indexed to associative array`);
+      return;
+    }
+
+    // Make it, of the kind asked for, and set its attributes
+    const kind = on.has('A') ? 'assoc' : on.has('a') || subscript !== undefined ? (info?.kind === 'assoc' ? 'assoc' : 'array') : undefined;
+
+    target.declareVariable(name, {
+      kind: info && kind === undefined ? undefined : kind ?? (compound ? 'array' : undefined),
+      add: [...on].filter((letter) => ATTRIBUTES.includes(letter) && letter !== 'n').join(''),
+      remove: [...off].filter((letter) => ATTRIBUTES.includes(letter)).join(''),
+      local: local && !own,
+    });
+
+    info = local ? target.getOwnVariables()[name] : target.getVariable(name);
+
+    if (!assigning) return;
+
+    await this.assign(target, name, info!, { subscript, value: value ?? '', append: parts!.append, compound, quotedList, creatingArray, arrayExists });
+  }
+
+  private async assign(
+    target: ExecContextIf,
+    name: string,
+    info: VariableInfo,
+    how: { subscript?: string; value: string; append: boolean; compound: boolean; quotedList: boolean; creatingArray: boolean; arrayExists: boolean },
+  ): Promise<void> {
+    const integer = info.attributes.includes('i');
+    const arith = async (text: string): Promise<string> => String(await evaluateArithmeticText(text || '0', contextVariables(this.ctx)));
+    /** A value as the variable takes it: arithmetic for -i, `+=` adding or appending to what was there. */
+    const valueFor = async (previous: string | undefined, text: string, append = how.append): Promise<string> => {
+      if (integer) {
+        const added = BigInt(await arith(text));
+        return String(append ? BigInt(await arith(previous ?? '0')) + added : added);
+      }
+
+      return append ? (previous ?? '') + text : text;
+    };
+
+    // A list, or on declare's path a quoted one landing in an array, which bash
+    // reads as a list too; readonly and export assign it as the string it is
+    const declarePath = this.command === 'declare' || this.command === 'typeset' || this.command === 'local' || how.creatingArray;
+    const listAssign = how.compound || (how.quotedList && declarePath && how.subscript === undefined && (how.arrayExists || how.creatingArray));
+
+    if (listAssign) {
+      const elements = how.compound ? (how.value === '' ? [] : how.value.split(utils.ARRAY_ELEMENT_SEPARATOR)) : wordsOf(how.value);
+
+      if (info.kind === 'assoc') {
+        const assoc = how.append ? { ...target.getAssoc(name) } : {};
+
+        for (const element of elements) {
+          const keyed = element.match(/^\[(.*?)\](\+?)=(.*)$/s);
+
+          if (!keyed) {
+            this.error(`${name}: ${element}: must use subscript when assigning associative array`, true);
+            continue;
+          }
+
+          assoc[keyed[1]] = await valueFor(assoc[keyed[1]], keyed[3], keyed[2] === '+');
+        }
+
+        target.setAssoc(name, assoc);
+        return;
+      }
+
+      const array = how.append ? (target.getArray(name) ?? []).slice() : [];
+      let next = array.length;
+
+      for (const element of elements) {
+        const keyed = element.match(/^\[(.*?)\](\+?)=(.*)$/s);
+        let index = next;
+        let text = element;
+
+        if (keyed) {
+          const evaluated = Number(await arith(keyed[1]));
+          index = evaluated < 0 ? array.length + evaluated : evaluated;
+          text = keyed[3];
+        }
+
+        array[index] = await valueFor(array[index], text, keyed?.[2] === '+');
+        next = index + 1;
+      }
+
+      target.setArray(name, array);
+      return;
+    }
+
+    if (how.subscript !== undefined) {
+      if (info.kind === 'assoc') {
+        target.setAssocElement(name, how.subscript, await valueFor(target.getAssoc(name)?.[how.subscript], how.value));
+        return;
+      }
+
+      const array = target.getArray(name) ?? [];
+      const evaluated = Number(await arith(how.subscript));
+      const index = evaluated < 0 ? array.length + evaluated : evaluated;
+
+      target.setArrayElement(name, index, await valueFor(array[index], how.value));
+      return;
+    }
+
+    if (info.kind === 'array') {
+      target.setArrayElement(name, 0, await valueFor(target.getArray(name)?.[0], how.value));
+      return;
+    }
+
+    if (info.kind === 'assoc') {
+      target.setAssocElement(name, '0', await valueFor(target.getAssoc(name)?.['0'], how.value));
+      return;
+    }
+
+    const previous = typeof info.value === 'string' ? info.value : undefined;
+
+    target.setParams({ [name]: await valueFor(previous, how.value) });
+  }
+}
+
+/** Parse the options, `-ar` and `+x` alike, up to the first name or `--`. */
+function parseOptions(command: Command, args: string[]): { opts: Options; names: string[]; bad?: string } {
+  const opts: Options = { on: new Set(), off: new Set(), print: false, global: false };
+  let i = 0;
+
+  for (; i < args.length; i++) {
+    const arg = args[i];
+
+    if (arg === '--') {
+      i++;
+      break;
+    }
+
+    if (!/^[-+]./.test(arg)) break;
+
+    const set = arg[0] === '-' ? opts.on : opts.off;
+
+    for (const letter of arg.slice(1)) {
+      if (!OPTIONS[command].includes(letter)) return { opts, names: [], bad: `${arg[0]}${letter}` };
+      if (letter === 'p') opts.print = true;
+      else if (letter === 'g') opts.global = true;
+      else set.add(letter);
+    }
+  }
+
+  return { opts, names: args.slice(i) };
+}
+
 /**
- * The typeset builtin command.
- *
- * This is an alias for the declare builtin for compatibility with older
- * scripts and other shells.
+ * The shared body of declare, typeset, local, readonly and export: readonly
+ * and export only set their attribute on what they are given, `-r` or `-x`.
  */
-export const typesetBuiltin: BuiltinHandler = declareBuiltin;
+export async function declareCommand(command: Command, ctx: ExecContextIf, args: string[]): Promise<BuiltinResult> {
+  const { opts, names, bad } = parseOptions(command, args);
+
+  if (bad) {
+    return { code: 2, stderr: `${command}: ${bad}: invalid option\n${command}: usage: ${command} [-${OPTIONS[command]}] [name[=value] ...]\n` };
+  }
+
+  // readonly and export are declare giving one attribute; -n takes it instead,
+  // which readonly silently cannot
+  if (command === 'readonly' || command === 'export') {
+    const attribute = command === 'readonly' ? 'r' : 'x';
+    const undo = opts.on.delete('n');
+
+    if (!undo) opts.on.add(attribute);
+    else if (command === 'export') opts.off.add(attribute);
+  }
+
+  const fnScope = ctx.getFunctionScope();
+
+  if (command === 'local' && !fnScope) {
+    return { code: 1, stderr: 'local: can only be used in a function\n' };
+  }
+
+  if (opts.on.has('f') || opts.on.has('F')) return await declareFunctions(ctx, opts, names);
+
+  const declaration = new Declaration(command, ctx, opts);
+
+  if (names.length === 0) {
+    const attributes = opts.on.size > 0;
+
+    if (command === 'local') {
+      declaration.showLocals(fnScope!);
+    } else if (opts.print && opts.on.size === 0) {
+      declaration.showAll();
+    } else if (!attributes && !opts.print) {
+      // `declare` alone is `set`: every variable, then the functions
+      const listing = setListing(ctx) + await functionsListing(ctx);
+      return { code: 0, stdout: listing };
+    } else {
+      declaration.showWithAttributes();
+    }
+
+    const result = declaration.result();
+    return { code: result.code, stdout: result.stdout || undefined, stderr: result.stderr || undefined };
+  }
+
+  if (opts.print && command !== 'export' && command !== 'readonly') {
+    for (const name of names) declaration.showName(name);
+  } else {
+    for (const name of names) await declaration.declare(name);
+  }
+
+  const result = declaration.result();
+
+  return { code: result.code, stdout: result.stdout || undefined, stderr: result.stderr || undefined };
+}
+
+/** Every function as `set` ends its listing with them; posix mode leaves them out. */
+async function functionsListing(ctx: ExecContextIf): Promise<string> {
+  if (ctx.getShellOption('posix')) return '';
+
+  const functions = ctx.getFunctions();
+  let out = '';
+
+  for (const name of Object.keys(functions).sort()) out += `${await functionText(functions[name])}\n`;
+
+  return out;
+}
+
+/**
+ * `-f` prints functions as bash would read them back, `-F` only their names:
+ * the ones named, or all of them sorted. A name that is no function fails quietly.
+ */
+async function declareFunctions(ctx: ExecContextIf, opts: Options, names: string[]): Promise<BuiltinResult> {
+  const exporting = opts.on.has('x') || opts.off.has('x');
+
+  // `declare -fx name` exports it, as `export -f name` does
+  if (names.length && exporting) return await exportFunctions(ctx, names, opts.off.has('x'));
+
+  const functions = ctx.getFunctions();
+  const env = ctx.getEnv();
+  const exported = (name: string) => functionEnvName(name) in env;
+  // `declare -xF` lists the exported ones only
+  const listing = names.length === 0;
+  const chosen = listing ? Object.keys(functions).sort().filter((name) => !opts.on.has('x') || exported(name)) : names;
+  let output = '';
+  let code = 0;
+
+  for (const name of chosen) {
+    const fn = functions[name];
+    const declaration = `declare -f${exported(name) ? 'x' : ''} ${name}\n`;
+
+    if (!fn) {
+      code = 1;
+    } else if (opts.on.has('F')) {
+      output += listing ? declaration : `${name}\n`;
+    } else {
+      output += `${await functionText(fn, ctx.getShellOption('posix'))}\n`;
+      if (listing && exported(name)) output += declaration;
+    }
+  }
+
+  return { code, stdout: output };
+}
+
+export const declareBuiltin: BuiltinHandler = (ctx: ExecContextIf, args: string[], _shell: ShellIf) => declareCommand('declare', ctx, args);
+
+/** typeset is declare by its ksh name. */
+export const typesetBuiltin: BuiltinHandler = (ctx: ExecContextIf, args: string[], _shell: ShellIf) => declareCommand('typeset', ctx, args);
 
 /**
  * Check if a variable is readonly.
@@ -380,8 +511,6 @@ export const typesetBuiltin: BuiltinHandler = declareBuiltin;
  * @returns Always returns false since readonly tracking is now per-context
  */
 export function isReadonly(_name: string): boolean {
-  // Readonly vars are now tracked in the context, not globally
-  // This function is kept for backwards compatibility but always returns false
   return false;
 }
 

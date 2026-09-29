@@ -467,6 +467,11 @@ export function globToRegExp(pattern: string): RegExp {
   }
 }
 
+/** The text a quoted glob stands for: quoteGlob undone. */
+export function unquoteGlob(glob: string): string {
+  return glob.replace(/\\(.)/gs, '$1');
+}
+
 /** Quote every character of a text so a shell pattern matches it literally. */
 export function quoteGlob(text: string): string {
   return text.replace(/[\\*?[\]()|@!+]/g, '\\$&');

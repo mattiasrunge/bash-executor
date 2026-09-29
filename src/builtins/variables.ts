@@ -2,6 +2,7 @@ import { utils } from '@ein/bash-parser';
 import { exportedFunctionText, functionEnvName } from '../print-command.ts';
 import type { ExecContextIf } from '../types.ts';
 import type { BuiltinHandler } from './types.ts';
+import { declareCommand } from './declare.ts';
 
 /**
  * Split `a[1]` or `a[key]` into the array name and the subscript it names.
@@ -100,72 +101,7 @@ export async function exportFunctions(ctx: ExecContextIf, names: string[], remov
   return { code, stderr };
 }
 
-export const exportBuiltin: BuiltinHandler = async (ctx, args) => {
-  if (args.length === 0) {
-    // With no arguments, list all exported variables
-    // For now, just return success
-    return { code: 0 };
-  }
-
-  let removeExport = false;
-  let functions = false;
-  const varArgs: string[] = [];
-
-  for (const arg of args) {
-    if (/^-[fn]+$/.test(arg)) {
-      removeExport ||= arg.includes('n');
-      functions ||= arg.includes('f');
-    } else if (arg === '-p') {
-      // What is exported, as the commands that export it again
-      const env = ctx.getEnv();
-      const stdout = Object.keys(env).sort().map((name) => `declare -x ${name}="${env[name].replace(/(["\\$`])/g, '\\$1')}"\n`).join('');
-
-      return { code: 0, stdout };
-    } else if (arg === '--') {
-      continue;
-    } else {
-      varArgs.push(arg);
-    }
-  }
-
-  if (functions) return await exportFunctions(ctx, varArgs, removeExport);
-
-  for (const arg of varArgs) {
-    const eqIdx = arg.indexOf('=');
-
-    if (eqIdx > 0) {
-      // name=value form
-      const name = arg.substring(0, eqIdx);
-      const value = arg.substring(eqIdx + 1);
-
-      if (removeExport) {
-        // Remove from env but keep in params
-        ctx.setEnv({ [name]: null });
-        ctx.setParams({ [name]: value });
-      } else {
-        // An exported variable lives in the environment and only there, so
-        // that assigning it later updates what a child sees
-        ctx.setParams({ [name]: null });
-        ctx.setEnv({ [name]: value });
-      }
-    } else {
-      // name only form - export existing variable
-      const name = arg;
-      const params = ctx.getParams();
-      const value = params[name] ?? ctx.getEnv()[name] ?? '';
-
-      if (removeExport) {
-        ctx.setEnv({ [name]: null });
-        ctx.setParams({ [name]: value });
-      } else {
-        ctx.setParams({ [name]: null });
-        ctx.setEnv({ [name]: value });
-      }
-    }
-  }
-
-  return { code: 0 };
-};
+export const exportBuiltin: BuiltinHandler = (ctx, args) => declareCommand('export', ctx, args);
 
 /**
  * The unset builtin - remove variables or functions.
@@ -244,60 +180,4 @@ export const unsetBuiltin: BuiltinHandler = async (ctx, args) => {
  * function, the variable's value and export status are restored when
  * the function returns.
  */
-export const localBuiltin: BuiltinHandler = async (cmdCtx, args) => {
-  // Every command runs in a context of its own, which is dropped as soon as it
-  // returns — a local set there would be gone before the next command in the
-  // function body ran. The enclosing context is the function's, which is the
-  // scope `local` is about.
-  const ctx = cmdCtx.getFunctionScope() ?? cmdCtx.getParent() ?? cmdCtx;
-
-  let array = false;
-  let assoc = false;
-
-  for (const arg of args) {
-    if (assoc && !arg.startsWith('-')) {
-      const assocName = arg.indexOf('=') === -1 ? arg : arg.slice(0, arg.indexOf('='));
-
-      if (!ctx.getAssoc(assocName)) {
-        ctx.setLocalAssoc(assocName, {});
-      }
-    }
-
-    if (arg === '-a') {
-      array = true;
-      continue;
-    }
-
-    if (arg === '-A') {
-      assoc = true;
-      continue;
-    }
-
-    if (assignArrayArg(ctx, arg, true)) {
-      continue;
-    }
-
-    const eqIdx = arg.indexOf('=');
-
-    if (array && eqIdx === -1) {
-      ctx.setLocalArray(arg, ctx.getArray(arg) ?? []);
-      continue;
-    }
-
-    if (assoc && eqIdx === -1) {
-      continue;
-    }
-
-    if (eqIdx > 0) {
-      // name=value form
-      const name = arg.substring(0, eqIdx);
-      const value = arg.substring(eqIdx + 1);
-      ctx.setLocalParams({ [name]: value });
-    } else {
-      // name only form - declare as local with empty value
-      ctx.setLocalParams({ [arg]: '' });
-    }
-  }
-
-  return { code: 0 };
-};
+export const localBuiltin: BuiltinHandler = (ctx, args) => declareCommand('local', ctx, args);

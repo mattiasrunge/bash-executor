@@ -35,7 +35,8 @@ Deno.test('Prefix Variable Assignment', async (t) => {
   await t.step('prefix assignment sets variable for command', async () => {
     const shell = new TestShell();
     shell.mockCommand('printvar', async (ctx) => {
-      const params = ctx.getParams();
+      // A prefix assignment is in the command's environment
+      const params = ctx.getEnv();
       return { code: 0, stdout: params['VAR'] || 'undefined' };
     });
     const result = await shell.runAndCapture('VAR=123 printvar');
@@ -45,7 +46,7 @@ Deno.test('Prefix Variable Assignment', async (t) => {
   await t.step('multiple prefix assignments', async () => {
     const shell = new TestShell();
     shell.mockCommand('printvars', async (ctx) => {
-      const params = ctx.getParams();
+      const params = ctx.getEnv();
       return { code: 0, stdout: `A=${params['A']},B=${params['B']}` };
     });
     const result = await shell.runAndCapture('A=1 B=2 printvars');

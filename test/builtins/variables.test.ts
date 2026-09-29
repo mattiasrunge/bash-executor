@@ -1,6 +1,7 @@
 import { assertEquals } from '@std/assert';
 import { exportBuiltin, localBuiltin, unsetBuiltin } from '../../src/builtins/variables.ts';
 import { ExecContext } from '../../src/context.ts';
+import type { ExecContextIf } from '../../src/types.ts';
 
 // Mock shell for testing
 const mockShell = {} as Parameters<typeof exportBuiltin>[2];
@@ -34,11 +35,14 @@ Deno.test('export builtin', async (t) => {
     assertEquals(ctx.getEnv()['FOO'], 'bar');
   });
 
-  await t.step('exports empty value when param not set', async () => {
+  await t.step('exporting an unset name marks it, and puts nothing in the environment yet', async () => {
     const ctx = new ExecContext();
     const result = await exportBuiltin(ctx, ['FOO'], mockShell, noopExecute);
     assertEquals(result.code, 0);
-    assertEquals(ctx.getEnv()['FOO'], '');
+    assertEquals(ctx.getEnv()['FOO'], undefined);
+
+    ctx.setParams({ FOO: 'later' });
+    assertEquals(ctx.getEnv()['FOO'], 'later');
   });
 
   await t.step('-n removes export', async () => {
@@ -118,40 +122,54 @@ Deno.test('unset builtin', async (t) => {
   });
 });
 
+/** A function's frame, as the executor makes one, and the context a command in it runs in. */
+function inFunction(): { frame: ExecContextIf; cmd: ExecContextIf } {
+  const frame = new ExecContext().spawnContext();
+
+  frame.setLocalParams({ '#': '0' });
+
+  return { frame, cmd: frame.spawnContext() };
+}
+
 Deno.test('local builtin', async (t) => {
   await t.step('creates local variable with value', async () => {
-    const ctx = new ExecContext();
-    const result = await localBuiltin(ctx, ['FOO=bar'], mockShell, noopExecute);
+    const { frame, cmd } = inFunction();
+    const result = await localBuiltin(cmd, ['FOO=bar'], mockShell, noopExecute);
     assertEquals(result.code, 0);
-    assertEquals(ctx.getParams()['FOO'], 'bar');
+    assertEquals(frame.getParams()['FOO'], 'bar');
   });
 
-  await t.step('creates local variable without value', async () => {
-    const ctx = new ExecContext();
-    const result = await localBuiltin(ctx, ['FOO'], mockShell, noopExecute);
+  await t.step('a local without a value is declared, and unset', async () => {
+    const { frame, cmd } = inFunction();
+    const result = await localBuiltin(cmd, ['FOO'], mockShell, noopExecute);
     assertEquals(result.code, 0);
-    assertEquals(ctx.getParams()['FOO'], '');
+    assertEquals(frame.getParams()['FOO'], undefined);
+    assertEquals(frame.getOwnVariables()['FOO']?.kind, 'scalar');
   });
 
   await t.step('creates multiple local variables', async () => {
-    const ctx = new ExecContext();
-    const result = await localBuiltin(ctx, ['FOO=bar', 'BAZ=qux'], mockShell, noopExecute);
+    const { frame, cmd } = inFunction();
+    const result = await localBuiltin(cmd, ['FOO=bar', 'BAZ=qux'], mockShell, noopExecute);
     assertEquals(result.code, 0);
-    assertEquals(ctx.getParams()['FOO'], 'bar');
-    assertEquals(ctx.getParams()['BAZ'], 'qux');
+    assertEquals(frame.getParams()['FOO'], 'bar');
+    assertEquals(frame.getParams()['BAZ'], 'qux');
   });
 
-  await t.step('local assigns in the enclosing scope, not in the command context', async () => {
-    const parent = new ExecContext();
-    parent.setParams({ FOO: 'parent' });
+  await t.step("local assigns in the function, not in the command context, and hides the caller's", async () => {
+    const root = new ExecContext();
+    root.setParams({ FOO: 'parent' });
 
-    const child = parent.spawnContext();
-    await localBuiltin(child, ['FOO=child'], mockShell, noopExecute);
+    const frame = root.spawnContext();
+    frame.setLocalParams({ '#': '0' });
+    await localBuiltin(frame.spawnContext(), ['FOO=child'], mockShell, noopExecute);
 
-    // The context a builtin runs in is dropped as soon as the command returns,
-    // so a local written there would be gone before the next command in the
-    // function body ran. The enclosing context is the function's scope.
-    assertEquals(child.getParams()['FOO'], 'child');
-    assertEquals(parent.getParams()['FOO'], 'child');
+    assertEquals(frame.getParams()['FOO'], 'child');
+    assertEquals(root.getParams()['FOO'], 'parent');
+  });
+
+  await t.step('outside a function it refuses', async () => {
+    const result = await localBuiltin(new ExecContext(), ['FOO=bar'], mockShell, noopExecute);
+    assertEquals(result.code, 1);
+    assertEquals(result.stderr, 'local: can only be used in a function\n');
   });
 });

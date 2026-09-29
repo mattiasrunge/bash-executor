@@ -125,3 +125,53 @@ Deno.test('typeset builtin', async (t) => {
     assertEquals(ctx.getParams()['x'], '5');
   });
 });
+
+Deno.test('declare as bash does it', async (t) => {
+  // Each expected text is bash 5.2's for the same script
+  const { TestShell } = await import('../lib/test-shell.ts');
+  const run = async (script: string) => await new TestShell().runAndCapture(script);
+
+  await t.step('declared without a value is set by nothing, and -p shows just the name', async () => {
+    assertEquals((await run('declare -a b; declare -p b; declare -A h=([k]=v); declare -p h')).stdout, 'declare -a b\ndeclare -A h=([k]="v" )\n');
+  });
+
+  await t.step('a subscripted name makes an array, and += appends', async () => {
+    assertEquals((await run('declare c[3]=x; declare -p c; x=1; declare x+=2; declare -p x')).stdout, 'declare -a c=([3]="x")\ndeclare -- x="12"\n');
+  });
+
+  await t.step('-i makes assignments arithmetic, arrays too; -l and -u change the case', async () => {
+    const result = await run('declare -i n=2+3; n+=4; declare -ai ia=(1+1 2); ia[1]+=5; declare -l lo=MiXed; declare -u up=MiXed; declare -p n ia lo up');
+
+    assertEquals(result.stdout, 'declare -i n="9"\ndeclare -ai ia=([0]="2" [1]="7")\ndeclare -l lo="mixed"\ndeclare -u up="MIXED"\n');
+  });
+
+  await t.step('assigning a readonly array a list abandons the line', async () => {
+    const result = await run('readonly r=(1); readonly r=(2); declare -p r\ndeclare -p r');
+
+    assertEquals(result.stdout, 'declare -ar r=([0]="1")\n');
+    assertStringIncludes(result.stderr, 'r: readonly variable');
+  });
+
+  await t.step('a local is declared unset, and stays local when unset', async () => {
+    const result = await run('f() { local v; echo "[${v-unset}]"; v=in; unset v; v=again; declare -p v; }; f; echo "out:${v-unset}"');
+
+    assertEquals(result.stdout, '[unset]\ndeclare -- v="again"\nout:unset\n');
+  });
+
+  await t.step('declare in a function is local, with -g global', async () => {
+    assertEquals((await run('g() { declare d=1; declare -g gl=2; }; g; echo "${d-unset} $gl"')).stdout, 'unset 2\n');
+  });
+
+  await t.step('what bash refuses', async () => {
+    const result = await run('declare -a b; declare +a b; echo $?; declare -p nosuch; echo $?');
+
+    assertEquals(result.stdout, '1\n1\n');
+    assertEquals(result.stderr, 'declare: b: cannot destroy array variables in this way\ndeclare: nosuch: not found\n');
+  });
+
+  await t.step('export -n takes the attribute, and readonly assigns a quoted list as a string', async () => {
+    const result = await run("export ex=1; declare -p ex; export -n ex; declare -p ex; e=(outside); f2() { readonly 'e=(3)'; }; f2; declare -p e");
+
+    assertEquals(result.stdout, 'declare -x ex="1"\ndeclare -- ex="1"\ndeclare -ar e=([0]="(3)")\n');
+  });
+});

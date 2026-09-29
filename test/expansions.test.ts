@@ -387,3 +387,32 @@ Deno.test('Expansions as bash has them', async (t) => {
     assertEquals(result.stdout, '[a b]\n[]\n[a]\n[b]\n');
   });
 });
+
+Deno.test('${x/pattern/string}', async (t) => {
+  // The expected text is bash 5.2's for the same lines
+  const run = async (script: string) => (await new TestShell().runAndCapture(script)).stdout;
+
+  await t.step('the pattern is a glob; the longest match goes, the first or every one', async () => {
+    assertEquals(await run('v=abcabc; echo ${v//b*/X} ${v/b/X} ${v//[ab]/_}'), 'aX aXcabc __c__c\n');
+  });
+
+  await t.step('# and % anchor it, and with an empty pattern add to either end', async () => {
+    assertEquals(await run('v=abcabc; echo ${v/#a/X} ${v/%c/X} ${v/#/P} ${v/%/S}'), 'Xbcabc abcabX Pabcabc abcabcS\n');
+  });
+
+  await t.step('an escaped or quoted / is part of the pattern, and quoted characters match themselves', async () => {
+    assertEquals(await run('p=x/y/z; echo ${p//\\//^} ${p//"/"/-}; v=abcabc; echo ${v/"b*"/Q}'), 'x^y^z x-y-z\nabcabc\n');
+  });
+
+  await t.step('an unquoted & in the string is what matched', async () => {
+    assertEquals(await run('v=abc; x="&"; echo ${v//?/<&>} ${v//b/\\&} ${v//b/"&"} ${v//b/$x}'), '<a><b><c> a&c a&c abc\n');
+  });
+
+  await t.step('an array has it done to each element', async () => {
+    assertEquals(await run('a=(x/y z/w); echo ${a[@]//\\//^} ${a[@]/#/-}'), 'x^y z^w -x/y -z/w\n');
+  });
+
+  await t.step('a quoted pattern in # and % matches itself', async () => {
+    assertEquals(await run(`v='a*b*c'; echo "\${v%"*"*}" "\${v##*"*"}" \${v#'a*'}`), 'a*b c b*c\n');
+  });
+});
