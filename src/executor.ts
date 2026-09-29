@@ -919,6 +919,11 @@ export class AstExecutor {
   }
 
   protected async executeCommand(node: AstNodeCommand, parentCtx: ExecContextIf): Promise<number> {
+    // `$BASH_COMMAND`: the command running now, as written
+    if (node.loc) {
+      parentCtx.setParams({ BASH_COMMAND: this.nodeSource(node) });
+    }
+
     // The DEBUG trap runs before every simple command; in a function only
     // under `set -T`, since functions do not inherit it otherwise
     if (parentCtx.getTrap('DEBUG') && (this.functionDepth === 0 || parentCtx.getShellOption('functrace'))) {

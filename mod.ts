@@ -5,3 +5,4 @@ export * from './src/executor.ts';
 export * from './src/jobs.ts';
 export * from './src/types.ts';
 export * from './src/builtins/mod.ts';
+export * from './src/bytes.ts';

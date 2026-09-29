@@ -213,9 +213,64 @@ export class ExecContext implements ExecContextIf {
     this.errexitSuppressed = value;
   }
 
+  /**
+   * bash's dynamic variables, in the shell's own context: their value is made
+   * each time one is read. One that is unset is an ordinary variable from then on.
+   */
+  private dynamic = new Set(['SECONDS', 'EPOCHSECONDS', 'EPOCHREALTIME', 'RANDOM', 'SRANDOM', 'BASH_ARGV0']);
+  private secondsFrom = Date.now();
+  private secondsBase = 0;
+  private randomSeed = Math.floor(Math.random() * 2 ** 31);
+
+  private dynamicValue(name: string): string {
+    const now = Date.now();
+
+    switch (name) {
+      case 'SECONDS':
+        return String(this.secondsBase + Math.floor((now - this.secondsFrom) / 1000));
+      case 'EPOCHSECONDS':
+        return String(Math.floor(now / 1000));
+      case 'EPOCHREALTIME': {
+        const micros = Math.floor((performance.timeOrigin + performance.now()) * 1000);
+
+        return `${Math.floor(micros / 1e6)}.${String(micros % 1e6).padStart(6, '0')}`;
+      }
+      case 'RANDOM':
+        // bash's own generator is a different one; what matters is 0 to 32767, and a seed
+        this.randomSeed = (this.randomSeed * 1103515245 + 12345) % 2 ** 31;
+        return String(this.randomSeed >> 16 & 0x7fff);
+      case 'SRANDOM':
+        return String(crypto.getRandomValues(new Uint32Array(1))[0]);
+      default:
+        return this.params['0'] ?? '';
+    }
+  }
+
+  /** Setting a dynamic variable: SECONDS counts on from it, RANDOM takes it as a seed, BASH_ARGV0 is $0. */
+  private setDynamic(name: string, value: string): void {
+    if (name === 'SECONDS') {
+      this.secondsBase = Number.parseInt(value, 10) || 0;
+      this.secondsFrom = Date.now();
+    } else if (name === 'RANDOM') {
+      this.randomSeed = (Number.parseInt(value, 10) || 0) % 2 ** 31;
+    } else if (name === 'BASH_ARGV0') {
+      this.params['0'] = value;
+    }
+  }
+
   getParams(): Record<string, string> {
     if (!this.parent) {
-      return this.params;
+      if (this.dynamic.size === 0) {
+        return this.params;
+      }
+
+      const params = { ...this.params };
+
+      for (const name of this.dynamic) {
+        params[name] = this.dynamicValue(name);
+      }
+
+      return params;
     }
 
     const params = { ...this.parent.getParams(), ...this.params };
@@ -259,6 +314,16 @@ export class ExecContext implements ExecContextIf {
     values: Record<string, string | null>,
   ): Record<string, string> {
     for (const key in values) {
+      if (!this.parent && this.dynamic.has(key)) {
+        if (values[key] === null) {
+          this.dynamic.delete(key);
+        } else {
+          this.setDynamic(key, values[key]!);
+        }
+
+        continue;
+      }
+
       if (values[key] === null) {
         delete this.params[key];
       } else {

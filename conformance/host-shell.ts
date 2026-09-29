@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { isAbsolute, join, resolve } from '@std/path';
 import type { ExecCommandOptions, ExecContextIf, JobHandle, JobHostIf, PathTestOperation, ShellIf } from '../mod.ts';
+import { encodeShellText } from '../mod.ts';
 import { globToRegexSource } from '../src/pattern.ts';
 import { PipeBuffer } from '../test/lib/pipe-buffer.ts';
 
@@ -190,7 +191,8 @@ export class RealShell implements ShellIf {
   }
 
   private async writeAll(target: { write(p: Uint8Array): Promise<number> }, data: string | Uint8Array): Promise<void> {
-    let bytes = typeof data === 'string' ? this.encoder.encode(data) : data;
+    // An escape's byte that is no character goes out as that byte, as bash writes it
+    let bytes = typeof data === 'string' ? encodeShellText(data) : data;
 
     while (bytes.length > 0) {
       const n = await target.write(bytes);
@@ -463,7 +465,7 @@ export class RealShell implements ShellIf {
         // An empty write is EOF, as in the test shell and MURRiX
         pipe.close();
       } else {
-        await pipe.writeString(data).catch(() => {});
+        await pipe.write(encodeShellText(data)).catch(() => {});
       }
     }
   }

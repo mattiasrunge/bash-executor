@@ -6,6 +6,7 @@
  * from the arguments, and bash's own `%b`, `%q` and `%(…)T`.
  */
 
+import { decodeEscapedBytes, escapedByte } from '../bytes.ts';
 import { backslashQuoted } from '../quote.ts';
 import type { ExecContextIf, ShellIf } from '../types.ts';
 import type { BuiltinHandler, BuiltinResult } from './types.ts';
@@ -53,7 +54,7 @@ function escapeAt(text: string, i: number, inB: boolean, errors?: Diagnostics): 
 
     const code = Number.parseInt(hex, 16);
 
-    return { value: next === 'x' ? String.fromCharCode(code) : String.fromCodePoint(Math.min(code, 0x10ffff)), end: i + 2 + hex.length };
+    return { value: next === 'x' ? escapedByte(code) : String.fromCodePoint(Math.min(code, 0x10ffff)), end: i + 2 + hex.length };
   }
 
   // `\nnn`; in %b also `\0nnn`, the zero not counted
@@ -61,7 +62,7 @@ function escapeAt(text: string, i: number, inB: boolean, errors?: Diagnostics): 
     const from = inB && next === '0' ? i + 2 : i + 1;
     const octal = text.slice(from, from + 3).match(/^[0-7]*/)![0];
 
-    return { value: String.fromCharCode(Number.parseInt(octal || '0', 8) & 0xff), end: from + octal.length };
+    return { value: escapedByte(Number.parseInt(octal || '0', 8)), end: from + octal.length };
   }
 
   return { value: `\\${next}`, end: i + 2 };
@@ -596,7 +597,8 @@ export const printfBuiltin: BuiltinHandler = async (
     const reported = errors.messages.length;
     const pass = formatOnce(format, values, errors, assignments, ctx.getEnv().TZ ?? ctx.getParams().TZ);
 
-    chunks.push({ stderr: errors.messages.slice(reported).join('') || undefined, stdout: pass.text || undefined });
+    // Bytes the escapes made are UTF-8 where they can be
+    chunks.push({ stderr: errors.messages.slice(reported).join('') || undefined, stdout: decodeEscapedBytes(pass.text) || undefined });
     values = values.slice(pass.consumed);
 
     if (pass.stop || pass.failed || pass.consumed === 0) {

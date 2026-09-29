@@ -1,3 +1,4 @@
+import { decodeEscapedBytes, escapedByte } from '../bytes.ts';
 import type { BuiltinHandler } from './types.ts';
 
 /**
@@ -46,7 +47,7 @@ function interpretEscapes(str: string): string {
           break;
         case 'c':
           // \c stops output
-          return result;
+          return decodeEscapedBytes(result);
         case '0': {
           // Octal: \0nnn (up to 3 octal digits)
           let octal = '';
@@ -56,7 +57,7 @@ function interpretEscapes(str: string): string {
             j++;
           }
           if (octal.length > 0) {
-            result += String.fromCharCode(parseInt(octal, 8));
+            result += escapedByte(parseInt(octal, 8));
             i = j;
           } else {
             result += '\0';
@@ -73,7 +74,7 @@ function interpretEscapes(str: string): string {
             j++;
           }
           if (hex.length > 0) {
-            result += String.fromCharCode(parseInt(hex, 16));
+            result += escapedByte(parseInt(hex, 16));
             i = j;
           } else {
             result += str[i];
@@ -92,7 +93,7 @@ function interpretEscapes(str: string): string {
     }
   }
 
-  return result;
+  return decodeEscapedBytes(result);
 }
 
 /**
