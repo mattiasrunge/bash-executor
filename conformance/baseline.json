@@ -475,7 +475,7 @@
   },
   "tests": {
     "run-alias": {
-      "upstream": 0.061,
+      "upstream": 0.058,
       "pass": false,
       "stdout": 0.093,
       "reference": "pass"
@@ -511,9 +511,9 @@
       "reference": "pass"
     },
     "run-assoc": {
-      "upstream": 0.232,
+      "upstream": 0.231,
       "pass": false,
-      "stdout": 0.228,
+      "stdout": 0.229,
       "reference": "pass"
     },
     "run-attr": {
@@ -553,9 +553,9 @@
       "reference": "pass"
     },
     "run-comsub": {
-      "upstream": 0.757,
+      "upstream": 0.792,
       "pass": false,
-      "stdout": 0.797,
+      "stdout": 0.844,
       "reference": "pass"
     },
     "run-comsub-eof": {
@@ -685,9 +685,9 @@
       "reference": "pass"
     },
     "run-heredoc": {
-      "upstream": 0,
+      "upstream": 0.556,
       "pass": false,
-      "stdout": 0,
+      "stdout": 0.622,
       "reference": "env"
     },
     "run-herestr": {
@@ -770,9 +770,9 @@
       "reference": "pass"
     },
     "run-nameref": {
-      "upstream": 0.156,
+      "upstream": 0.16,
       "pass": false,
-      "stdout": 0.203,
+      "stdout": 0.207,
       "reference": "pass"
     },
     "run-new-exp": {
@@ -830,9 +830,9 @@
       "reference": "pass"
     },
     "run-posixexp": {
-      "upstream": 0,
+      "upstream": 0.048,
       "pass": false,
-      "stdout": 0,
+      "stdout": 0.049,
       "reference": "pass"
     },
     "run-posixexp2": {
@@ -872,9 +872,9 @@
       "reference": "pass"
     },
     "run-quote": {
-      "upstream": 0.66,
+      "upstream": 0.673,
       "pass": false,
-      "stdout": 0.662,
+      "stdout": 0.675,
       "reference": "pass"
     },
     "run-quotearray": {
@@ -957,9 +957,9 @@
       "reference": "pass"
     },
     "run-type": {
-      "upstream": 0.319,
+      "upstream": 0.326,
       "pass": false,
-      "stdout": 0.339,
+      "stdout": 0.349,
       "reference": "pass"
     },
     "run-varenv": {
@@ -969,9 +969,9 @@
       "reference": "pass"
     },
     "run-vredir": {
-      "upstream": 0.275,
+      "upstream": 0.403,
       "pass": false,
-      "stdout": 0.3,
+      "stdout": 0.436,
       "reference": "env"
     }
   }

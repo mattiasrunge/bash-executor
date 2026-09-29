@@ -10,7 +10,7 @@
  * as printed, and so are options it has no counterpart for.
  */
 import { fromFileUrl } from '@std/path';
-import { AstExecutor, BashSyntaxError, createBuiltinRegistry, DEFAULT_SHELL_OPTIONS, ExecContext, getExitCode, SHELL_OPTION_FLAG_MAP } from '../mod.ts';
+import { AstExecutor, BashSyntaxError, createBuiltinRegistry, DEFAULT_SHELL_OPTIONS, ExecContext, getExitCode, isExitSignal, parse, SHELL_OPTION_FLAG_MAP } from '../mod.ts';
 import { logGap, RealShell } from './host-shell.ts';
 
 const BASH_VERSION = '5.2.21(1)-release';
@@ -196,12 +196,19 @@ async function main(): Promise<number> {
     code = getExitCode(await executor.execute(source, ctx));
   } catch (err) {
     if (err instanceof BashSyntaxError) {
-      const line = err.location?.start?.row;
+      // bash reads a script a command at a time: what comes before the error runs,
+      // and only then does the error end the shell
+      const { prefix, line } = await beforeSyntaxError(source, err);
+      const ran = prefix.trim() ? await executor.execute(prefix, ctx) : 0;
 
-      logGap({ kind: 'syntax-error', name: firstLine(err.message) });
-      console.error(`${inv.name}: ${Number.isFinite(line) ? `line ${line}: ` : ''}syntax error: ${firstLine(err.message)}`);
+      if (isExitSignal(ran)) {
+        code = getExitCode(ran);
+      } else {
+        logGap({ kind: 'syntax-error', name: firstLine(err.message) });
+        console.error(`${inv.name}: ${line !== undefined ? `line ${line}: ` : ''}syntax error: ${firstLine(err.message)}`);
 
-      code = 2;
+        code = 2;
+      }
     } else {
       const message = err instanceof Error ? err.message : String(err);
 
@@ -220,6 +227,40 @@ async function main(): Promise<number> {
   await shell.waitForBackground();
 
   return code & 0xff;
+}
+
+/** A parse failure that more input could still mend: the chunk is not a command yet. */
+function incomplete(err: BashSyntaxError): boolean {
+  return /Unclosed|'EOF'|'CONTINUE'|CONTINUE|end of/i.test(err.message);
+}
+
+/**
+ * The complete commands before a syntax error, and the line of the error. Lines
+ * are added to a chunk until it parses — a chunk that is only unfinished, an
+ * open `if` or here-document, takes more — and the first chunk that fails for
+ * good is where bash stops.
+ */
+async function beforeSyntaxError(source: string, whole: BashSyntaxError): Promise<{ prefix: string; line?: number }> {
+  const lines = source.split('\n');
+  let start = 0;
+
+  for (let end = 0; end < lines.length; end++) {
+    try {
+      await parse(lines.slice(start, end + 1).join('\n'));
+      start = end + 1;
+    } catch (err) {
+      if (!(err instanceof BashSyntaxError)) throw err;
+      if (incomplete(err) && end < lines.length - 1) continue;
+
+      const row = err.location?.start?.row;
+
+      return { prefix: lines.slice(0, start).join('\n'), line: Number.isFinite(row) ? start + row! : end + 1 };
+    }
+  }
+
+  const row = whole.location?.start?.row;
+
+  return { prefix: '', line: Number.isFinite(row) ? row : undefined };
 }
 
 class BinaryScriptError extends Error {}

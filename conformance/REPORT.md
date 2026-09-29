@@ -7,8 +7,8 @@ see [README.md](README.md) for what the scores mean.
 | --- | --- |
 | Test files that parse | 451 / 471 |
 | `run-*` scripts passing | 4 / 83 (real bash here: 74) |
-| Mean upstream score | 47% |
-| Mean stdout score | 51% |
+| Mean upstream score | 48% |
+| Mean stdout score | 52% |
 
 ## Gaps
 
@@ -60,6 +60,7 @@ Reserved words the parser handed over as a command name.
 | Name | Tests | Times hit |
 | --- | --- | --- |
 | time | posixpipe | 6 |
+| coproc | type | 1 |
 
 ### Syntax errors at run time
 
@@ -70,7 +71,7 @@ What bash-ts refused to parse as it ran: test scripts, the `.sub` files and `-c`
 | Unexpected 'CONTINUE' | assoc, comsub-eof, posixexp, quote | 4 |
 | Unexpected 'Rbrace' | coproc, nameref, type | 5 |
 | Unexpected 'CLOSE_PAREN' | comsub, parser, posix2 | 4 |
-| Unclosed here-document | comsub-eof, heredoc | 4 |
+| Unclosed here-document | comsub-eof, heredoc | 6 |
 | Unexpected 'In' | alias, comsub-posix | 2 |
 | Unexpected 'EOF' | comsub-posix, exportfunc | 2 |
 | Unexpected 'WORD' | parser, vredir | 2 |
@@ -103,8 +104,8 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | --- | --- |
 | trap: command not found | dbg-support, dbg-support2, execscript, glob-test, histexpand, history, mapfile, redir, set-x, test, trap, varenv |
 | wait: command not found | assoc, execscript, func, procsub, redir, trap |
+| foo: command not found | alias, comsub, execscript, exportfunc, nquote |
 | hash: command not found | assoc, builtins, execscript, rsh, type |
-| foo: command not found | alias, execscript, exportfunc, nquote |
 | syntax error: Unexpected 'CONTINUE' | assoc, comsub-eof, posixexp, quote |
 | the test suite should not be run as root | execscript, glob-test, new-exp, test |
 | unbound variable | array, new-exp, varenv |
@@ -112,6 +113,7 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | syntax error: Unexpected 'Rbrace' | coproc, nameref, type |
 | compgen: command not found | func, herestr, shopt |
 | ulimit: command not found | procsub, redir, vredir |
+| fooN: command not found | alias, comsub |
 | syntax error: Unexpected 'In' | alias, comsub-posix |
 | -a: command not found | builtins, execscript |
 | syntax error: Unclosed here-document | comsub-eof, heredoc |
@@ -119,6 +121,7 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | syntax error: Unexpected 'EOF' | comsub-posix, exportfunc |
 | a: not found | exp-tests, nameref |
 | getopts: command not found | getopts, posix2 |
+| N: No such file or directory | heredoc, vredir |
 | history: command not found | histexpand, history |
 | !!: command not found | histexpand, history |
 | !e: command not found | histexpand, history |
@@ -137,10 +140,8 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | x=value: command not found | alias |
 | x=newvalue: command not found | alias |
 | a: command not found | alias |
-| fooN: command not found | alias |
+| ever: command not found | alias |
 | myalias: command not found | alias |
-| aN: command not found | alias |
-| N ? N : x+=N: syntax error: Invalid left-hand side in assignment | arith |
 
 ## Per test
 
@@ -148,7 +149,7 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 
 | Test | ref | pass | upstream | stdout | First difference (upstream) |
 | --- | --- | --- | --- | --- | --- |
-| alias | pass | no | 6% | 9% | 3,21c3,45 ⏎ &lt; ./alias.tests: qfoo: command not found ⏎ &lt; ./alias.tests: foo: command not found |
+| alias | pass | no | 6% | 9% | 3,24c3,45 ⏎ &lt; ./alias.tests: qfoo: command not found ⏎ &lt; ./alias.tests: foo: command not found |
 | appendop | pass | no | 27% | 29% | 3a4 ⏎ &gt; 145 ⏎ 7,12c8,14 |
 | arith | pass | no | 70% | 81% | 3,4c3,4 ⏎ &lt; 2 ⏎ &lt; 8 |
 | arith-for | pass | no | 67% | 67% | 13a14,51 ⏎ &gt; fx ()  ⏎ &gt; {  |
@@ -161,8 +162,8 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | case | pass | no | 84% | 86% | 8,9c8,9 ⏎ &lt; hi1 ⏎ &lt; 2.0 |
 | casemod | pass | no | 72% | 72% | 16,23c16,23 ⏎ &lt; Acknowledgement Oenophile ⏎ &lt; ACKNOWLEDGEMENT OENOPHILE |
 | complete | pass | no | 0% | 0% | 1,37c1,63 ⏎ &lt; ./complete.tests: complete: command not found ⏎ &lt; ./complete.tests: complete: command not found |
-| comsub | pass | no | 76% | 80% | 1c1 ⏎ &lt; ./comsub.tests: hijkl: command not found ⏎ --- |
-| comsub-eof | pass | no | 39% | 77% | 1c1 ⏎ &lt; ./comsub-eof0.sub: syntax error: Unclosed here-document ⏎ --- |
+| comsub | pass | no | 79% | 84% | 1c1 ⏎ &lt; ./comsub.tests: hijkl: command not found ⏎ --- |
+| comsub-eof | pass | no | 39% | 77% | 1c1 ⏎ &lt; ./comsub-eof0.sub: line 7: syntax error: Unclosed here-document ⏎ --- |
 | comsub-posix | pass | no | 77% | 90% | 62c62,63 ⏎ &lt; ./comsub-posix1.sub: line 1: syntax error: Parse error on line 1: Unexpected 'EOF' ⏎ --- |
 | cond | pass | no | 85% | 85% | 28a29,30 ⏎ &gt; returns: 0 ⏎ &gt; ./cond.tests: line 122: [[: 4+: syntax error: operand expected (error token is "+") |
 | coproc | pass | no | 0% | 0% | 1c1,10 ⏎ &lt; ./coproc.tests: line 17: syntax error: Parse error on line 17: Unexpected 'Rbrace' ⏎ --- |
@@ -183,7 +184,7 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | getopts | pass | no | 10% | 14% | 1,24c1,32 ⏎ &lt; ./getopts.tests: getopts: command not found ⏎ &lt; 127 |
 | glob-test | env | no | 70% | 72% | 2,3d1 ⏎ &lt; glob2.sub: warning: you do not have the zh_HK.big5hkscs locale installed; ⏎ &lt; glob2.sub: warning: that will cause some of these tests to fail. |
 | globstar | pass | no | 25% | 25% | 0a1,26 ⏎ &gt; lib/glob/glob.o ⏎ &gt; lib/glob/smatch.o |
-| heredoc | env | no | 0% | 0% | 1c1,133 ⏎ &lt; ./heredoc.tests: syntax error: Unclosed here-document ⏎ --- |
+| heredoc | env | no | 56% | 62% | 6,7c6,7 ⏎ &lt; $PS4 ⏎ &lt; $PS4 |
 | herestr | pass | no | 51% | 52% | 1d0 ⏎ &lt; ./herestr.tests: compgen: command not found ⏎ 7,8c6,7 |
 | histexpand | pass | no | 33% | 43% | 1,28c1,51 ⏎ &lt; ./histexp.tests: trap: command not found ⏎ &lt; ./histexp.tests: history: command not found |
 | history | pass | no | 29% | 39% | 1,18c1,36 ⏎ &lt; ./history.tests: trap: command not found ⏎ &lt; ./history.tests: history: command not found |
@@ -197,7 +198,7 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | lastpipe | pass | yes | 100% | 100% |  |
 | mapfile | pass | no | 61% | 62% | 16a17,32 ⏎ &gt; a[0] Abcdefghijklmnop ⏎ &gt; [1] aBcdefghijklmnop |
 | more-exp | pass | no | 66% | 81% | 2c2 ⏎ &lt; argv[1] = &lt;aaa&gt; ⏎ --- |
-| nameref | pass | no | 16% | 20% | 1,3c1,5 ⏎ &lt; bar ⏎ &lt; flow |
+| nameref | pass | no | 16% | 21% | 1,3c1,5 ⏎ &lt; bar ⏎ &lt; flow |
 | new-exp | pass | no | 10% | 19% | 1d0 ⏎ &lt; new-exp.tests: the test suite should not be run as root ⏎ 3,4c2 |
 | nquote | pass | no | 71% | 77% | 7,10c7,10 ⏎ &lt; argv[1] = &lt;$hello,&gt; ⏎ &lt; argv[2] = &lt;$world&gt; |
 | nquote1 | pass | no | 95% | 95% | 5a6 ⏎ &gt; argv[3] = &lt;3&gt; ⏎ 19a21 |
@@ -207,14 +208,14 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | nquote5 | pass | yes | 100% | 100% |  |
 | parser | pass | no | 62% | 100% | 2c2 ⏎ &lt; 'invalid-name': not a valid identifier ⏎ --- |
 | posix2 | pass | no | 18% | 29% | 2,7c2,4 ⏎ &lt; OPTIND initial value test failed ⏎ &lt; ./posix2.tests: getopts: command not found |
-| posixexp | pass | no | 0% | 0% | 1c1,308 ⏎ &lt; ./posixexp.tests: line 1: syntax error: Parse error on line 1: Unexpected 'CONTINUE' ⏎ --- |
-| posixexp2 | pass | no | 0% | 0% | 1c1,40 ⏎ &lt; ./posixexp2.tests: line 60: syntax error: Unclosed " ⏎ --- |
+| posixexp | pass | no | 5% | 5% | 1,4c1,9 ⏎ &lt;  ⏎ &lt;  |
+| posixexp2 | pass | no | 0% | 0% | 1,3c1,40 ⏎ &lt; 1 ⏎ &lt; 2  |
 | posixpat | pass | no | 94% | 94% | 24a25 ⏎ &gt; ok 2 ⏎ 26a28 |
 | posixpipe | env | no | 63% | 83% | 3,7d2 ⏎ &lt; /usr/bin/time: cannot run !: No such file or directory ⏎ &lt; Command exited with non-zero status 127 |
 | precedence | pass | no | 41% | 41% | 5,6c5,6 ⏎ &lt;  Truth 1 && Truth 2  \|\| Say 3   output=12 ⏎ &lt;  Truth 1 && Truth 2  \|\| Say 3   output=12 |
 | printf | pass | no | 40% | 42% | 1,2c1,2 ⏎ &lt; printf: usage: printf format [arguments] ⏎ &lt; printf: usage: printf format [arguments] |
 | procsub | pass | no | 68% | 77% | 6c6 ⏎ &lt; /usr/bin/cat: '': No such file or directory ⏎ --- |
-| quote | pass | no | 66% | 66% | 13,14c13 ⏎ &lt; foo\ ⏎ &lt; bar |
+| quote | pass | no | 67% | 68% | 13,14c13 ⏎ &lt; foo\ ⏎ &lt; bar |
 | quotearray | pass | no | 32% | 37% | 1,6c1,8 ⏎ &lt; declare -A assoc=([x],b[$(echo uname &gt;&2)]="1") ⏎ &lt; declare -A assoc=([x],b[$(echo uname &gt;&2)]="2") |
 | read | env | timeout | 31% | 39% | timeout |
 | redir | pass | no | 55% | 60% | 2c2 ⏎ &lt; /tmp/redir-test: cannot overwrite existing file ⏎ --- |
@@ -228,6 +229,6 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | tilde | pass | no | 61% | 61% | 2c2 ⏎ &lt; /home/mattias/foo ⏎ --- |
 | tilde2 | pass | no | 57% | 57% | 2,3c2,3 ⏎ &lt;  ⏎ &lt;  |
 | trap | pass | no | 30% | 36% | 1,5c1,8 ⏎ &lt; ./trap.tests: trap: command not found ⏎ &lt; ./trap.tests: trap: command not found |
-| type | pass | no | 32% | 34% | 1c1 ⏎ &lt; ./type.tests: hash: command not found ⏎ --- |
+| type | pass | no | 33% | 35% | 1c1 ⏎ &lt; ./type.tests: hash: command not found ⏎ --- |
 | varenv | pass | no | 31% | 37% | 1,5c1,3 ⏎ &lt; 1 2 ⏎ &lt; ./varenv.tests: c=7: command not found |
-| vredir | env | no | 28% | 30% | 5a6,34 ⏎ &gt; bar ()  ⏎ &gt; {  |
+| vredir | env | no | 40% | 44% | 6,12c6,13 ⏎ &lt; 10 ⏎ &lt; bad foo 1 |
