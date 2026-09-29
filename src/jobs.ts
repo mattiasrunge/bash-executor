@@ -41,6 +41,13 @@ export interface JobHostIf {
 
   /** `bg`: continue a stopped job in the background. */
   background?(pid: string): Promise<void>;
+
+  /**
+   * `disown`: the job is no longer the shell's — it is not hung up when the
+   * shell ends, and whatever the host does to let it outlive the shell (move
+   * its output somewhere that stays) belongs here.
+   */
+  disown?(pid: string): Promise<void>;
 }
 
 export type Job = {

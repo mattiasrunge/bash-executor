@@ -8,7 +8,7 @@ class JobShell extends TestShell {
   private running = new Map<string, (status: number) => void>();
   signals: string[] = [];
 
-  jobControl: JobHostIf = {
+  jobs: JobHostIf = {
     start: async (ctx: ExecContextIf, run: (jobCtx: ExecContextIf) => Promise<number>) => {
       const pid = String(this.next++);
       const abort = new AbortController();
@@ -35,6 +35,10 @@ class JobShell extends TestShell {
       if (signal !== '0') kill(signal === 'TERM' ? 143 : 137);
 
       return await true;
+    },
+    disown: async (pid: string) => {
+      this.signals.push(`disown ${pid}`);
+      return await Promise.resolve();
     },
   };
 }
@@ -85,6 +89,13 @@ Deno.test('job control through the host', async (t) => {
   await t.step('disown takes a job out of the table', async () => {
     const result = await run('while :; do :; done & disown; jobs; kill $!');
     assertEquals(result.stdout, '');
+    assertEquals(result.signals, ['disown 1000', 'TERM 1000']);
+  });
+
+  await t.step('disown -h keeps the job in the table, and still tells the host', async () => {
+    const result = await run('while :; do :; done & disown -h %1; jobs -p; kill %1');
+    assertEquals(result.stdout, '1000\n');
+    assertEquals(result.signals, ['disown 1000', 'TERM 1000']);
   });
 });
 

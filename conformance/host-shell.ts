@@ -108,7 +108,7 @@ export class RealShell implements ShellIf {
    * loop that starts many. `kill` reaches the processes it has running and
    * stops the job itself between commands.
    */
-  jobControl: JobHostIf = {
+  jobs: JobHostIf = {
     start: async (ctx: ExecContextIf, run: (jobCtx: ExecContextIf) => Promise<number>): Promise<JobHandle> => {
       const pid = String(this.nextJobPid++);
       const record: JobRecord = { children: new Set(), abort: new AbortController(), finished: false };

@@ -140,7 +140,7 @@ export class AstExecutor {
    * since a host may set up `jobs` after it has made its executor.
    */
   private builtin(name: string) {
-    if (!this.shell.jobControl && JOB_BUILTINS.includes(name)) {
+    if (!this.shell.jobs && JOB_BUILTINS.includes(name)) {
       return undefined;
     }
 
@@ -207,7 +207,7 @@ export class AstExecutor {
     // Without the host's job control the job builtins are not there at all —
     // not for `type` and `command` either. Done here rather than in the
     // constructor, since a host may set up `jobs` after making its executor.
-    if (!this.shell.jobControl) {
+    if (!this.shell.jobs) {
       for (const name of JOB_BUILTINS) {
         this.builtins?.delete(name);
       }
@@ -393,7 +393,7 @@ export class AstExecutor {
     // subshell or a loop has no such call, and used to run in the foreground
     // instead — silently, with no job to bring back or disown. That is what made
     // a multi-step sweep impossible to detach from the session that started it.
-    if (node.async && this.shell.jobControl) {
+    if (node.async && this.shell.jobs) {
       return this.startJob(node, ctx);
     }
 
@@ -449,7 +449,7 @@ export class AstExecutor {
     const foreground = { ...node, async: false };
     const command = this.nodeSource(node);
 
-    const handle = await this.shell.jobControl!.start(ctx, async (jobCtx) => {
+    const handle = await this.shell.jobs!.start(ctx, async (jobCtx) => {
       const code = await this.executeNode(foreground, jobCtx);
       const status = isExitSignal(code) ? getExitCode(code) : isReturnSignal(code) ? getReturnCode(code) : code;
 

@@ -224,7 +224,7 @@ export const killBuiltin: BuiltinHandler = async (ctx: ExecContextIf, args: stri
       continue;
     }
 
-    if (!(await shell.jobControl!.signal(pid, signal))) {
+    if (!(await shell.jobs!.signal(pid, signal))) {
       stderr += `kill: (${pid}) - No such process\n`;
     }
   }
@@ -233,32 +233,36 @@ export const killBuiltin: BuiltinHandler = async (ctx: ExecContextIf, args: stri
 };
 
 /**
- * disown [-ahr] [jobspec …]: out of the table — the current job, or every one
- * with -a, every running one with -r. `-h` would keep it there, only not
- * hung up; there is no hangup here, so it does nothing.
+ * disown [-ahr] [jobspec …]: the current job, or those given — every one with
+ * -a, every running one with -r — is no longer the shell's. It leaves the
+ * table, or with -h stays there only not to be hung up; the host is told
+ * either way, to let it outlive the shell.
  */
-export const disownBuiltin: BuiltinHandler = async (ctx: ExecContextIf, args: string[]): Promise<BuiltinResult> => {
+export const disownBuiltin: BuiltinHandler = async (ctx: ExecContextIf, args: string[], shell: ShellIf): Promise<BuiltinResult> => {
   const table = ctx.getJobTable();
   const flags = new Set(args.filter((arg) => /^-[ahr]+$/.test(arg)).flatMap((arg) => [...arg.slice(1)]));
   const specs = args.filter((arg) => !/^-[ahr]+$/.test(arg));
-
-  if (flags.has('h')) {
-    return { code: 0 };
-  }
+  let stderr = '';
+  let jobs: Job[] = [];
 
   if (flags.has('a') || flags.has('r')) {
-    table.list().filter((job) => flags.has('a') || job.state === 'Running').forEach((job) => table.remove(job));
-    return { code: 0 };
+    jobs = table.list().filter((job) => flags.has('a') || job.state === 'Running');
+  } else {
+    for (const spec of specs.length > 0 ? specs : ['%+']) {
+      const job = lookup(table, 'disown', spec);
+
+      if (typeof job === 'string') {
+        stderr += specs.length > 0 ? job : 'disown: current: no such job\n';
+      } else {
+        jobs.push(job);
+      }
+    }
   }
 
-  let stderr = '';
+  for (const job of jobs) {
+    await shell.jobs?.disown?.(job.pid);
 
-  for (const spec of specs.length > 0 ? specs : ['%+']) {
-    const job = lookup(table, 'disown', spec);
-
-    if (typeof job === 'string') {
-      stderr += specs.length > 0 ? job : 'disown: current: no such job\n';
-    } else {
+    if (!flags.has('h')) {
       table.remove(job);
     }
   }
@@ -288,7 +292,7 @@ export const fgBuiltin: BuiltinHandler = async (ctx: ExecContextIf, args: string
 
   await shell.pipeWrite(ctx.getStdout(), `${job.command}\n`);
 
-  const status = shell.jobControl!.foreground ? await shell.jobControl!.foreground(job.pid, ctx) : await job.done;
+  const status = shell.jobs!.foreground ? await shell.jobs!.foreground(job.pid, ctx) : await job.done;
 
   ctx.getJobTable().remove(job);
 
@@ -303,7 +307,7 @@ export const bgBuiltin: BuiltinHandler = async (ctx: ExecContextIf, args: string
     return { code: 1, stderr: job };
   }
 
-  await shell.jobControl!.background?.(job.pid);
+  await shell.jobs!.background?.(job.pid);
   job.state = job.state === 'Stopped' ? 'Running' : job.state;
 
   return { code: 0, stdout: `[${job.id}]${ctx.getJobTable().mark(job)} ${job.command} &\n` };

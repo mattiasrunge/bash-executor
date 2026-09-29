@@ -201,7 +201,7 @@ export interface ShellIf {
    * and `bg`. Without it `&` goes to `execute` and `executeBackground` as
    * before, and those names are left to the host's own commands.
    */
-  jobControl?: JobHostIf;
+  jobs?: JobHostIf;
 
   /**
    * Runs a piece of the parse tree in the background, for the `&` cases that
