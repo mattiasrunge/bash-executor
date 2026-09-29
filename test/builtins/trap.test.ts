@@ -38,6 +38,11 @@ Deno.test('traps run', async (t) => {
     assertEquals(result.stdout, 'err 1\ndone\n');
   });
 
+  await t.step('functions inherit ERR only under set -E', async () => {
+    const result = await run('f() { false; }; trap "echo err \\$?" ERR; f; set -E; f');
+    assertEquals(result.stdout, 'err 1\nerr 1\nerr 1\n');
+  });
+
   await t.step('EXIT at the end of a subshell and of a $( )', async () => {
     const result = await run('(trap "echo sub" EXIT; echo in); x=$(trap "echo cs" EXIT; echo v); echo "[$x]"');
     assertEquals(result.stdout, 'in\nsub\n[v\ncs]\n');

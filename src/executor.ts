@@ -1407,8 +1407,9 @@ export class AstExecutor {
       return code;
     }
 
-    // The ERR trap runs where errexit would end the shell, set -e or not
-    if (!ctx.getErrexitSuppressed()) {
+    // The ERR trap runs where errexit would end the shell, set -e or not; in a
+    // function only under `set -E`, since functions do not inherit it otherwise
+    if (!ctx.getErrexitSuppressed() && (this.functionDepth === 0 || ctx.getShellOption('errtrace'))) {
       const trapped = await this.runTrap('ERR', ctx, code);
 
       if (isExitSignal(trapped)) {
