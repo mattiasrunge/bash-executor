@@ -10,6 +10,7 @@ deno task conformance         # run everything, fail on a drop against baseline.
 deno task conformance:update  # …and write baseline.json and REPORT.md
 deno task conformance --only arith,quote      # iterate on a few run-* scripts
 deno task conformance --tier parse            # parse every test file, nothing else
+deno run -A conformance/parse-chunks.ts       # the commands in them the parser rejects, one by one
 ```
 
 Needs network once, a C compiler, GNU `timeout` and `diff`, and `/bin/bash`. A
@@ -51,6 +52,9 @@ Per test file, the parse tier records whether bash-parser accepts it.
   runs a script one command at a time, so a syntax error costs it one command,
   while bash-parser takes the whole file at once. Some files hold deliberate
   syntax errors, and matching bash there needs incremental parsing.
+  [`parse-chunks.ts`](parse-chunks.ts) finds the commands behind a file's
+  failure: it cuts each file into top-level commands where `bash -n` says one
+  ends, and prints every command the parser rejects on its own.
 - **Builtins the executor lacks**: bash builtins that reached the host as
   external commands (`RealShell` logs every one).
 - **Uncaught exceptions** that ended a script, **syntax errors at run time**, and

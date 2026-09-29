@@ -123,7 +123,9 @@ export class RealShell implements ShellIf {
   /** Where PATH finds `name`, or null. A name with a slash is taken as a path. */
   private async which(ctx: ExecContextIf, name: string): Promise<string | null> {
     if (name.includes('/')) {
-      return this.path(ctx, name);
+      const path = this.path(ctx, name);
+
+      return (await statOf(path)) ? path : null;
     }
 
     const search = ctx.getEnv().PATH ?? ctx.getParams().PATH ?? '/usr/local/bin:/usr/bin:/bin';
@@ -155,9 +157,17 @@ export class RealShell implements ShellIf {
     const path = await this.which(ctx, name);
 
     if (!path) {
-      await this.writeTo(ctx.getStderr(), `${this.opts.name()}: ${name}: command not found\n`);
+      const missing = name.includes('/') ? 'No such file or directory' : 'command not found';
+
+      await this.writeTo(ctx.getStderr(), `${this.opts.name()}: ${name}: ${missing}\n`);
 
       return 127;
+    }
+
+    if ((await statOf(path))?.isDirectory) {
+      await this.writeTo(ctx.getStderr(), `${this.opts.name()}: ${name}: Is a directory\n`);
+
+      return 126;
     }
 
     const run = this.spawn(ctx, name, path, args);

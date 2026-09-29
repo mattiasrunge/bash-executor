@@ -177,11 +177,17 @@ async function main(): Promise<number> {
   let source: string;
 
   try {
-    source = inv.command ?? (inv.file !== undefined ? await Deno.readTextFile(inv.file) : await new Response(Deno.stdin.readable).text());
-  } catch {
-    console.error(`${inv.name}: ${inv.file}: No such file or directory`);
+    source = inv.command ?? (inv.file !== undefined ? await readScript(inv.file) : await new Response(Deno.stdin.readable).text());
+  } catch (err) {
+    const [message, code] = err instanceof Deno.errors.IsADirectory
+      ? ['Is a directory', 126]
+      : err instanceof BinaryScriptError
+      ? ['cannot execute binary file', 126]
+      : ['No such file or directory', 127];
 
-    return 127;
+    console.error(`${inv.name}: ${inv.file}: ${message}`);
+
+    return code as number;
   }
 
   let code: number;
@@ -214,6 +220,24 @@ async function main(): Promise<number> {
   await shell.waitForBackground();
 
   return code & 0xff;
+}
+
+class BinaryScriptError extends Error {}
+
+/** A script file, refused as bash refuses one: a NUL in its first line makes it binary. */
+async function readScript(path: string): Promise<string> {
+  if ((await Deno.stat(path)).isDirectory) {
+    throw new Deno.errors.IsADirectory(path);
+  }
+
+  const bytes = await Deno.readFile(path);
+  const firstLineEnd = bytes.indexOf(10);
+
+  if (bytes.subarray(0, firstLineEnd === -1 ? 80 : firstLineEnd).includes(0)) {
+    throw new BinaryScriptError(path);
+  }
+
+  return new TextDecoder().decode(bytes);
 }
 
 function firstLine(text: string): string {
