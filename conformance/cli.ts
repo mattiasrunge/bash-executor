@@ -10,24 +10,10 @@
  * as printed, and so are options it has no counterpart for.
  */
 import { fromFileUrl } from '@std/path';
-import { AstExecutor, BashSyntaxError, createBuiltinRegistry, DEFAULT_SHELL_OPTIONS, ExecContext, getExitCode } from '../mod.ts';
+import { AstExecutor, BashSyntaxError, createBuiltinRegistry, DEFAULT_SHELL_OPTIONS, ExecContext, getExitCode, SHELL_OPTION_FLAG_MAP } from '../mod.ts';
 import { logGap, RealShell } from './host-shell.ts';
 
 const BASH_VERSION = '5.2.21(1)-release';
-
-/** `set` letters the executor knows, by option name. */
-const LETTERS: Record<string, string> = {
-  e: 'errexit',
-  u: 'nounset',
-  x: 'xtrace',
-  v: 'verbose',
-  f: 'noglob',
-  a: 'allexport',
-  C: 'noclobber',
-  n: 'noexec',
-  b: 'notify',
-  m: 'monitor',
-};
 
 /** Long options that only matter to an interactive or startup-file-reading bash. */
 const IGNORED_LONG = new Set(['--norc', '--noprofile', '--noediting', '--login', '--debugger', '--dump-strings', '--wordexp']);
@@ -66,7 +52,7 @@ function parseArgs(argv: string[]): Invocation {
         console.log(`GNU bash, version ${BASH_VERSION} (bash-ts)`);
         Deno.exit(0);
       } else if (arg === '--posix') {
-        logGap({ kind: 'host-limit', name: 'set -o posix' });
+        setOption('posix', true);
       } else if (arg === '--rcfile' || arg === '--init-file') {
         i++;
       } else if (!IGNORED_LONG.has(arg)) {
@@ -92,8 +78,8 @@ function parseArgs(argv: string[]): Invocation {
         } else {
           logGap({ kind: 'host-limit', name: `shopt ${name}` });
         }
-      } else if (letter in LETTERS) {
-        setOption(LETTERS[letter], on);
+      } else if (letter in SHELL_OPTION_FLAG_MAP) {
+        setOption(SHELL_OPTION_FLAG_MAP[letter], on);
       } else if (!'ils'.includes(letter)) {
         logGap({ kind: 'host-limit', name: `set -${letter}` });
       }
@@ -215,6 +201,11 @@ async function main(): Promise<number> {
 
       logGap({ kind: 'exception', name: err instanceof Error ? err.constructor.name : 'unknown', detail: firstLine(message) });
       console.error(`${inv.name}: ${firstLine(message)}`);
+
+      // For whoever is chasing the crash
+      if (Deno.env.get('BASH_TS_STACK') && err instanceof Error) {
+        console.error(err.stack);
+      }
 
       code = 1;
     }

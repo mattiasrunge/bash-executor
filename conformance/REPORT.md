@@ -7,8 +7,8 @@ see [README.md](README.md) for what the scores mean.
 | --- | --- |
 | Test files that parse | 385 / 471 |
 | `run-*` scripts passing | 1 / 83 (real bash here: 74) |
-| Mean upstream score | 24% |
-| Mean stdout score | 26% |
+| Mean upstream score | 25% |
+| Mean stdout score | 28% |
 
 ## Gaps
 
@@ -51,11 +51,11 @@ Bash builtins that reached the host as external commands.
 
 | Name | Tests | Times hit |
 | --- | --- | --- |
-| shopt | alias, assoc, dbg-support2, dynvar, execscript, extglob2, globstar, histexpand, history, lastpipe, nquote, shopt, type, vredir | 78 |
+| shopt | alias, assoc, dbg-support2, dynvar, execscript, extglob2, globstar, histexpand, history, lastpipe, nquote, shopt, type, varenv, vredir | 80 |
 | trap | dbg-support2, execscript, histexpand, history, mapfile, set-x, trap | 30 |
+| wait | assoc, execscript, func, procsub, redir | 21 |
 | hash | assoc, builtins, execscript, rsh, type | 17 |
-| exec | execscript, procsub, redir, vredir | 22 |
-| wait | assoc, execscript, func, procsub | 11 |
+| exec | execscript, procsub, redir, vredir | 23 |
 | ulimit | builtins, procsub, vredir | 7 |
 | compgen | func, herestr, shopt | 4 |
 | history | histexpand, history | 64 |
@@ -80,7 +80,7 @@ What bash-ts refused to parse as it ran: test scripts, the `.sub` files and `-c`
 
 | Name | Tests | Times hit |
 | --- | --- | --- |
-| Unexpected 'Rbrace' | braces, coproc, dbg-support, dollars, nameref, type | 8 |
+| Unexpected 'Rbrace' | braces, coproc, dbg-support, dollars, nameref, type, varenv | 9 |
 | Unexpected 'CONTINUE' | assoc, comsub, comsub-eof, new-exp, posixexp, posixexp2 | 6 |
 | Unexpected 'WORD' | arith-for, errors, vredir | 3 |
 | Unexpected 'CLOSE_PAREN' | case, execscript, quote | 3 |
@@ -98,8 +98,8 @@ What bash-ts refused to parse as it ran: test scripts, the `.sub` files and `-c`
 | Unexpected 'EOF' | exportfunc | 1 |
 | Unclosed " | more-exp | 1 |
 | Unexpected 'Do' | nameref | 1 |
-| Unexpected 'Esac' | posix2 | 1 |
 | Unexpected 'SEPARATOR_OP' | parser | 1 |
+| Unexpected 'Esac' | posix2 | 1 |
 | Unexpected 'NEWLINE_LIST' | posixpipe | 1 |
 
 ### Uncaught exceptions
@@ -108,16 +108,14 @@ Errors that escaped the executor and ended the script.
 
 | Name | Tests | Times hit |
 | --- | --- | --- |
-| TypeError: Cannot read properties of undefined (reading 'includes') | redir, varenv | 2 |
+| Error: Bad file descriptor (os error 9) | redir | 1 |
 | Error: No such device or address (os error 6): open '/dev/tty' | vredir | 1 |
 
 ### Invocation options not supported
 
 Options passed to `bash-ts` it has no counterpart for.
 
-| Name | Tests | Times hit |
-| --- | --- | --- |
-| set -t | execscript | 1 |
+None.
 
 ### Error messages bash does not print
 
@@ -125,22 +123,19 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 
 | Message | Tests |
 | --- | --- |
-| shopt: command not found | alias, assoc, dbg-support2, dynvar, execscript, extglob2, globstar, histexpand, history, lastpipe, nquote, shopt, type, vredir |
-| posix: invalid option name | array, builtins, func, histexpand, ifs, redir, shopt, tilde, tilde2, type |
+| shopt: command not found | alias, assoc, dbg-support2, dynvar, execscript, extglob2, globstar, histexpand, history, lastpipe, nquote, shopt, type, varenv, vredir |
+| syntax error: Unexpected 'Rbrace' | braces, coproc, dbg-support, dollars, nameref, type, varenv |
 | trap: command not found | dbg-support2, execscript, histexpand, history, mapfile, set-x, trap |
-| syntax error: Unexpected 'Rbrace' | braces, coproc, dbg-support, dollars, nameref, type |
 | syntax error: Unexpected 'CONTINUE' | assoc, comsub, comsub-eof, new-exp, posixexp, posixexp2 |
 | foo: command not found | alias, execscript, exportfunc, nameref, nquote |
 | hash: command not found | assoc, builtins, execscript, rsh, type |
-| history: invalid option name | histexpand, history, nquote, shopt |
+| wait: command not found | assoc, execscript, func, procsub, redir |
 | exec: command not found | execscript, procsub, redir, vredir |
-| wait: command not found | assoc, execscript, func, procsub |
 | syntax error: Unexpected 'WORD' | arith-for, errors, vredir |
 | syntax error: Unexpected 'CLOSE_PAREN' | case, execscript, quote |
 | syntax error: Unexpected 'DOUBLE_OPEN_BRACKET' | exp-tests, glob-test, posixpat |
 | syntax error: Unexpected 'OPEN_PAREN' | extglob, histexpand, printf |
 | compgen: command not found | func, herestr, shopt |
-| -H: invalid option | histexpand, history, nquote |
 | syntax error: Unexpected 'PIPE' | complete, extglob3 |
 | syntax error: Unexpected 'Bang' | cond, test |
 | syntax error: Unclosed here-document | comsub-eof, heredoc |
@@ -150,9 +145,9 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | !!: command not found | histexpand, history |
 | !e: command not found | histexpand, history |
 | /: Permission denied | execscript, histexpand |
-| histexpand: invalid option name | histexpand, shopt |
 | syntax error: Unexpected character: [ | assoc, quotearray |
-| Cannot read properties of undefined (reading 'includes') | redir, varenv |
+| foo: not found | nameref, varenv |
+| var: not found | nameref, varenv |
 | ulimit: command not found | procsub, vredir |
 | syntax error: Expected RPAREN, got EOF | arith |
 | 'x+=N': not a valid identifier | appendop |
@@ -165,6 +160,9 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | 'e[N]=test': not a valid identifier | array |
 | unbound variable | array |
 | syntax error: undefined is not iterable (cannot read property Symbol(Symbol.iterator)) | comsub-posix |
+| x=value: command not found | alias |
+| x=newvalue: command not found | alias |
+| a: command not found | alias |
 
 ## Per test
 
@@ -176,12 +174,12 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | appendop | pass | no | 24% | 26% | 3a4 ⏎ &gt; 145 ⏎ 6,12c7,14 |
 | arith | pass | no | 0% | 0% | 1c1,263 ⏎ &lt; ./arith.tests: line 85: syntax error: Expected RPAREN, got EOF ⏎ --- |
 | arith-for | pass | no | 0% | 0% | 1c1,86 ⏎ &lt; ./arith-for.tests: line 108: syntax error: Parse error on line 108: Unexpected 'WORD' ⏎ --- |
-| array | pass | no | 8% | 9% | 1d0 ⏎ &lt; set: posix: invalid option name ⏎ 3,15c2,4 |
+| array | pass | no | 8% | 9% | 2,14c2,4 ⏎ &lt; ./array.tests: second): command not found ⏎ &lt; 127 |
 | array2 | pass | no | 96% | 96% | 26,27c26,29 ⏎ &lt; argv[1] = &lt;1&gt; ⏎ &lt; argv[1] = &lt;bobtom dick harryjoe&gt; |
 | assoc | pass | no | 20% | 20% | 1,18c1,26 ⏎ &lt; declare -A fluff=([foo]="one" [bar]="two") ⏎ &lt; declare -A fluff=([bar]="two") |
 | attr | pass | no | 12% | 14% | 1,7c1,10 ⏎ &lt; after f1:declare -a a=([0]="1") ⏎ &lt; after f2:declare -a a=([0]="2") |
 | braces | pass | no | 0% | 0% | 0a1,77 ⏎ &gt; ffc ffb ffa ⏎ &gt; fdg feg ffg |
-| builtins | pass | no | 27% | 31% | 1,2c1 ⏎ &lt; set: -p: invalid option ⏎ &lt; set: posix: invalid option name |
+| builtins | pass | no | 27% | 31% | 0a1 ⏎ &gt; 1000 ⏎ 13,17d13 |
 | case | pass | no | 0% | 0% | 1c1,63 ⏎ &lt; ./case.tests: line 17: syntax error: Parse error on line 17: Unexpected 'CLOSE_PAREN' ⏎ --- |
 | casemod | pass | no | 53% | 53% | 3,4c3,4 ⏎ &lt; oenophile ⏎ &lt; oenophile |
 | complete | pass | no | 0% | 0% | 1c1,63 ⏎ &lt; ./complete.tests: line 63: syntax error: Parse error on line 63: Unexpected 'PIPE' ⏎ --- |
@@ -194,11 +192,11 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | dbg-support | pass | no | 0% | 0% | 1c1,371 ⏎ &lt; ./dbg-support.tests: line 117: syntax error: Parse error on line 117: Unexpected 'Rbrace' ⏎ --- |
 | dbg-support2 | pass | no | 18% | 22% | 1,2c1,6 ⏎ &lt; ./dbg-support2.tests: shopt: command not found ⏎ &lt; ./dbg-support2.tests: trap: command not found |
 | dirstack | pass | no | 34% | 45% | 1,7c1,11 ⏎ &lt; pushd: /tmp/xxx-notthere: No such file or directory ⏎ &lt; pushd: no other directory |
-| dollars | pass | no | 61% | 61% | 25,26c25,28 ⏎ &lt; argv[1] = &lt;1&gt; ⏎ &lt; argv[1] = &lt;bobtom dick harryjoe&gt; |
+| dollars | pass | no | 67% | 67% | 25,26c25,28 ⏎ &lt; argv[1] = &lt;1&gt; ⏎ &lt; argv[1] = &lt;bobtom dick harryjoe&gt; |
 | dynvar | pass | no | 29% | 40% | 2,5c2,5 ⏎ &lt; BASH_ARGV0 mismatch: hello (./dynvar.tests) ⏎ &lt; BASH_ARGV0 mismatch: arg0 (./dynvar.tests) |
 | errors | pass | no | 0% | 0% | 1c1,208 ⏎ &lt; ./errors.tests: line 36: syntax error: Parse error on line 36: Unexpected 'WORD' ⏎ --- |
 | execscript | env | no | 62% | 76% | 1d0 ⏎ &lt; execscript: the test suite should not be run as root ⏎ 9c8 |
-| exp-tests | pass | no | 23% | 31% | 41d40 ⏎ &lt; argv[1] = &lt;&gt; ⏎ 48,705c47,51 |
+| exp-tests | pass | no | 27% | 34% | 41d40 ⏎ &lt; argv[1] = &lt;&gt; ⏎ 48,705c47,51 |
 | exportfunc | pass | no | 0% | 0% | 1,4c1,14 ⏎ &lt; bash: foo: command not found ⏎ &lt; bash: foo-a: command not found |
 | extglob | pass | no | 0% | 0% | 0a1,184 ⏎ &gt; ok 1 ⏎ &gt; ok 2 |
 | extglob2 | pass | no | 40% | 40% | 6,11c6,8 ⏎ &lt; 0:  [[ foooofof = *(f+(o)) ]] ⏎ &lt; Test failed:  [[ foooofof = *(f+(o)) ]] |
@@ -209,9 +207,9 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | globstar | pass | no | 25% | 25% | 1c1,26 ⏎ &lt; ./globstar.tests: shopt: command not found ⏎ --- |
 | heredoc | env | no | 0% | 0% | 1c1,133 ⏎ &lt; ./heredoc.tests: syntax error: Unclosed here-document ⏎ --- |
 | herestr | pass | no | 51% | 52% | 1d0 ⏎ &lt; ./herestr.tests: compgen: command not found ⏎ 7,8c6,7 |
-| histexpand | pass | no | 29% | 41% | 1,31c1,51 ⏎ &lt; ./histexp.tests: trap: command not found ⏎ &lt; ./histexp.tests: history: command not found |
-| history | pass | no | 27% | 38% | 1,20c1,36 ⏎ &lt; ./history.tests: trap: command not found ⏎ &lt; ./history.tests: history: command not found |
-| ifs | pass | no | 50% | 64% | 4,8c4,6 ⏎ &lt; ./ifs.tests: function: command not found ⏎ &lt;  |
+| histexpand | pass | no | 31% | 41% | 1,29c1,51 ⏎ &lt; ./histexp.tests: trap: command not found ⏎ &lt; ./histexp.tests: history: command not found |
+| history | pass | no | 28% | 38% | 1,19c1,36 ⏎ &lt; ./history.tests: trap: command not found ⏎ &lt; ./history.tests: history: command not found |
+| ifs | pass | no | 52% | 64% | 4,8c4,6 ⏎ &lt; ./ifs.tests: function: command not found ⏎ &lt;  |
 | ifs-posix | pass | timeout | 0% | 0% | timeout |
 | input-test | pass | no | 67% | 67% | 2c2 ⏎ &lt; line read by ./input-line.sub was '' ⏎ --- |
 | intl | env | no | 9% | 9% | 1,3c1,3 ⏎ &lt; Ã© ⏎ &lt; 2 |
@@ -223,7 +221,7 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | more-exp | pass | no | 0% | 0% | 1c1,214 ⏎ &lt; ./more-exp.tests: line 1: syntax error: Unclosed " ⏎ --- |
 | nameref | pass | no | 14% | 18% | 1,3c1,5 ⏎ &lt; bar ⏎ &lt; flow |
 | new-exp | pass | no | 0% | 0% | 1c1,795 ⏎ &lt; ./new-exp.tests: line 1: syntax error: Parse error on line 1: Unexpected 'CONTINUE' ⏎ --- |
-| nquote | pass | no | 67% | 75% | 4c4 ⏎ &lt; argv[1] = &lt;$\n$\t$ &gt; ⏎ --- |
+| nquote | pass | no | 68% | 75% | 4c4 ⏎ &lt; argv[1] = &lt;$\n$\t$ &gt; ⏎ --- |
 | nquote1 | pass | no | 79% | 79% | 5a6 ⏎ &gt; argv[3] = &lt;3&gt; ⏎ 19a21 |
 | nquote2 | pass | no | 58% | 58% | 3,6c3,6 ⏎ &lt; argv[1] = &lt;a^Ab&gt; ⏎ &lt; argv[1] = &lt;a^Ab&gt; |
 | nquote3 | pass | no | 4% | 4% | 1,4c1,4 ⏎ &lt; argv[1] = &lt;$uv\001\001&gt; ⏎ &lt; argv[1] = &lt;$uv\001\001&gt; |
@@ -241,17 +239,17 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | quote | pass | no | 0% | 0% | 1c1,182 ⏎ &lt; ./quote.tests: line 1: syntax error: Parse error on line 1: Unexpected 'CLOSE_PAREN' ⏎ --- |
 | quotearray | pass | no | 0% | 0% | 1c1,152 ⏎ &lt; ./quotearray.tests: line 20: syntax error: Unexpected character: [ ⏎ --- |
 | read | env | timeout | 31% | 39% | timeout |
-| redir | pass | no | 7% | 6% | 1d0 ⏎ &lt; set: posix: invalid option name ⏎ 3c2 |
+| redir | pass | no | 28% | 34% | 2c2 ⏎ &lt; /tmp/redir-test: cannot overwrite existing file ⏎ --- |
 | rhs-exp | pass | no | 84% | 84% | 1d0 ⏎ &lt; argv[1] = &lt;TDEFAULTS = -DSELECT_VECS=$selvecs&gt; ⏎ 2a2 |
 | rsh | pass | no | 6% | 29% | 1,16c1,18 ⏎ &lt; ./rsh1.sub: hash: command not found ⏎ &lt; set: -r: invalid option |
 | set-e | pass | no | 35% | 35% | 15a16,72 ⏎ &gt; 1 ⏎ &gt; 1 |
-| set-x | pass | no | 61% | 11% | 0a1,2 ⏎ &gt; + (( i=0 )) ⏎ &gt; + (( i&lt;=5 )) |
-| shopt | pass | no | 7% | 8% | 1,48c1,181 ⏎ &lt; ./shopt.tests: shopt: command not found ⏎ &lt; ./shopt.tests: shopt: command not found |
+| set-x | pass | no | 76% | 83% | 0a1,2 ⏎ &gt; + (( i=0 )) ⏎ &gt; + (( i&lt;=5 )) |
+| shopt | pass | no | 29% | 34% | 1,30c1,2 ⏎ &lt; ./shopt.tests: shopt: command not found ⏎ &lt; ./shopt.tests: shopt: command not found |
 | strip | pass | no | 78% | 78% | 10,11c10,12 ⏎ &lt; 'abababanbababab  ' ⏎ &lt; 'nnnn' |
 | test | env | no | 0% | 0% | 1c1,297 ⏎ &lt; ./test.tests: line 362: syntax error: Parse error on line 362: Unexpected 'Bang' ⏎ --- |
 | tilde | pass | no | 61% | 61% | 2c2 ⏎ &lt; /home/mattias/foo ⏎ --- |
 | tilde2 | pass | no | 57% | 57% | 2,3c2,3 ⏎ &lt;  ⏎ &lt;  |
 | trap | pass | no | 0% | 0% | 1,3c1,115 ⏎ &lt; ./trap.tests: trap: command not found ⏎ &lt; ./trap.tests: trap: command not found |
-| type | pass | no | 31% | 34% | 1,2c1 ⏎ &lt; set: posix: invalid option name ⏎ &lt; ./type.tests: hash: command not found |
-| varenv | pass | no | 0% | 0% | 1c1,277 ⏎ &lt; ./varenv.tests: Cannot read properties of undefined (reading 'includes') ⏎ --- |
+| type | pass | no | 32% | 34% | 1c1 ⏎ &lt; ./type.tests: hash: command not found ⏎ --- |
+| varenv | pass | timeout | 0% | 0% | timeout |
 | vredir | env | no | 18% | 21% | 1,2c1,4 ⏎ &lt; ./vredir.tests: exec: command not found ⏎ &lt;  |
