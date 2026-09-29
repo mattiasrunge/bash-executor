@@ -315,3 +315,11 @@ Deno.test('[[ ]] expands its words fully', async () => {
   );
   assertEquals(result.stdout, '1\n2\n3\n4\n5\n');
 });
+
+Deno.test('[[ =~ ]] as bash reads the expression', async () => {
+  const shell = new TestShell();
+  const result = await shell.runAndCapture(
+    `[[ abc =~ (b)c ]]; [[ x =~ y ]]; echo "[\${BASH_REMATCH[1]}]"; v="one two buckle"; [[ \${v} =~ (one two) ]] && echo m; [[ "\\\\" =~ [\\\\] ]] && echo b; [[ ']' =~ [']'] ]] && echo q; [[ "\\\\" =~ [^]"."] ]] && echo n`,
+  );
+  assertEquals(result.stdout, '[]\nm\nb\nq\nn\n');
+});

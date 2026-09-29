@@ -354,7 +354,8 @@ Deno.test('Arithmetic: ${…} and $(…) inside', async (t) => {
     ['x=5; echo $(( ${x:-3} + 1 ))', '6\n'],
     ['s=hello; echo $(( ${#s} * 2 ))', '10\n'],
     ['a=(4 5 6); echo $(( ${a[1]} + ${a[2]} ))', '11\n'],
-    ['e="2+3"; echo $(( ${e} * 2 ))', '10\n'],
+    // bash substitutes the text before it reads the expression: 2+3 * 2
+    ['e="2+3"; echo $(( ${e} * 2 ))', '8\n'],
     ['(( ${n:-2} > 1 )) && echo yes', 'yes\n'],
     ['(( $(echo 5) > 3 )) && echo yes || echo no', 'yes\n'],
     ['for ((i=${from:-1}; i<=$(echo 3); i++)); do printf "%s" $i; done; echo', '123\n'],
@@ -366,4 +367,54 @@ Deno.test('Arithmetic: ${…} and $(…) inside', async (t) => {
       assertEquals(result.stdout, expected);
     });
   }
+});
+
+// Found running bash's own test suite: each case is what bash gives
+Deno.test('Arithmetic as bash evaluates it', async (t) => {
+  const run = async (script: string) => {
+    const result = await new TestShell().runAndCapture(script);
+    return result.stdout + result.stderr;
+  };
+
+  await t.step('64-bit integers that wrap', async () => {
+    assertEquals(
+      await run('echo $((9223372036854775807+1)) $((2**63)) $((-9223372036854775808/-1)) $((1<<64))'),
+      '-9223372036854775808 -9223372036854775808 -9223372036854775808 1\n',
+    );
+  });
+
+  await t.step('++ and -- are increments only next to a variable', async () => {
+    assertEquals(await run('a=1; echo $(( 4+++a )) $a'), '6 2\n');
+  });
+
+  await t.step('bases, and a variable whose value is an expression', async () => {
+    assertEquals(await run('y=4+3; echo $((64#@_)) $((36#z)) $((0x1F + 010)) $((y)) $((2**3**2)) $((-2**2))'), '4031 35 39 7 512 4\n');
+  });
+
+  await t.step("errors in bash's words, with bash's token", async () => {
+    assertEquals(
+      await run('echo $(( 4 + ))\necho $((3425#56))\necho $(( 7 = 43 ))\necho $(( 1 ? 20 ))\necho $((a b))\necho $((2**-1))'),
+      [
+        '4 + : syntax error: operand expected (error token is "+ ")',
+        '3425#56: invalid arithmetic base (error token is "3425#56")',
+        '7 = 43 : attempted assignment to non-variable (error token is "= 43 ")',
+        '1 ? 20 : `:\' expected for conditional expression (error token is "20 ")',
+        'a b: syntax error in expression (error token is "b")',
+        '2**-1: exponent less than 0 (error token is "1")',
+        '',
+      ].join('\n'),
+    );
+  });
+
+  await t.step('the branch not taken is not run', async () => {
+    assertEquals(await run('x=1; echo $(( 0 && (x=5) )) $(( 1 || 1/0 )) $x'), '0 1 1\n');
+  });
+
+  await t.step('a plain variable given an element keeps its value as element 0', async () => {
+    assertEquals(await run('a=scalar; a[1]=x; echo "${a[0]} ${a[1]}"; n=0 b="(b[n]=++n)<7&&b[0]"; ((b[0])); echo "${b[@]:1}"'), 'scalar x\n1 2 3 4 5 6 7\n');
+  });
+
+  await t.step('[[ -eq ]] compares arithmetic', async () => {
+    assertEquals(await run('A=7; [[ 7 -eq 4+3 && 7 -eq A ]] && echo y; [[ 7 -eq 4+ ]]; echo $?'), 'y\n1\n[[: 4+: syntax error: operand expected (error token is "+")\n');
+  });
 });

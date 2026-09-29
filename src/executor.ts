@@ -37,6 +37,7 @@ import { JOB_BUILTINS } from './builtins/jobs.ts';
 import type { BuiltinRegistry } from './builtins/types.ts';
 import type { ErrorPosition } from './errors.ts';
 import { singleQuoted } from './quote.ts';
+import { contextVariables, evaluateArithmeticText } from './arith.ts';
 import { bracketExpression, globToRegExp, globToRegexSource, posixRegexToSource, quoteGlob, quoteRegex } from './pattern.ts';
 import {
   ArithmeticError,
@@ -94,32 +95,13 @@ const DECLARATION_COMMANDS = new Set(['declare', 'typeset', 'local', 'export', '
  * Attaching a no-op catch marks the promise handled without consuming it: the
  * reference kept in the array still rejects normally for the Promise.all.
  */
+/** Private-use characters that stand for quoted characters in a `=~` expression while it is read. */
+const REGEX_LITERAL_BASE = 0xe000;
+const REGEX_LITERALS = /[\ue000-\uf8ff]/g;
+
 /** Whether a word, after quote removal, could still be a pattern. */
 function hasGlobCharacters(text: string): boolean {
   return /[*?[]|[@+!?*]\(/.test(text);
-}
-
-/** Where an arithmetic expression's text starts in the source: its leftmost node's offset. */
-function firstOffset(node: unknown): number | undefined {
-  let offset: number | undefined;
-
-  const visit = (value: unknown) => {
-    if (!value || typeof value !== 'object') return;
-
-    const char = (value as { loc?: { start?: { char?: number } } }).loc?.start?.char;
-
-    if (typeof char === 'number' && (offset === undefined || char < offset)) {
-      offset = char;
-    }
-
-    for (const [key, child] of Object.entries(value)) {
-      if (key !== 'loc') visit(child);
-    }
-  };
-
-  visit(node);
-
-  return offset;
 }
 
 function handled<T>(promise: Promise<T>): Promise<T> {
@@ -2302,56 +2284,20 @@ export class AstExecutor {
    * something that is not arithmetic at all — the text is expanded, as bash
    * always does first, and parsed now.
    */
-  protected async arithmeticValue(part: { expression: string; arithmeticAST?: AstArithmeticExpression }, ctx: ExecContextIf): Promise<number> {
-    let ast = part.arithmeticAST;
-    let text = part.expression;
+  /**
+   * An arithmetic expression's value: expanded first — parameters, command
+   * substitutions, quote removal, as in double quotes — then evaluated as bash
+   * does, on 64-bit integers.
+   */
+  protected async arithmeticBig(part: { expression: string }, ctx: ExecContextIf): Promise<bigint> {
+    const text = (await this.expandHereDocument(part.expression, ctx)).replace(/(?<!\\)"/g, '');
 
-    if (!ast) {
-      // Parameters, command substitutions and quote removal, as in double quotes
-      text = (await this.expandHereDocument(part.expression, ctx)).replace(/(?<!\\)"/g, '');
+    return await evaluateArithmeticText(text, contextVariables(ctx));
+  }
 
-      // An empty expression is 0: `(( ))` fails quietly, `$(( ))` is 0
-      if (text.trim() === '') {
-        return 0;
-      }
-
-      try {
-        ast = parseArithmetic(text);
-      } catch (err) {
-        const detail = err instanceof Error ? err.message.split('\n')[0] : String(err);
-
-        throw new ArithmeticSyntaxError(text, detail);
-      }
-    }
-
-    try {
-      return await this.evaluateArithmetic(ast, ctx);
-    } catch (err) {
-      if (!(err instanceof ArithmeticError) || err.expression !== undefined) {
-        throw err;
-      }
-
-      // `1/0: division by 0` — the evaluator has only where it went wrong; the
-      // offsets are the source's, and the expression's first node is where its
-      // text, blanks before it left out, begins
-      const first = firstOffset(ast);
-      const trimmed = text.trimStart();
-      let at = err.at === undefined || first === undefined ? undefined : err.at - first;
-
-      // A parenthesized operand is the token with its parentheses: `(1-1)`
-      while (at !== undefined && at > 0 && trimmed[at - 1] === '(') at--;
-
-      // Bash says it as it read it, expanded: `4 / 0`, not `4 / $y`. Only
-      // where expanding again cannot run anything a second time
-      if (at !== undefined && /\$/.test(trimmed) && !/\$\(|`/.test(trimmed)) {
-        const before = await this.expandHereDocument(trimmed.slice(0, at), ctx);
-        const token = await this.expandHereDocument(trimmed.slice(at), ctx);
-
-        throw new ArithmeticError(err.reason, before.length, before + token);
-      }
-
-      throw new ArithmeticError(err.reason, at, trimmed);
-    }
+  /** `arithmeticBig` as a number, for a count, an index or a test. */
+  protected async arithmeticValue(part: { expression: string }, ctx: ExecContextIf): Promise<number> {
+    return Number(await this.arithmeticBig(part, ctx));
   }
 
   /**
@@ -2359,7 +2305,19 @@ export class AstExecutor {
    * Returns 0 if the condition is true, 1 if false.
    */
   protected async executeConditionalCommand(node: AstNodeConditionalCommand, ctx: ExecContextIf): Promise<number> {
-    const result = await this.evaluateConditionalExpression(node.conditionAST, ctx);
+    let result: boolean;
+
+    try {
+      result = await this.evaluateConditionalExpression(node.conditionAST, ctx);
+    } catch (err) {
+      // An arithmetic operand that is no expression fails the test, and says so
+      if (!(err instanceof ArithmeticSyntaxError || err instanceof ArithmeticError)) throw err;
+
+      await this.diagnose(ctx, `[[: ${err.message}`);
+
+      return this.applyErrexit(1, ctx);
+    }
+
     return this.applyErrexit(result ? 0 : 1, ctx);
   }
 
@@ -2508,6 +2466,8 @@ export class AstExecutor {
           ctx.setArray('BASH_REMATCH', Array.from(match, (group) => group ?? ''));
           return true;
         }
+        // A failed match leaves none behind
+        ctx.setArray('BASH_REMATCH', []);
         return false;
       } catch {
         // Invalid regex - return false
@@ -2518,8 +2478,9 @@ export class AstExecutor {
     // Numeric comparison operators
     if (op === '-eq' || op === '-ne' || op === '-lt' || op === '-le' || op === '-gt' || op === '-ge') {
       const right = await this.expandConditionalWord(node.right, ctx);
-      const leftNum = Number.parseInt(left, 10) || 0;
-      const rightNum = Number.parseInt(right, 10) || 0;
+      // Both are arithmetic expressions in [[ ]]: `4+3`, a variable's name
+      const leftNum = await this.arithmeticValue({ expression: left }, ctx);
+      const rightNum = await this.arithmeticValue({ expression: right }, ctx);
 
       switch (op) {
         case '-eq':
@@ -2555,9 +2516,10 @@ export class AstExecutor {
     word: AstConditionalWord,
     ctx: ExecContextIf,
   ): Promise<string> {
-    // Quote removal only: no field splitting in [[ ]], so `$'a\tb'` stays one word
+    // A word without expansions comes from the parser with its quotes removed
+    // already: `"\\"` is one backslash, and taking quotes off again would lose it
     if (!word.expansion || word.expansion.length === 0) {
-      return utils.unquoteSingleWord(word.text);
+      return word.text;
     }
 
     // Every expansion a word can have, `${x:-y}`, `${a[1]}` and `${#s}` too; no
@@ -2598,7 +2560,18 @@ export class AstExecutor {
     // here, where bash's quoting rules for it apply: what is quoted matches
     // itself (`=~ "a.c"` is no pattern), what is not is part of the expression
     // (`=~ $re`).
+    //
+    // A quoted character stands in the expression as a placeholder until it has
+    // been read, so that it is itself wherever it lands — in a bracket
+    // expression too, where a backslash would be a member of its own: `[']']`
+    // is a class holding `]`, `[^]"."]` one without `]` and `.`.
     const text = word.text;
+    const literals: string[] = [];
+    const literal = (chars: string) =>
+      [...chars].map((char) => {
+        literals.push(char);
+        return String.fromCharCode(REGEX_LITERAL_BASE + literals.length - 1);
+      }).join('');
     let regex = '';
     let i = 0;
 
@@ -2607,7 +2580,7 @@ export class AstExecutor {
       const ansi = c === '$' ? this.ansiCString(text, i) : undefined;
 
       if (ansi) {
-        regex += quoteRegex(ansi.value);
+        regex += literal(ansi.value);
         i = ansi.end + 1;
       } else if (c === '$' && text[i + 1] === '"') {
         // $"…" is a string to translate; untranslated it is "…"
@@ -2616,7 +2589,7 @@ export class AstExecutor {
         const close = text.indexOf("'", i + 1);
         const end = close === -1 ? text.length : close;
 
-        regex += quoteRegex(text.slice(i + 1, end));
+        regex += literal(text.slice(i + 1, end));
         i = end + 1;
       } else if (c === '"') {
         let close = i + 1;
@@ -2625,14 +2598,18 @@ export class AstExecutor {
           close += text[close] === '\\' ? 2 : 1;
         }
 
-        regex += quoteRegex(await this.expandHereDocument(text.slice(i + 1, close), ctx));
+        regex += literal(await this.expandHereDocument(text.slice(i + 1, close), ctx));
         i = close + 1;
+      } else if (c === '\\' && i + 1 < text.length) {
+        // A backslash quotes the character after it, as anywhere in the shell
+        regex += literal(text[i + 1]);
+        i += 2;
       } else {
         let end = i;
 
-        // Up to the next quote, `$'` and `$"` included
-        while (end < text.length && text[end] !== "'" && text[end] !== '"' && !(text[end] === '$' && `'"`.includes(text[end + 1]))) {
-          end += text[end] === '\\' ? 2 : 1;
+        // Up to the next quote or backslash, `$'` and `$"` included
+        while (end < text.length && !`'"\\`.includes(text[end]) && !(text[end] === '$' && `'"`.includes(text[end + 1]))) {
+          end++;
         }
 
         regex += await this.expandHereDocument(text.slice(i, end), ctx);
@@ -2640,7 +2617,14 @@ export class AstExecutor {
       }
     }
 
-    return posixRegexToSource(regex);
+    const source = posixRegexToSource(regex);
+
+    // Each placeholder is its character, escaped for wherever it is — `\-` too, for inside a class
+    return source.replace(REGEX_LITERALS, (placeholder) => {
+      const char = literals[placeholder.charCodeAt(0) - REGEX_LITERAL_BASE];
+
+      return char === '-' ? '\\-' : quoteRegex(char);
+    });
   }
 
   /**
@@ -2872,10 +2856,10 @@ export class AstExecutor {
 
     // `declare -i` makes the value arithmetic, evaluated now: x=1+2 is 3, x+=4 adds
     if (ctx.isIntegerVar(name)) {
-      const number = await this.arithmeticValue({ expression: value || '0' }, ctx);
-      const base = append ? await this.arithmeticValue({ expression: previous || '0' }, ctx) : 0;
+      const number = await this.arithmeticBig({ expression: value || '0' }, ctx);
+      const base = append ? await this.arithmeticBig({ expression: previous || '0' }, ctx) : 0n;
 
-      assigned = String(base + number);
+      assigned = String(BigInt.asIntN(64, base + number));
     }
 
     if (local) {
@@ -2914,7 +2898,7 @@ export class AstExecutor {
       index = Number(subscript.trim());
     } else {
       try {
-        index = await this.evaluateArithmetic(parseArithmetic(subscript.replace(/\$\{([a-zA-Z_][a-zA-Z0-9_]*)\}/g, '$1')), ctx);
+        index = await this.arithmeticValue({ expression: subscript }, ctx);
       } catch {
         index = 0;
       }
@@ -3557,7 +3541,7 @@ export class AstExecutor {
           output.replace(/\n+$/, ''), // Strip trailing newlines for command expansion (POSIX)
         );
       } else if (xp.type === 'ArithmeticExpansion') {
-        const result = await this.arithmeticValue({ expression: xp.expression ?? '', arithmeticAST: xp.arithmeticAST }, ctx);
+        const result = await this.arithmeticBig({ expression: xp.expression ?? '' }, ctx);
 
         rValue.replace(
           xp.loc!.start,
@@ -3688,278 +3672,4 @@ export class AstExecutor {
    */
   /** How deep variables that hold expressions have sent the evaluation; bash stops at 1024. */
   private arithmeticDepth = 0;
-
-  /**
-   * An arithmetic variable's value. A value that is not a plain number is an
-   * expression in its own right, as in bash: with `b='1+2'`, `$(( b * 2 ))` is
-   * 6, and `x=010` is 8. Unset or empty is 0.
-   */
-  private async readArithmeticVariable(node: AstArithmeticIdentifier, ctx: ExecContextIf): Promise<number> {
-    const text = (await this.arithmeticVariableText(node, ctx)).trim();
-
-    if (text === '') {
-      return 0;
-    }
-
-    if (/^[+-]?(0|[1-9]\d*)$/.test(text)) {
-      return Number.parseInt(text, 10);
-    }
-
-    if (++this.arithmeticDepth > 1024) {
-      this.arithmeticDepth = 0;
-      throw new ArithmeticSyntaxError(text, 'expression recursion level exceeded');
-    }
-
-    try {
-      let ast: AstArithmeticExpression;
-
-      try {
-        ast = parseArithmetic(text);
-      } catch (err) {
-        throw new ArithmeticSyntaxError(text, err instanceof Error ? err.message.split('\n')[0] : String(err));
-      }
-
-      return await this.evaluateArithmetic(ast, ctx);
-    } finally {
-      this.arithmeticDepth = Math.max(0, this.arithmeticDepth - 1);
-    }
-  }
-
-  /** The text of a scalar, or of one element of an indexed or associative array. */
-  private async arithmeticVariableText(node: AstArithmeticIdentifier, ctx: ExecContextIf): Promise<string> {
-    if (node.subscript === undefined) {
-      return ctx.getParams()[node.name] ?? ctx.getEnv()[node.name] ?? '';
-    }
-
-    const assoc = ctx.getAssoc(node.name);
-
-    if (assoc) {
-      return assoc[await this.arithmeticKey(node, ctx)] ?? '';
-    }
-
-    const array = ctx.getArray(node.name);
-    const index = await this.arithmeticIndex(node, array?.length ?? 1, ctx);
-
-    // A scalar is element 0 of itself
-    return array ? array[index] ?? '' : index === 0 ? ctx.getParams()[node.name] ?? ctx.getEnv()[node.name] ?? '' : '';
-  }
-
-  private async writeArithmeticVariable(node: AstArithmeticIdentifier, value: number, ctx: ExecContextIf): Promise<void> {
-    if (ctx.isReadonlyVar(node.name)) {
-      throw new ReadonlyVariableError(node.name);
-    }
-
-    if (node.subscript === undefined) {
-      ctx.assignVariable(node.name, String(value));
-
-      return;
-    }
-
-    if (ctx.getAssoc(node.name)) {
-      ctx.setAssocElement(node.name, await this.arithmeticKey(node, ctx), String(value));
-      return;
-    }
-
-    const array = ctx.getArray(node.name);
-
-    ctx.setArrayElement(node.name, await this.arithmeticIndex(node, array?.length ?? 0, ctx), String(value));
-  }
-
-  /** Dividing by zero is an error in bash, not a value. `node` is the divisor, for the error to point at. */
-  private divisor(value: number, node: { loc?: { start?: { char?: number } } }): number {
-    if (value === 0) {
-      throw new ArithmeticError('division by 0', node.loc?.start?.char);
-    }
-
-    return value;
-  }
-
-  /** An associative subscript is a key: expanded, not evaluated. */
-  private async arithmeticKey(node: AstArithmeticIdentifier, ctx: ExecContextIf): Promise<string> {
-    return (await this.expandHereDocument(node.subscript ?? '', ctx)).replace(/(?<!\\)"/g, '');
-  }
-
-  /** An indexed subscript is arithmetic; a negative one counts from the end. */
-  private async arithmeticIndex(node: AstArithmeticIdentifier, length: number, ctx: ExecContextIf): Promise<number> {
-    const index = await this.arithmeticValue({ expression: node.subscript ?? '', arithmeticAST: node.index }, ctx);
-
-    return index < 0 ? length + index : index;
-  }
-
-  protected async evaluateArithmetic(node: AstArithmeticExpression | { type: 'CommandSubstitution'; commandAST: AstNode }, ctx: ExecContextIf): Promise<number> {
-    if (!node) {
-      return 0;
-    }
-
-    switch (node.type) {
-      case 'NumericLiteral':
-        return node.value;
-
-      case 'Identifier':
-        return await this.readArithmeticVariable(node, ctx);
-
-      case 'UnaryExpression': {
-        const arg = await this.evaluateArithmetic(node.argument, ctx);
-        switch (node.operator) {
-          case '-':
-            return -arg;
-          case '+':
-            return +arg;
-          case '!':
-            return arg === 0 ? 1 : 0;
-          case '~':
-            return ~arg;
-          default:
-            throw new UnsupportedOperatorError((node as unknown as { operator: string }).operator, 'unary', this.getSourceLocation(node), this.currentSource);
-        }
-      }
-
-      case 'BinaryExpression': {
-        const left = await this.evaluateArithmetic(node.left, ctx);
-        const right = await this.evaluateArithmetic(node.right, ctx);
-        switch (node.operator) {
-          case '+':
-            return left + right;
-          case '-':
-            return left - right;
-          case '*':
-            return left * right;
-          case '/':
-            return Math.trunc(left / this.divisor(right, node.right));
-          case '%':
-            return left % this.divisor(right, node.right);
-          case '**':
-            return Math.pow(left, right);
-          case '&':
-            return left & right;
-          case '|':
-            return left | right;
-          case '^':
-            return left ^ right;
-          case '<<':
-            return left << right;
-          case '>>':
-            return left >> right;
-          case '<':
-            return left < right ? 1 : 0;
-          case '>':
-            return left > right ? 1 : 0;
-          case '<=':
-            return left <= right ? 1 : 0;
-          case '>=':
-            return left >= right ? 1 : 0;
-          case '==':
-            return left === right ? 1 : 0;
-          case '!=':
-            return left !== right ? 1 : 0;
-          default:
-            throw new UnsupportedOperatorError((node as unknown as { operator: string }).operator, 'binary', this.getSourceLocation(node), this.currentSource);
-        }
-      }
-
-      case 'LogicalExpression': {
-        const left = await this.evaluateArithmetic(node.left, ctx);
-        if (node.operator === '&&') {
-          return left === 0 ? 0 : (await this.evaluateArithmetic(node.right, ctx)) === 0 ? 0 : 1;
-        } else if (node.operator === '||') {
-          return left !== 0 ? 1 : (await this.evaluateArithmetic(node.right, ctx)) !== 0 ? 1 : 0;
-        }
-        throw new UnsupportedOperatorError(node.operator, 'logical', this.getSourceLocation(node), this.currentSource);
-      }
-
-      case 'ConditionalExpression': {
-        const test = await this.evaluateArithmetic(node.test, ctx);
-        return test !== 0 ? await this.evaluateArithmetic(node.consequent, ctx) : await this.evaluateArithmetic(node.alternate, ctx);
-      }
-
-      case 'SequenceExpression': {
-        let result = 0;
-        for (const expr of node.expressions) {
-          result = await this.evaluateArithmetic(expr, ctx);
-        }
-        return result;
-      }
-
-      case 'AssignmentExpression': {
-        let value: number;
-
-        if (node.operator === '=') {
-          value = await this.evaluateArithmetic(node.right, ctx);
-        } else {
-          const currentValue = await this.evaluateArithmetic(node.left, ctx);
-          const rightValue = await this.evaluateArithmetic(node.right, ctx);
-          switch (node.operator) {
-            case '+=':
-              value = currentValue + rightValue;
-              break;
-            case '-=':
-              value = currentValue - rightValue;
-              break;
-            case '*=':
-              value = currentValue * rightValue;
-              break;
-            case '/=':
-              value = Math.trunc(currentValue / this.divisor(rightValue, node.right));
-              break;
-            case '%=':
-              value = currentValue % this.divisor(rightValue, node.right);
-              break;
-            case '&=':
-              value = currentValue & rightValue;
-              break;
-            case '|=':
-              value = currentValue | rightValue;
-              break;
-            case '^=':
-              value = currentValue ^ rightValue;
-              break;
-            case '<<=':
-              value = currentValue << rightValue;
-              break;
-            case '>>=':
-              value = currentValue >> rightValue;
-              break;
-            default:
-              throw new UnsupportedOperatorError((node as unknown as { operator: string }).operator, 'assignment', this.getSourceLocation(node), this.currentSource);
-          }
-        }
-
-        await this.writeArithmeticVariable(node.left, value, ctx);
-        return value;
-      }
-
-      case 'UpdateExpression': {
-        const currentValue = await this.evaluateArithmetic(node.argument, ctx);
-        const newValue = node.operator === '++' ? currentValue + 1 : currentValue - 1;
-        await this.writeArithmeticVariable(node.argument, newValue, ctx);
-        return node.prefix ? newValue : currentValue;
-      }
-
-      case 'ParameterExpansion': {
-        // `${…}` inside arithmetic: expanded as the shell word it is, then read as a number — or,
-        // when it expands to an expression (`x="1+2"`), evaluated as one. bash substitutes the text
-        // before parsing, so `$(( ${x} * 3 ))` is 7 there and 9 here; for a number the two agree.
-        const paramNode = node as { type: 'ParameterExpansion'; text: string; word?: AstNodeWord };
-        if (!paramNode.word) return 0;
-        const { values } = await this.resolveExpansions(paramNode.word, ctx);
-        const text = values.join(' ').trim();
-        if (text === '') return 0;
-        if (/^[+-]?\d+$/.test(text)) return Number.parseInt(text, 10);
-        return await this.evaluateArithmetic(parseArithmetic(text), ctx);
-      }
-
-      case 'CommandSubstitution': {
-        const cmdNode = node as { type: 'CommandSubstitution'; commandAST: AstNode };
-        if (!cmdNode.commandAST) {
-          return 0;
-        }
-        const { output } = await this.substitute(cmdNode.commandAST, ctx);
-        const trimmed = output.trim();
-        return trimmed === '' ? 0 : Number.parseInt(trimmed, 10) || 0;
-      }
-
-      default:
-        throw new UnsupportedArithmeticNodeError((node as unknown as { type: string }).type, this.getSourceLocation(node), this.currentSource);
-    }
-  }
 }

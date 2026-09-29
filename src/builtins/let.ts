@@ -4,8 +4,7 @@
  * Evaluates arithmetic expressions using bash-parser.
  */
 
-import { parseArithmetic } from '@ein/bash-parser';
-import { evaluateArithmetic } from '../arithmetic-eval.ts';
+import { contextVariables, evaluateArithmeticText } from '../arith.ts';
 import { ArithmeticError, ReadonlyVariableError } from '../errors.ts';
 import type { ExecContextIf, ShellIf } from '../types.ts';
 import type { BuiltinHandler, BuiltinResult } from './types.ts';
@@ -36,14 +35,11 @@ export const letBuiltin: BuiltinHandler = async (
     };
   }
 
-  let lastResult = 0;
+  let lastResult = 0n;
 
   for (const arg of args) {
     try {
-      // Parse the arithmetic expression using bash-parser
-      const ast = parseArithmetic(arg);
-      // Evaluate the AST (use setEnv for variable assignment in let builtin)
-      lastResult = await evaluateArithmetic(ast, ctx);
+      lastResult = await evaluateArithmeticText(arg, contextVariables(ctx));
     } catch (error) {
       // A readonly variable is said as any assignment says it, without let's name
       if (error instanceof ReadonlyVariableError) {
@@ -51,7 +47,7 @@ export const letBuiltin: BuiltinHandler = async (
       }
 
       if (error instanceof ArithmeticError) {
-        return { code: 1, stderr: `let: ${error.in(arg).message}\n` };
+        return { code: 1, stderr: `let: ${error.message}\n` };
       }
 
       const message = error instanceof Error ? error.message : String(error);
@@ -63,5 +59,5 @@ export const letBuiltin: BuiltinHandler = async (
   }
 
   // Return 0 if last expression is non-zero, 1 otherwise
-  return { code: lastResult === 0 ? 1 : 0 };
+  return { code: lastResult === 0n ? 1 : 0 };
 };

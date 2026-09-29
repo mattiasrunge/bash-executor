@@ -4,8 +4,7 @@
  * Declares variables and/or gives them attributes.
  */
 
-import { parseArithmetic } from '@ein/bash-parser';
-import { evaluateArithmetic } from '../arithmetic-eval.ts';
+import { contextVariables, evaluateArithmeticText } from '../arith.ts';
 import type { ExecContextIf, ShellIf } from '../types.ts';
 import type { BuiltinHandler, BuiltinResult } from './types.ts';
 import { assignArrayArg } from './variables.ts';
@@ -313,7 +312,7 @@ export const declareBuiltin: BuiltinHandler = async (
       // An integer's value is arithmetic: `declare -i n=5+3` is 8
       if (ctx.isIntegerVar(name) || setInteger) {
         try {
-          finalValue = String(await evaluateArithmetic(parseArithmetic(value || '0'), ctx));
+          finalValue = String(await evaluateArithmeticText(value || '0', contextVariables(ctx)));
         } catch {
           finalValue = '0';
         }

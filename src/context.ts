@@ -308,7 +308,14 @@ export class ExecContext implements ExecContextIf {
     const owner = this.ownerOfArray(name) ?? this.root();
 
     if (!owner.arrays[name]) {
-      owner.arrays[name] = [];
+      // A variable that was a plain one becomes the array's element 0
+      const scalar = this.getParams()[name] ?? this.getEnv()[name];
+
+      owner.arrays[name] = scalar === undefined ? [] : [scalar];
+
+      if (scalar !== undefined) {
+        this.setParams({ [name]: null });
+      }
     }
 
     owner.arrays[name][index] = value;

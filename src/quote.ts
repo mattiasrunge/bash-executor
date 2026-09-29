@@ -6,7 +6,19 @@
 // deno-lint-ignore no-control-regex
 const CONTROL = /[\x00-\x1f\x7f]/;
 
-const ESCAPES: Record<string, string> = { '\n': '\\n', '\t': '\\t', '\r': '\\r', '\x1b': '\\E', '\\': '\\\\', "'": "\\'" };
+// bash's own: the C escapes, ESC as \E, the rest in octal
+const ESCAPES: Record<string, string> = {
+  '\x07': '\\a',
+  '\b': '\\b',
+  '\f': '\\f',
+  '\n': '\\n',
+  '\r': '\\r',
+  '\t': '\\t',
+  '\v': '\\v',
+  '\x1b': '\\E',
+  '\\': '\\\\',
+  "'": "\\'",
+};
 
 /** `$'…'`, with a control character as its escape. */
 function ansiC(value: string): string {
