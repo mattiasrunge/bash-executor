@@ -7,6 +7,17 @@ import { DEFAULT_SHELL_OPTIONS, DEFAULT_SHOPT_OPTIONS, type ExecContextIf, type 
 /**
  * Execution context for shell commands, managing environment variables, I/O streams, and function definitions.
  */
+/** bash's dynamic variables: made each time they are read. */
+const DYNAMIC_PARAMS = ['SECONDS', 'EPOCHSECONDS', 'EPOCHREALTIME', 'RANDOM', 'SRANDOM', 'BASH_ARGV0'];
+
+/**
+ * The parameters that change from one command to the next without anything
+ * being set: `$?`, `$LINENO`, `$BASH_COMMAND` and the dynamic variables. A host
+ * that keeps the shell's state somewhere, or asks whether it changed, leaves
+ * them out.
+ */
+export const VOLATILE_PARAMS: ReadonlySet<string> = new Set(['?', 'LINENO', 'BASH_COMMAND', ...DYNAMIC_PARAMS]);
+
 export class ExecContext implements ExecContextIf {
   private cwd = '/';
   private parent?: ExecContext;
@@ -217,7 +228,7 @@ export class ExecContext implements ExecContextIf {
    * bash's dynamic variables, in the shell's own context: their value is made
    * each time one is read. One that is unset is an ordinary variable from then on.
    */
-  private dynamic = new Set(['SECONDS', 'EPOCHSECONDS', 'EPOCHREALTIME', 'RANDOM', 'SRANDOM', 'BASH_ARGV0']);
+  private dynamic = new Set(DYNAMIC_PARAMS);
   private secondsFrom = Date.now();
   private secondsBase = 0;
   private randomSeed = Math.floor(Math.random() * 2 ** 31);

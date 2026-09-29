@@ -1,5 +1,5 @@
 import { assertEquals } from '@std/assert';
-import { ExecContext } from '../src/context.ts';
+import { ExecContext, VOLATILE_PARAMS } from '../src/context.ts';
 
 Deno.test('ExecContext - Basic Construction', async (t) => {
   await t.step('creates context with default IO', () => {
@@ -18,9 +18,9 @@ Deno.test('ExecContext - Basic Construction', async (t) => {
     const ctx = new ExecContext();
     assertEquals(ctx.getEnv(), {});
     // `$#` is 0 in a shell nobody passed arguments to, and `$?` before anything ran
-    const dynamic = ['SECONDS', 'EPOCHSECONDS', 'EPOCHREALTIME', 'RANDOM', 'SRANDOM', 'BASH_ARGV0'];
-    const params = Object.fromEntries(Object.entries(ctx.getParams()).filter(([name]) => !dynamic.includes(name)));
-    assertEquals(params, { '#': '0', '?': '0' });
+    const params = Object.fromEntries(Object.entries(ctx.getParams()).filter(([name]) => !VOLATILE_PARAMS.has(name)));
+    assertEquals(params, { '#': '0' });
+    assertEquals(ctx.getParams()['?'], '0');
   });
 
   await t.step('a spawned context does not shadow $#', () => {
