@@ -188,13 +188,29 @@ Deno.test('set builtin', async (t) => {
     assertEquals(ctx.getShellOption('pipefail'), true);
   });
 
-  await t.step('pipefail is listed by -o', async () => {
+  await t.step('pipefail is listed by -o, as bash does', async () => {
     const ctx = setup();
     const result = await setBuiltin(ctx, ['-o'], mockShell, noopExecute);
-    assertStringIncludes(result.stdout || '', '+o pipefail');
+    assertStringIncludes(result.stdout || '', 'pipefail       \toff\n');
 
     await setBuiltin(ctx, ['-o', 'pipefail'], mockShell, noopExecute);
     const after = await setBuiltin(ctx, ['-o'], mockShell, noopExecute);
-    assertStringIncludes(after.stdout || '', '-o pipefail');
+    assertStringIncludes(after.stdout || '', 'pipefail       \ton\n');
+  });
+
+  await t.step('+o lists the commands that restore the options', async () => {
+    const ctx = setup();
+    await setBuiltin(ctx, ['-o', 'pipefail'], mockShell, noopExecute);
+    const result = await setBuiltin(ctx, ['+o'], mockShell, noopExecute);
+    assertStringIncludes(result.stdout || '', 'set -o pipefail\n');
+    assertStringIncludes(result.stdout || '', 'set +o errexit\n');
+  });
+
+  await t.step('options bash has but the executor only records are accepted', async () => {
+    const ctx = setup();
+    assertEquals((await setBuiltin(ctx, ['-o', 'posix'], mockShell, noopExecute)).code, 0);
+    assertEquals(ctx.getShellOption('posix'), true);
+    assertEquals((await setBuiltin(ctx, ['+H'], mockShell, noopExecute)).code, 0);
+    assertEquals(ctx.getShellOption('histexpand'), false);
   });
 });

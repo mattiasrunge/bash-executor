@@ -83,6 +83,22 @@ export const DEFAULT_SHELL_OPTIONS: Record<string, boolean> = {
   monitor: false, // -m: Job control
   noexec: false, // -n: Don't execute commands
   pipefail: false, // A pipeline fails if any stage fails, not just the last
+  // Recorded so scripts can set and test them; the executor does not act on them
+  braceexpand: true, // -B
+  emacs: false,
+  errtrace: false, // -E
+  functrace: false, // -T
+  hashall: true, // -h
+  histexpand: false, // -H
+  history: false,
+  'interactive-comments': true,
+  keyword: false, // -k
+  nolog: false,
+  onecmd: false, // -t
+  physical: false, // -P
+  posix: false,
+  privileged: false, // -p
+  vi: false,
 };
 
 /**
@@ -100,6 +116,15 @@ export const SHELL_OPTION_FLAG_MAP: Record<string, string> = {
   b: 'notify',
   m: 'monitor',
   n: 'noexec',
+  B: 'braceexpand',
+  E: 'errtrace',
+  T: 'functrace',
+  h: 'hashall',
+  H: 'histexpand',
+  k: 'keyword',
+  t: 'onecmd',
+  P: 'physical',
+  p: 'privileged',
 };
 
 export const PATH_TEST_OPERATOR_MAP: Record<string, string> = {
