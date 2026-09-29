@@ -5,6 +5,7 @@
  */
 
 import { BashSyntaxError } from '../errors.ts';
+import { getReturnCode, isReturnSignal } from './exit.ts';
 import type { ExecContextIf, ShellIf } from '../types.ts';
 import type { BuiltinHandler, BuiltinResult } from './types.ts';
 
@@ -55,7 +56,8 @@ export const sourceBuiltin: BuiltinHandler = async (
     // Execute the file content in the current shell context
     const code = await execute(content);
 
-    return { code };
+    // `return` ends the file, not the function or script around the `source`
+    return { code: isReturnSignal(code) ? getReturnCode(code) : code };
   } catch (error) {
     const message = error instanceof Error ? error.message.split('\n')[0] : String(error);
 

@@ -103,23 +103,23 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | syntax error: Unexpected 'CONTINUE' | assoc, comsub-eof, posixexp, quote |
 | the test suite should not be run as root | execscript, glob-test, new-exp, test |
 | unbound variable | array, new-exp, varenv |
+| fooN: command not found | alias, builtins, comsub |
 | syntax error: Unexpected 'CLOSE_PAREN' | comsub, parser, posix2 |
 | syntax error: Unexpected 'Rbrace' | coproc, nameref, type |
 | compgen: command not found | func, herestr, shopt |
 | ulimit: command not found | procsub, redir, vredir |
-| fooN: command not found | alias, comsub |
 | syntax error: Unexpected 'In' | alias, comsub-posix |
-| -a: command not found | builtins, execscript |
 | syntax error: Unclosed here-document | comsub-eof, heredoc |
-| not a valid identifier | errors, parser |
 | syntax error: Unexpected 'EOF' | comsub-posix, exportfunc |
+| -a: command not found | builtins, execscript |
+| not a valid identifier | errors, parser |
 | a: not found | exp-tests, nameref |
+| 'A[]]': not a valid identifier | assoc, quotearray |
 | getopts: command not found | getopts, posix2 |
 | N: No such file or directory | heredoc, vredir |
 | history: command not found | histexpand, history |
 | !!: command not found | histexpand, history |
 | !e: command not found | histexpand, history |
-| 'A[]]': not a valid identifier | assoc, quotearray |
 | foo: not found | nameref, varenv |
 | syntax error: Unexpected 'WORD' | parser, vredir |
 | [N] N | jobs, trap |
@@ -154,7 +154,7 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | assoc | pass | no | 23% | 23% | 1,18c1,26 ⏎ &lt; declare -A fluff=([foo]="one" [bar]="two") ⏎ &lt; declare -A fluff=([bar]="two") |
 | attr | pass | no | 12% | 14% | 1,7c1,10 ⏎ &lt; after f1:declare -a a=([0]="1") ⏎ &lt; after f2:declare -a a=([0]="2") |
 | braces | pass | no | 34% | 34% | 1,3c1,3 ⏎ &lt; ff{c,b,a} ⏎ &lt; f{d,e,f}g |
-| builtins | pass | no | 28% | 31% | 0a1 ⏎ &gt; 1000 ⏎ 13,17d13 |
+| builtins | pass | no | 57% | 61% | 0a1 ⏎ &gt; 1000 ⏎ 13,17d13 |
 | case | pass | no | 84% | 86% | 8,9c8,9 ⏎ &lt; hi1 ⏎ &lt; 2.0 |
 | casemod | pass | no | 72% | 72% | 16,23c16,23 ⏎ &lt; Acknowledgement Oenophile ⏎ &lt; ACKNOWLEDGEMENT OENOPHILE |
 | complete | pass | no | 0% | 0% | 1,37c1,63 ⏎ &lt; ./complete.tests: complete: command not found ⏎ &lt; ./complete.tests: complete: command not found |
@@ -167,16 +167,16 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | dbg-support | pass | no | 3% | 3% | 1,3c1,2 ⏎ &lt; debug lineno:   ⏎ &lt; debug lineno:   |
 | dbg-support2 | pass | no | 14% | 14% | 1,2c1,6 ⏎ &lt; lineno:  ()  ⏎ &lt; lineno:  ()  |
 | dirstack | pass | no | 34% | 45% | 1,7c1,11 ⏎ &lt; pushd: /tmp/xxx-notthere: No such file or directory ⏎ &lt; pushd: no other directory |
-| dollars | pass | no | 68% | 68% | 25,26c25,28 ⏎ &lt; argv[1] = &lt;1&gt; ⏎ &lt; argv[1] = &lt;bobtom dick harryjoe&gt; |
+| dollars | pass | no | 67% | 67% | 25,26c25,28 ⏎ &lt; argv[1] = &lt;1&gt; ⏎ &lt; argv[1] = &lt;bobtom dick harryjoe&gt; |
 | dynvar | pass | no | 31% | 40% | 2,4c2,5 ⏎ &lt; BASH_ARGV0 mismatch: hello (./dynvar.tests) ⏎ &lt; BASH_ARGV0 mismatch: arg0 (./dynvar.tests) |
 | errors | pass | no | 0% | 0% | 1,23c1,208 ⏎ &lt; alias: -x: not found ⏎ &lt; alias: hoowah: not found |
-| execscript | env | no | 79% | 88% | 1d0 ⏎ &lt; execscript: the test suite should not be run as root ⏎ 9c8 |
+| execscript | env | no | 81% | 90% | 1d0 ⏎ &lt; execscript: the test suite should not be run as root ⏎ 9c8 |
 | exp-tests | pass | no | 28% | 35% | 41,42c41 ⏎ &lt; argv[1] = &lt;&gt; ⏎ &lt; argv[1] = &lt;"Hello world!"&gt; |
 | exportfunc | pass | no | 30% | 57% | 1,7c1,7 ⏎ &lt; bash: foo: command not found ⏎ &lt; bash: foo-a: command not found |
 | extglob | pass | no | 83% | 85% | 44c44 ⏎ &lt; @(*) ⏎ --- |
 | extglob2 | pass | no | 90% | 90% | 45,46c45 ⏎ &lt; 1:  [[ foo = !(foo)* ]] ⏎ &lt; Test failed:  [[ foo = !(foo)* ]] |
 | extglob3 | pass | yes | 100% | 100% |  |
-| func | pass | no | 28% | 29% | 1d0 ⏎ &lt; ./func.tests: compgen: command not found ⏎ 12c11 |
+| func | pass | no | 29% | 29% | 1d0 ⏎ &lt; ./func.tests: compgen: command not found ⏎ 12c11 |
 | getopts | pass | no | 10% | 14% | 1,24c1,32 ⏎ &lt; ./getopts.tests: getopts: command not found ⏎ &lt; 127 |
 | glob-test | env | no | 70% | 72% | 2,3d1 ⏎ &lt; glob2.sub: warning: you do not have the zh_HK.big5hkscs locale installed; ⏎ &lt; glob2.sub: warning: that will cause some of these tests to fail. |
 | globstar | pass | no | 25% | 25% | 0a1,26 ⏎ &gt; lib/glob/glob.o ⏎ &gt; lib/glob/smatch.o |
@@ -224,7 +224,7 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | test | env | timeout | 88% | 91% | timeout |
 | tilde | pass | no | 61% | 61% | 2c2 ⏎ &lt; /home/mattias/foo ⏎ --- |
 | tilde2 | pass | no | 57% | 57% | 2,3c2,3 ⏎ &lt;  ⏎ &lt;  |
-| trap | pass | no | 69% | 74% | 8c8 ⏎ &lt; [] debug ⏎ --- |
+| trap | pass | no | 69% | 75% | 8c8 ⏎ &lt; [] debug ⏎ --- |
 | type | pass | no | 33% | 35% | 1c1 ⏎ &lt; ./type.tests: hash: command not found ⏎ --- |
-| varenv | pass | no | 33% | 38% | 1,5c1,3 ⏎ &lt; 1 2 ⏎ &lt; ./varenv.tests: c=7: command not found |
+| varenv | pass | no | 32% | 38% | 1,5c1,3 ⏎ &lt; 1 2 ⏎ &lt; ./varenv.tests: c=7: command not found |
 | vredir | env | no | 40% | 44% | 6,12c6,13 ⏎ &lt; 10 ⏎ &lt; bad foo 1 |

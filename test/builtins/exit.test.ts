@@ -1,6 +1,7 @@
 import { assertEquals } from '@std/assert';
 import { exitBuiltin, getExitCode, getReturnCode, isExitSignal, isReturnSignal, makeExitSignal, makeReturnSignal, returnBuiltin } from '../../src/builtins/exit.ts';
 import { ExecContext } from '../../src/context.ts';
+import { TestShell } from '../lib/test-shell.ts';
 
 // Mock shell for testing
 const mockShell = {} as Parameters<typeof exitBuiltin>[2];
@@ -144,5 +145,48 @@ Deno.test('signal helper functions', async (t) => {
     assertEquals(isReturnSignal(exitSig), false);
     assertEquals(isExitSignal(returnSig), false);
     assertEquals(isReturnSignal(returnSig), true);
+  });
+});
+
+Deno.test('exit ends the shell from wherever it runs', async (t) => {
+  await t.step('in eval', async () => {
+    const result = await new TestShell().runAndCapture('eval "exit 3"; echo no');
+    assertEquals([result.exitCode, result.stdout, result.stderr], [3, '', '']);
+  });
+
+  await t.step('in a sourced file', async () => {
+    const shell = new TestShell();
+    shell.setFile('/x.sh', 'exit 4\necho no\n');
+    const result = await shell.runAndCapture('source /x.sh; echo no');
+    assertEquals([result.exitCode, result.stdout, result.stderr], [4, '', '']);
+  });
+
+  await t.step('but return in a sourced file ends only the file', async () => {
+    const shell = new TestShell();
+    shell.setFile('/r.sh', 'echo a\nreturn 4\necho no\n');
+    const result = await shell.runAndCapture('source /r.sh; echo "st=$?"');
+    assertEquals([result.exitCode, result.stdout], [0, 'a\nst=4\n']);
+  });
+
+  await t.step('in eval in a function', async () => {
+    const result = await new TestShell().runAndCapture('f() { eval "exit 5"; echo no; }; f; echo no');
+    assertEquals([result.exitCode, result.stdout, result.stderr], [5, '', '']);
+  });
+
+  await t.step('in a trap, changing the status the shell ends with', async () => {
+    const shell = new TestShell();
+    const exited = { value: false };
+    const result = await shell.runAndCapture('trap "echo t; exit 7" ERR; false; echo no', { exited });
+    assertEquals([result.exitCode, result.stdout, result.stderr], [7, 't\n', '']);
+    assertEquals(exited.value, true);
+  });
+
+  await t.step('the host is told, as the status alone does not', async () => {
+    const shell = new TestShell();
+    const ran = { value: false };
+    const exited = { value: false };
+    await shell.runAndCapture('(exit 1); true', { exited: ran });
+    await shell.runAndCapture('exit 0', { exited });
+    assertEquals([ran.value, exited.value], [false, true]);
   });
 });

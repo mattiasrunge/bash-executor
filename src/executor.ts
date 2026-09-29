@@ -201,9 +201,31 @@ export class AstExecutor {
    * Executes a shell script source code.
    * @param {string} source - The shell script source code.
    * @param {ExecContextIf} ctx - The execution context.
+   * @param opts.exited - Set when the script ended in `exit` — in it, or in an
+   *                      `eval`, `source` or trap it ran — which the status alone
+   *                      does not tell. A host whose shell reads its input a line
+   *                      at a time ends the shell on it.
    * @returns {Promise<number>} - The exit code of the executed script.
    */
-  public async execute(source: string, ctx: ExecContextIf): Promise<number> {
+  public async execute(source: string, ctx: ExecContextIf, opts: { exited?: { value: boolean } } = {}): Promise<number> {
+    const code = await this.executeSource(source, ctx);
+
+    if (isExitSignal(code)) {
+      if (opts.exited) {
+        opts.exited.value = true;
+      }
+
+      return getExitCode(code);
+    }
+
+    return code;
+  }
+
+  /**
+   * `execute`, with an `exit` still an exit: what `eval`, `source` and a trap
+   * run goes through here, so that an `exit` in it ends the shell around it.
+   */
+  protected async executeSource(source: string, ctx: ExecContextIf): Promise<number> {
     // Without the host's job control the job builtins are not there at all —
     // not for `type` and `command` either. Done here rather than in the
     // constructor, since a host may set up `jobs` after making its executor.
@@ -246,10 +268,9 @@ export class AstExecutor {
         const prefix = await this.completeCommandsBefore(source, options);
 
         if (prefix.trim()) {
-          const exited = { value: false };
-          const code = await this.executeScript(await parse(prefix, options), ctx, exited);
+          const code = await this.executeScript(await parse(prefix, options), ctx);
 
-          if (exited.value || isReturnSignal(code)) {
+          if (isExitSignal(code) || isReturnSignal(code)) {
             return code;
           }
         }
@@ -684,13 +705,12 @@ export class AstExecutor {
   }
 
   /**
-   * @param exited - Set when the script ended in `exit`, which the status alone
-   *                 does not tell: the caller of a script cut short by a syntax
-   *                 error needs to know whether it got that far.
+   * A script's commands in turn. An `exit` stops them, and comes back as the
+   * exit signal rather than its status, for the caller to end its shell by.
    */
-  protected async executeScript(node: AstNodeScript, ctx: ExecContextIf, exited?: { value: boolean }): Promise<number> {
+  protected async executeScript(node: AstNodeScript, ctx: ExecContextIf): Promise<number> {
     try {
-      return await this.runScriptCommands(node, ctx, exited);
+      return await this.runScriptCommands(node, ctx);
     } catch (err) {
       // An unset parameter under `set -u` ends this shell, and a command
       // substitution is a shell of its own — it parses to its own Script, so
@@ -712,7 +732,7 @@ export class AstExecutor {
     }
   }
 
-  private async runScriptCommands(node: AstNodeScript, ctx: ExecContextIf, exited?: { value: boolean }): Promise<number> {
+  private async runScriptCommands(node: AstNodeScript, ctx: ExecContextIf): Promise<number> {
     let lastCode = 0;
 
     for (const command of node.commands) {
@@ -726,16 +746,11 @@ export class AstExecutor {
 
       lastCode = await this.executeNode(command, ctx);
 
-      // Handle exit signal - stop script execution and return the exit code
+      // `exit` stops the script, and the signal goes up to whatever ends the shell
       if (isExitSignal(lastCode)) {
-        const exitCode = getExitCode(lastCode);
-        ctx.setParams({ '?': String(exitCode) });
+        ctx.setParams({ '?': String(getExitCode(lastCode)) });
 
-        if (exited) {
-          exited.value = true;
-        }
-
-        return exitCode;
+        return lastCode;
       }
 
       // Handle return signal - propagate up (will be caught by function execution)
@@ -986,7 +1001,7 @@ export class AstExecutor {
       // Check for builtin first
       const builtin = this.builtin(cmdName);
       if (builtin) {
-        const execute = (script: string) => this.execute(script, ctx);
+        const execute = (script: string) => this.executeSource(script, ctx);
         const result = await builtin(ctx, args || [], this.shell, execute);
 
         code = result.code;
@@ -1446,7 +1461,7 @@ export class AstExecutor {
     ctx.setParams({ '?': String(status) });
 
     try {
-      const code = await this.execute(action, ctx);
+      const code = await this.executeSource(action, ctx);
 
       if (isExitSignal(code)) {
         return code;

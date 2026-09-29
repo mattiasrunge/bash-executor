@@ -219,13 +219,11 @@ export const killBuiltin: BuiltinHandler = async (ctx: ExecContextIf, args: stri
       }
 
       pid = job.pid;
-    } else if (!/^-?\d+$/.test(target)) {
-      stderr += `kill: ${target}: arguments must be process or job IDs\n`;
-      continue;
     }
 
+    // What a pid looks like is the host's to say; bash's are numbers
     if (!(await shell.jobs!.signal(pid, signal))) {
-      stderr += `kill: (${pid}) - No such process\n`;
+      stderr += /^-?\d+$/.test(pid) ? `kill: (${pid}) - No such process\n` : `kill: ${target}: arguments must be process or job IDs\n`;
     }
   }
 
