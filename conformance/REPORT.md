@@ -35,7 +35,6 @@ Bash builtins that reached the host as external commands.
 
 | Name | Tests | Times hit |
 | --- | --- | --- |
-| trap | dbg-support, dbg-support2, execscript, glob-test, histexpand, history, mapfile, redir, set-x, test, trap, varenv | 92 |
 | wait | assoc, execscript, func, procsub, redir, trap | 25 |
 | hash | assoc, builtins, execscript, rsh, type | 17 |
 | ulimit | builtins, procsub, redir, vredir | 8 |
@@ -102,7 +101,6 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 
 | Message | Tests |
 | --- | --- |
-| trap: command not found | dbg-support, dbg-support2, execscript, glob-test, histexpand, history, mapfile, redir, set-x, test, trap, varenv |
 | wait: command not found | assoc, execscript, func, procsub, redir, trap |
 | foo: command not found | alias, comsub, execscript, exportfunc, nquote |
 | hash: command not found | assoc, builtins, execscript, rsh, type |
@@ -121,10 +119,10 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | syntax error: Unexpected 'EOF' | comsub-posix, exportfunc |
 | a: not found | exp-tests, nameref |
 | getopts: command not found | getopts, posix2 |
+| N: No such file or directory | heredoc, vredir |
 | history: command not found | histexpand, history |
 | !!: command not found | histexpand, history |
 | !e: command not found | histexpand, history |
-| N: No such file or directory | heredoc, vredir |
 | 'A[]]': not a valid identifier | assoc, quotearray |
 | foo: not found | nameref, varenv |
 | syntax error: Unexpected 'WORD' | parser, vredir |
@@ -142,6 +140,7 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | a: command not found | alias |
 | ever: command not found | alias |
 | myalias: command not found | alias |
+| aN: command not found | alias |
 
 ## Per test
 
@@ -168,13 +167,13 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | cond | pass | no | 85% | 85% | 28a29,30 ⏎ &gt; returns: 0 ⏎ &gt; ./cond.tests: line 122: [[: 4+: syntax error: operand expected (error token is "+") |
 | coproc | pass | no | 0% | 0% | 1c1,10 ⏎ &lt; ./coproc.tests: line 17: syntax error: Parse error on line 17: Unexpected 'Rbrace' ⏎ --- |
 | cprint | pass | no | 22% | 22% | 1a2,52 ⏎ &gt; tf ()  ⏎ &gt; {  |
-| dbg-support | pass | no | 4% | 5% | 1,2c1,2 ⏎ &lt; ./dbg-support.tests: trap: command not found ⏎ &lt; ./dbg-support.tests: trap: command not found |
-| dbg-support2 | pass | no | 20% | 22% | 1c1,6 ⏎ &lt; ./dbg-support2.tests: trap: command not found ⏎ --- |
+| dbg-support | pass | no | 3% | 3% | 1,3c1,2 ⏎ &lt; debug lineno:   ⏎ &lt; debug lineno:   |
+| dbg-support2 | pass | no | 14% | 14% | 1,2c1,6 ⏎ &lt; lineno:  ()  ⏎ &lt; lineno:  ()  |
 | dirstack | pass | no | 34% | 45% | 1,7c1,11 ⏎ &lt; pushd: /tmp/xxx-notthere: No such file or directory ⏎ &lt; pushd: no other directory |
 | dollars | pass | no | 68% | 68% | 25,26c25,28 ⏎ &lt; argv[1] = &lt;1&gt; ⏎ &lt; argv[1] = &lt;bobtom dick harryjoe&gt; |
 | dynvar | pass | no | 31% | 40% | 2,4c2,5 ⏎ &lt; BASH_ARGV0 mismatch: hello (./dynvar.tests) ⏎ &lt; BASH_ARGV0 mismatch: arg0 (./dynvar.tests) |
 | errors | pass | no | 0% | 0% | 1,23c1,208 ⏎ &lt; alias: -x: not found ⏎ &lt; alias: hoowah: not found |
-| execscript | env | no | 64% | 80% | 1d0 ⏎ &lt; execscript: the test suite should not be run as root ⏎ 9c8 |
+| execscript | env | no | 76% | 86% | 1d0 ⏎ &lt; execscript: the test suite should not be run as root ⏎ 9c8 |
 | exp-tests | pass | no | 28% | 35% | 41,42c41 ⏎ &lt; argv[1] = &lt;&gt; ⏎ &lt; argv[1] = &lt;"Hello world!"&gt; |
 | exportfunc | pass | no | 30% | 57% | 1,7c1,7 ⏎ &lt; bash: foo: command not found ⏎ &lt; bash: foo-a: command not found |
 | extglob | pass | no | 83% | 85% | 44c44 ⏎ &lt; @(*) ⏎ --- |
@@ -186,8 +185,8 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | globstar | pass | no | 25% | 25% | 0a1,26 ⏎ &gt; lib/glob/glob.o ⏎ &gt; lib/glob/smatch.o |
 | heredoc | env | no | 56% | 62% | 6,7c6,7 ⏎ &lt; $PS4 ⏎ &lt; $PS4 |
 | herestr | pass | no | 51% | 52% | 1d0 ⏎ &lt; ./herestr.tests: compgen: command not found ⏎ 7,8c6,7 |
-| histexpand | pass | no | 33% | 43% | 1,28c1,51 ⏎ &lt; ./histexp.tests: trap: command not found ⏎ &lt; ./histexp.tests: history: command not found |
-| history | pass | no | 29% | 39% | 1,18c1,36 ⏎ &lt; ./history.tests: trap: command not found ⏎ &lt; ./history.tests: history: command not found |
+| histexpand | pass | no | 33% | 43% | 1,27c1,51 ⏎ &lt; ./histexp.tests: history: command not found ⏎ &lt; ./histexp.tests: history: command not found |
+| history | pass | no | 29% | 39% | 1,17c1,36 ⏎ &lt; ./history.tests: history: command not found ⏎ &lt; ./history.tests: history: command not found |
 | ifs | pass | no | 83% | 83% | 4c4 ⏎ &lt; a:b:c:d:e ⏎ --- |
 | ifs-posix | pass | no | 0% | 0% | 1,1926c1 ⏎ &lt; IFS=": "; x=" "; set x $x; shift; echo "[$#]($1)" # expected "[1]()" got "[0]" ⏎ &lt; IFS=": "; x=" :"; set x $x; shift; echo "[$#]($1)($2)" # expecte |
 | input-test | pass | no | 67% | 67% | 2c2 ⏎ &lt; line read by ./input-line.sub was '' ⏎ --- |
@@ -196,7 +195,7 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | iquote | pass | no | 90% | 90% | 11,13c11,13 ⏎ &lt; 0x0 ⏎ &lt; 0x0 |
 | jobs | env | timeout | 0% | 4% | timeout |
 | lastpipe | pass | yes | 100% | 100% |  |
-| mapfile | pass | no | 61% | 62% | 16a17,32 ⏎ &gt; a[0] Abcdefghijklmnop ⏎ &gt; [1] aBcdefghijklmnop |
+| mapfile | pass | no | 62% | 62% | 16a17,32 ⏎ &gt; a[0] Abcdefghijklmnop ⏎ &gt; [1] aBcdefghijklmnop |
 | more-exp | pass | no | 66% | 81% | 2c2 ⏎ &lt; argv[1] = &lt;aaa&gt; ⏎ --- |
 | nameref | pass | no | 16% | 21% | 1,3c1,5 ⏎ &lt; bar ⏎ &lt; flow |
 | new-exp | pass | no | 10% | 19% | 1d0 ⏎ &lt; new-exp.tests: the test suite should not be run as root ⏎ 3,4c2 |
@@ -228,7 +227,7 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | test | env | no | 88% | 92% | 1d0 ⏎ &lt; test-tests: the test suite should not be run as root ⏎ 5c4 |
 | tilde | pass | no | 61% | 61% | 2c2 ⏎ &lt; /home/mattias/foo ⏎ --- |
 | tilde2 | pass | no | 57% | 57% | 2,3c2,3 ⏎ &lt;  ⏎ &lt;  |
-| trap | pass | no | 30% | 36% | 1,5c1,8 ⏎ &lt; ./trap.tests: trap: command not found ⏎ &lt; ./trap.tests: trap: command not found |
+| trap | pass | no | 68% | 74% | 8c8 ⏎ &lt; [] debug ⏎ --- |
 | type | pass | no | 33% | 35% | 1c1 ⏎ &lt; ./type.tests: hash: command not found ⏎ --- |
-| varenv | pass | no | 31% | 37% | 1,5c1,3 ⏎ &lt; 1 2 ⏎ &lt; ./varenv.tests: c=7: command not found |
+| varenv | pass | no | 33% | 38% | 1,5c1,3 ⏎ &lt; 1 2 ⏎ &lt; ./varenv.tests: c=7: command not found |
 | vredir | env | no | 40% | 44% | 6,12c6,13 ⏎ &lt; 10 ⏎ &lt; bad foo 1 |

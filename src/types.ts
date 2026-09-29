@@ -635,6 +635,18 @@ export interface ExecContextIf {
   getAlias: (name: string) => string | undefined;
 
   /**
+   * The command a trap runs, by its name as `trap -p` prints it (`EXIT`,
+   * `SIGINT`, `ERR`, …): undefined when none is set, '' when it is ignored.
+   * Traps are the shell's, so a function or a spawned context shares them.
+   */
+  getTrap(name: string): string | undefined;
+
+  /** Set a trap, or with null reset it. */
+  setTrap(name: string, action: string | null): void;
+
+  getTraps(): Record<string, string>;
+
+  /**
    * Gets all aliases from the execution context.
    * @returns {Record<string, string>} All alias definitions.
    */

@@ -699,6 +699,16 @@ export class AstExecutor {
   }
 
   protected async executeCommand(node: AstNodeCommand, parentCtx: ExecContextIf): Promise<number> {
+    // The DEBUG trap runs before every simple command; in a function only
+    // under `set -T`, since functions do not inherit it otherwise
+    if (parentCtx.getTrap('DEBUG') && (this.functionDepth === 0 || parentCtx.getShellOption('functrace'))) {
+      const trapped = await this.runTrap('DEBUG', parentCtx, Number(parentCtx.getParams()['?'] ?? 0));
+
+      if (isExitSignal(trapped)) {
+        return trapped;
+      }
+    }
+
     try {
       return await this.runCommand(node, parentCtx);
     } catch (err) {
@@ -1030,11 +1040,31 @@ export class AstExecutor {
       '*': args.join(' '),
     });
 
-    const code = await this.executeNode(fn.body, fnCtx);
+    const returnTrap = ctx.getTrap('RETURN');
+
+    this.functionDepth++;
+
+    let result: number;
+
+    try {
+      result = await this.executeNode(fn.body, fnCtx);
+    } finally {
+      this.functionDepth--;
+    }
 
     // Convert return signal to actual return code
-    if (isReturnSignal(code)) {
-      return getReturnCode(code);
+    const code = isReturnSignal(result) ? getReturnCode(result) : result;
+
+    // The RETURN trap runs as the function returns — one the function set itself,
+    // or the caller's under `set -T`: functions do not inherit it otherwise
+    const inherited = ctx.getShellOption('functrace') || ctx.getTrap('RETURN') !== returnTrap;
+
+    if (!isExitSignal(code) && inherited) {
+      const trapped = await this.runTrap('RETURN', fnCtx, code);
+
+      if (isExitSignal(trapped)) {
+        return trapped;
+      }
     }
 
     return code;
@@ -1047,8 +1077,9 @@ export class AstExecutor {
       return this.executeNode(node.list, ctx);
     });
 
-    // `(exit 3)` ends the subshell, not the shell: to the caller it is status 3
-    const code = isExitSignal(result) ? getExitCode(result) : isReturnSignal(result) ? getReturnCode(result) : result;
+    // `(exit 3)` ends the subshell, not the shell: to the caller it is status 3.
+    // Its EXIT trap runs as it ends.
+    const code = await this.runExitTrap(ctx, isExitSignal(result) ? getExitCode(result) : isReturnSignal(result) ? getReturnCode(result) : result);
 
     // To the caller the subshell is one command, so it leaves one status behind —
     // the array its own pipelines built lives and dies with the subshell's context.
@@ -1153,7 +1184,9 @@ export class AstExecutor {
     const read = handled(this.shell.pipeRead(pipe));
 
     try {
-      const code = await this.executeNode(commandAST, cmdCtx);
+      // A `$( )` is a shell of its own, and its EXIT trap writes into it
+      const result = await this.executeNode(commandAST, cmdCtx);
+      const code = await this.runExitTrap(cmdCtx, isExitSignal(result) ? getExitCode(result) : result);
 
       // EOF, so the drain finishes
       await this.shell.pipeClose(pipe);
@@ -1265,7 +1298,7 @@ export class AstExecutor {
    * untouched; one from an earlier stage stays swallowed, because in bash that
    * stage is a subshell of its own and its `exit` never reaches the caller.
    */
-  protected finishPipeline(node: AstNodePipeline, codes: number[], ctx: ExecContextIf, lastpipe = false): number {
+  protected async finishPipeline(node: AstNodePipeline, codes: number[], ctx: ExecContextIf, lastpipe = false): Promise<number> {
     // `break`/`continue` are not statuses at all, and in bash a stage is a subshell
     // the loop control cannot reach out of — so they count as 0 rather than as a
     // failure pipefail would pick up.
@@ -1314,9 +1347,18 @@ export class AstExecutor {
    * context that is exempt (an `if` clause, `!`, the left of `&&`, a pipeline
    * stage) answers for everything it called, functions included.
    */
-  protected applyErrexit(code: number, ctx: ExecContextIf): number {
+  protected async applyErrexit(code: number, ctx: ExecContextIf): Promise<number> {
     if (code === 0 || isExitSignal(code) || isReturnSignal(code) || code === BREAK_CODE || code === CONTINUE_CODE) {
       return code;
+    }
+
+    // The ERR trap runs where errexit would end the shell, set -e or not
+    if (!ctx.getErrexitSuppressed()) {
+      const trapped = await this.runTrap('ERR', ctx, code);
+
+      if (isExitSignal(trapped)) {
+        return trapped;
+      }
     }
 
     if (!ctx.getShellOption('errexit') || ctx.getErrexitSuppressed()) {
@@ -1324,6 +1366,60 @@ export class AstExecutor {
     }
 
     return makeExitSignal(code);
+  }
+
+  /** How deep in function calls the executor is, for the traps functions do not inherit. */
+  private functionDepth = 0;
+
+  /** Which traps are running now, so one does not set itself off again. */
+  private runningTraps = new Set<string>();
+
+  /**
+   * Run a trap's command, if one is set and not ignored. `$?` is what it was
+   * when the trap went off, inside the trap and after it — unless the trap
+   * runs `exit`, whose signal comes back to the caller.
+   */
+  protected async runTrap(name: string, ctx: ExecContextIf, status: number): Promise<number> {
+    const action = ctx.getTrap(name);
+
+    if (!action || this.runningTraps.has(name)) {
+      return status;
+    }
+
+    this.runningTraps.add(name);
+    ctx.setParams({ '?': String(status) });
+
+    try {
+      const code = await this.execute(action, ctx);
+
+      if (isExitSignal(code)) {
+        return code;
+      }
+    } catch (err) {
+      if (!(err instanceof BashSyntaxError)) throw err;
+
+      await this.shell.pipeWrite(ctx.getStderr(), `trap: syntax error: ${err.message.split('\n')[0]}\n`).catch(() => {});
+    } finally {
+      this.runningTraps.delete(name);
+      ctx.setParams({ '?': String(status) });
+    }
+
+    return status;
+  }
+
+  /**
+   * The end of a shell: its EXIT trap runs, once, with `$?` the status the shell
+   * ends with, and an `exit` in it changes that status. Subshells and `$( )` are
+   * ended here by the executor; a host calls this when its own shell ends.
+   *
+   * @returns The status the shell ends with.
+   */
+  public async runExitTrap(ctx: ExecContextIf, status: number): Promise<number> {
+    const code = await this.runTrap('EXIT', ctx, status);
+
+    ctx.setTrap('EXIT', null);
+
+    return isExitSignal(code) ? getExitCode(code) : status;
   }
 
   /**

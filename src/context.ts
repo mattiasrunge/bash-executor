@@ -16,6 +16,7 @@ export class ExecContext implements ExecContextIf {
   private assocs: Record<string, Record<string, string>> = {};
   private fns: Record<string, FunctionDef> = {};
   private alias: Record<string, string> = {};
+  private traps: Record<string, string> = {};
   private readonlyVars = new Set<string>();
   private integerVars = new Set<string>();
   private dirStack: string[] = [];
@@ -77,6 +78,14 @@ export class ExecContext implements ExecContextIf {
 
     for (const [name, args] of Object.entries(this.getAliases())) {
       ctx.setAlias(name, args);
+    }
+
+    // A subshell does not run the shell's traps, but what the shell ignores it
+    // ignores too, as in bash
+    for (const [name, action] of Object.entries(this.getTraps())) {
+      if (action === '') {
+        ctx.setTrap(name, '');
+      }
     }
 
     // Copy variable attributes
@@ -440,6 +449,24 @@ export class ExecContext implements ExecContextIf {
     } else {
       delete this.alias[name];
     }
+  }
+
+  getTrap(name: string): string | undefined {
+    return this.parent ? this.parent.getTrap(name) : this.traps[name];
+  }
+
+  setTrap(name: string, action: string | null): void {
+    if (this.parent) {
+      this.parent.setTrap(name, action);
+    } else if (action === null) {
+      delete this.traps[name];
+    } else {
+      this.traps[name] = action;
+    }
+  }
+
+  getTraps(): Record<string, string> {
+    return this.parent ? this.parent.getTraps() : { ...this.traps };
   }
 
   getAlias(name: string): string | undefined {

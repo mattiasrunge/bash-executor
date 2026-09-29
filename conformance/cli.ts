@@ -218,6 +218,9 @@ async function main(): Promise<number> {
     }
   }
 
+  // The shell ends: its EXIT trap runs, and may change the status
+  code = await executor.runExitTrap(ctx, code);
+
   await shell.waitForBackground();
 
   return code & 0xff;
