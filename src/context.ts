@@ -47,6 +47,8 @@ export class ExecContext implements ExecContextIf {
       // never-assigned parameter gives. Only the shell itself carries it: a
       // spawned context with its own would shadow whatever `set --` wrote.
       this.params['#'] = '0';
+      // And `$?` is 0 before anything has run
+      this.params['?'] = '0';
     }
   }
 

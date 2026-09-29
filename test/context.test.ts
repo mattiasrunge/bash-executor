@@ -14,11 +14,11 @@ Deno.test('ExecContext - Basic Construction', async (t) => {
     assertEquals(ctx.getCwd(), '/');
   });
 
-  await t.step('creates context with empty env and only $# set', () => {
+  await t.step('creates context with empty env and only $# and $? set', () => {
     const ctx = new ExecContext();
     assertEquals(ctx.getEnv(), {});
-    // `$#` is 0 in a shell nobody passed arguments to
-    assertEquals(ctx.getParams(), { '#': '0' });
+    // `$#` is 0 in a shell nobody passed arguments to, and `$?` before anything ran
+    assertEquals(ctx.getParams(), { '#': '0', '?': '0' });
   });
 
   await t.step('a spawned context does not shadow $#', () => {

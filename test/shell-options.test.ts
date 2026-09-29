@@ -264,3 +264,36 @@ Deno.test('noglob, allexport, noclobber, noexec, verbose', async (t) => {
     assertEquals(result.stderr, 'echo one\neval "echo two"\necho two\necho three\n');
   });
 });
+
+// Found running bash's own test suite: each case is what bash does
+Deno.test('set -e and $? as bash has them', async (t) => {
+  const run = async (script: string) => {
+    const result = await new TestShell().runAndCapture(script);
+    return `${result.stdout}st ${result.exitCode}\n`;
+  };
+
+  await t.step("$? is 0 at first, and the right side of && or || sees the left's", async () => {
+    assertEquals(await run('echo "$?"; (exit 3) || echo "or $?"'), '0\nor 3\nst 0\n');
+  });
+
+  await t.step('$- lists the options that are on', async () => {
+    assertEquals(await run('set -eu; echo $-'), 'ehuB\nst 0\n');
+  });
+
+  await t.step('$( ) does not inherit set -e, but may set it', async () => {
+    // The bare assignment takes the substitution's status, 1, and set -e ends the shell there
+    assertEquals(await run('set -e; y=$(false; echo ok); echo "$y"; x=$(set -e; false; echo bad); echo "not reached"'), 'ok\nst 1\n');
+  });
+
+  await t.step('in POSIX mode $( ) inherits set -e', async () => {
+    assertEquals(await run('set -o posix; set -e; z=$(false; echo foo); echo "[$z]"'), 'st 1\n');
+  });
+
+  await t.step('a pipeline stage is a subshell set -e ends', async () => {
+    assertEquals(await run('set -e; { false; echo A; } | cat; echo B'), 'B\nst 0\n');
+  });
+
+  await t.step('nothing in a ! pipeline is subject to set -e', async () => {
+    assertEquals(await run('set -e; ! { false; echo A $?; } | cat; echo "B $?"'), 'A 1\nB 1\nst 0\n');
+  });
+});

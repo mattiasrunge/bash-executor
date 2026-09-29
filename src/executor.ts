@@ -38,7 +38,7 @@ import type { BuiltinRegistry } from './builtins/types.ts';
 import type { ErrorPosition } from './errors.ts';
 import { bracketExpression, globToRegExp, globToRegexSource, posixRegexToSource, quoteGlob, quoteRegex } from './pattern.ts';
 import { ArithmeticSyntaxError, NoClobberError, UnboundVariableError, UnknownNodeTypeError, UnsupportedArithmeticNodeError, UnsupportedOperatorError } from './errors.ts';
-import type { ExecContextIf, ExecSyncResult, ExecuteAndCaptureOptions, ShellIf } from './types.ts';
+import { type ExecContextIf, type ExecSyncResult, type ExecuteAndCaptureOptions, SHELL_OPTION_FLAG_MAP, type ShellIf } from './types.ts';
 
 // The special parameters, which are set even when nothing has assigned to them
 /** POSIX's special builtins: in POSIX mode an assignment before one outlasts it. */
@@ -1313,7 +1313,13 @@ export class AstExecutor {
   private async substitute(commandAST: AstNode, ctx: ExecContextIf): Promise<{ code: number; output: string }> {
     const cmdCtx = ctx.subContext();
     cmdCtx.setLocalEnv({ TERM: '0' });
-    cmdCtx.setErrexitSuppressed(true);
+
+    // `$( )` does not inherit `set -e`, unless in POSIX mode or under
+    // `shopt -s inherit_errexit`; a `set -e` inside it applies as anywhere
+    if (!ctx.getShellOption('posix') && !ctx.getShellOption('inherit_errexit')) {
+      cmdCtx.setShellOption('errexit', false);
+    }
+
     const pipe = await this.shell.pipeOpen();
     cmdCtx.redirectStdout(pipe);
 
@@ -1356,9 +1362,13 @@ export class AstExecutor {
         // `echo x | read v` sets v, as bash does without job control.
         const cmdCtx = isLastCommand && lastpipe ? ctx.spawnContext() : ctx.subContext();
 
-        // A stage failing is the pipeline's business, not the shell's: errexit
-        // looks at what finishPipeline makes of them all
-        cmdCtx.setErrexitSuppressed(true);
+        // A stage is a subshell, and `set -e` ends it as it would any — the
+        // last one under lastpipe is the shell, and ends the shell; the shell
+        // otherwise looks only at what finishPipeline makes of them all. Under
+        // `!` nothing in the pipeline is subject to it
+        if (node.bang) {
+          cmdCtx.setErrexitSuppressed(true);
+        }
 
         // If not the first command, redirect stdin from the last command's stdout
         if (lastCtx) {
@@ -1469,7 +1479,8 @@ export class AstExecutor {
       code = failed ?? 0;
     }
 
-    return this.applyErrexit(node.bang ? (code === 0 ? 1 : 0) : code, ctx);
+    // `! pipeline` is not subject to `set -e`, whatever its status
+    return node.bang ? (code === 0 ? 1 : 0) : this.applyErrexit(code, ctx);
   }
 
   /**
@@ -2128,6 +2139,11 @@ export class AstExecutor {
       }
     } else {
       throw new UnsupportedOperatorError(node.op, 'logical', this.getSourceLocation(node), this.currentSource);
+    }
+
+    // The right side sees the left's status: `false || echo $?` prints 1
+    if (!isExitSignal(left) && !isReturnSignal(left)) {
+      ctx.setParams({ '?': String(left) });
     }
 
     return await this.executeNode(node.right, ctx);
@@ -2884,12 +2900,24 @@ export class AstExecutor {
     return params[name] !== undefined ? [params[name]] : [];
   }
 
+  /** `$-`: the letters of the options that are on, in bash's order. */
+  private optionFlags(ctx: ExecContextIf): string {
+    return 'abefhikmnptuvxBCEHPT'
+      .split('')
+      .filter((letter) => SHELL_OPTION_FLAG_MAP[letter] && ctx.getShellOption(SHELL_OPTION_FLAG_MAP[letter]))
+      .join('');
+  }
+
   /**
    * The value of a parameter, which may name one array element (`a[0]`) or a
    * whole array (`a[@]`, joined for use as a single string).
    */
   protected async parameterValue(parameter: string | number, ctx: ExecContextIf, params: Record<string, string>): Promise<string> {
     const { name, subscript } = this.splitSubscript(parameter);
+
+    if (name === '-') {
+      return this.optionFlags(ctx);
+    }
 
     if (subscript === undefined) {
       // `$a` on an array is its first element, as in bash; on an associative
