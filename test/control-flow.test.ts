@@ -736,6 +736,47 @@ Deno.test('ANSI-C and locale strings in patterns', async () => {
 
 Deno.test('a case subject is neither split nor globbed', async () => {
   const shell = new TestShell();
-  const result = await shell.runAndCapture('set -- a b c; IFS=:; case $* in a:b:c) echo one;; esac; x=a:b; case $x in *\\:*) echo two;; esac; IFS=" "; case * in \\*) echo three;; esac');
+  const result = await shell.runAndCapture(
+    'set -- a b c; IFS=:; case $* in a:b:c) echo one;; esac; x=a:b; case $x in *\\:*) echo two;; esac; IFS=" "; case * in \\*) echo three;; esac',
+  );
   assertEquals(result.stdout, 'one\ntwo\nthree\n');
+});
+
+Deno.test('case: ;& falls through, ;;& tests on', async () => {
+  const shell = new TestShell();
+  const result = await shell.runAndCapture('case foobar in bar) echo skip ;; foo*) echo retest ;;& *bar) echo fall ;& x) echo in ;; y) echo no ;; esac');
+  assertEquals(result.stdout, 'retest\nfall\nin\n');
+});
+
+Deno.test('select', async (t) => {
+  await t.step('menu and prompt on stderr, the choice and REPLY set, 1 at the end of input', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('printf "2\\nzz\\n" | { select x in a b; do echo "x=$x REPLY=$REPLY"; done; echo "st=$?"; }');
+    assertEquals(result.stdout, 'x=b REPLY=2\nx= REPLY=zz\nst=1\n');
+    assertEquals(result.stderr, '1) a\n2) b\n#? #? #? \n');
+  });
+
+  await t.step('break ends it', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('select x in a b; do echo "$x"; break; done <<< 1; echo "st=$?"');
+    assertEquals(result.stdout, 'a\nst=0\n');
+  });
+});
+
+Deno.test('for without in goes over the positional parameters', async () => {
+  const shell = new TestShell();
+  const result = await shell.runAndCapture('set -- p q; for i; do echo "$i"; done; for j do echo "$j"; done');
+  assertEquals(result.stdout, 'p\nq\np\nq\n');
+});
+
+Deno.test('arithmetic commands bash allows', async () => {
+  const shell = new TestShell();
+  const result = await shell.runAndCapture('(( )); echo "e=$?"; if ((1)) then echo yes; fi; for ((i=0; i < 2; i++)) { echo $i; }; echo $((1 ? 20 : (x+=2)))');
+  assertEquals(result.stdout, 'e=1\nyes\n0\n1\n20\n');
+});
+
+Deno.test('! alone and repeated', async () => {
+  const shell = new TestShell();
+  const result = await shell.runAndCapture('!; echo $?; ! !; echo $?; ! ! true; echo $?; ! ! ! true; echo $?');
+  assertEquals(result.stdout, '1\n0\n0\n1\n');
 });

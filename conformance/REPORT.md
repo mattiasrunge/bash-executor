@@ -5,10 +5,10 @@ see [README.md](README.md) for what the scores mean.
 
 | Measure | Result |
 | --- | --- |
-| Test files that parse | 426 / 471 |
+| Test files that parse | 429 / 471 |
 | `run-*` scripts passing | 3 / 83 (real bash here: 74) |
-| Mean upstream score | 39% |
-| Mean stdout score | 42% |
+| Mean upstream score | 42% |
+| Mean stdout score | 45% |
 
 ## Gaps
 
@@ -21,19 +21,17 @@ that command, while the parser here takes the whole file at once. Some files hol
 | --- | --- | --- |
 | Unexpected 'OPEN_PAREN' | array2.sub, extglob.tests, extglob1.sub, extglob1a.sub, extglob3.sub, extglob4.sub, extglob6.sub, extglob7.sub, histexp5.sub, printf.tests, unicode1.sub | 11 |
 | Unclosed here-document | comsub-eof0.sub, comsub-eof2.sub, comsub-eof3.sub, heredoc.tests, heredoc3.sub, heredoc7.sub | 6 |
-| Unexpected 'CLOSE_PAREN' | arith.tests, case.tests, comsub5.sub, comsub6.sub, quote.tests | 5 |
-| Unexpected 'WORD' | arith-for.tests, comsub-posix5.sub, errors.tests, vredir2.sub | 4 |
+| Unexpected 'Rbrace' | coproc.tests, nameref11.sub, nameref18.sub, type4.sub | 4 |
+| Unexpected 'SEPARATOR_OP' | arith.tests, redir9.sub, source7.sub | 3 |
 | Unexpected 'CONTINUE' | assoc5.sub, posixexp.tests, quote1.sub | 3 |
-| Unexpected 'Rbrace' | coproc.tests, nameref18.sub, type4.sub | 3 |
-| Unexpected 'SEPARATOR_OP' | posix2syntax.sub, redir9.sub, source7.sub | 3 |
+| Unexpected 'WORD' | comsub-posix5.sub, errors.tests, vredir2.sub | 3 |
+| Unexpected 'CLOSE_PAREN' | comsub5.sub, comsub6.sub, quote.tests | 3 |
 | Unexpected 'LINEBREAK_IN' | alias3.sub, case4.sub | 2 |
+| Unexpected 'Esac' | case.tests, posix2.tests | 2 |
 | Unexpected 'In' | alias4.sub | 1 |
 | undefined is not iterable (cannot read property Symbol(Symbol.iterator)) | comsub-posix.tests | 1 |
 | Unexpected 'EOF' | comsub-posix1.sub | 1 |
-| Unexpected 'Do' | nameref11.sub | 1 |
-| Unexpected 'Esac' | posix2.tests | 1 |
 | Unclosed " | posixexp2.tests | 1 |
-| Unexpected 'NEWLINE_LIST' | posixpipe.tests | 1 |
 | Invalid code point N | unicode2.sub | 1 |
 
 ### Builtins the executor lacks
@@ -64,7 +62,9 @@ Bash builtins that reached the host as external commands.
 
 Reserved words the parser handed over as a command name.
 
-None.
+| Name | Tests | Times hit |
+| --- | --- | --- |
+| time | posixpipe | 6 |
 
 ### Syntax errors at run time
 
@@ -72,21 +72,21 @@ What bash-ts refused to parse as it ran: test scripts, the `.sub` files and `-c`
 
 | Name | Tests | Times hit |
 | --- | --- | --- |
-| Unexpected 'CLOSE_PAREN' | arith, case, comsub, quote | 5 |
-| Unexpected 'Rbrace' | coproc, nameref, type | 4 |
-| Unexpected 'WORD' | arith-for, errors, vredir | 3 |
+| Unexpected 'OPEN_PAREN' | extglob, histexpand, parser, printf | 4 |
+| Unexpected 'Rbrace' | coproc, nameref, type | 5 |
+| Unexpected 'WORD' | errors, parser, vredir | 4 |
 | Unexpected 'CONTINUE' | assoc, comsub-eof, posixexp | 3 |
-| Unexpected 'OPEN_PAREN' | extglob, histexpand, printf | 3 |
 | Unclosed here-document | comsub-eof, heredoc | 4 |
-| Unexpected 'SEPARATOR_OP' | parser, redir | 2 |
-| Unexpected 'LINEBREAK_IN' | alias | 1 |
+| Unexpected 'CLOSE_PAREN' | comsub, quote | 3 |
+| Unexpected 'SEPARATOR_OP' | arith, redir | 2 |
+| Unexpected 'LINEBREAK_IN' | alias, parser | 2 |
+| Unexpected 'Esac' | case, posix2 | 2 |
+| for (( … )) takes three expressions separated by ';', got "i=0; i &lt; 3" | arith-for | 1 |
+| for (( … )) takes three expressions separated by ';', got "i=0; i &lt; 3; i++; 7" | arith-for | 1 |
 | Unexpected 'In' | alias | 1 |
 | undefined is not iterable (cannot read property Symbol(Symbol.iterator)) | comsub-posix | 1 |
 | Unexpected 'EOF' | exportfunc | 1 |
-| Unexpected 'Do' | nameref | 1 |
-| Unexpected 'Esac' | posix2 | 1 |
 | Unclosed " | posixexp2 | 1 |
-| Unexpected 'NEWLINE_LIST' | posixpipe | 1 |
 
 ### Uncaught exceptions
 
@@ -111,25 +111,27 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | trap: command not found | dbg-support, dbg-support2, execscript, glob-test, histexpand, history, mapfile, redir, set-x, test, trap, varenv |
 | wait: command not found | assoc, execscript, func, procsub, redir, trap |
 | hash: command not found | assoc, builtins, execscript, rsh, type |
-| syntax error: Unexpected 'CLOSE_PAREN' | arith, case, comsub, quote |
 | foo: command not found | alias, execscript, exportfunc, nquote |
+| syntax error: Unexpected 'OPEN_PAREN' | extglob, histexpand, parser, printf |
 | the test suite should not be run as root | execscript, glob-test, new-exp, test |
-| syntax error: Unexpected 'WORD' | arith-for, errors, vredir |
 | unbound variable | array, new-exp, varenv |
 | syntax error: Unexpected 'CONTINUE' | assoc, comsub-eof, posixexp |
+| syntax error: Unexpected 'WORD' | errors, parser, vredir |
 | syntax error: Unexpected 'Rbrace' | coproc, nameref, type |
-| syntax error: Unexpected 'OPEN_PAREN' | extglob, histexpand, printf |
 | compgen: command not found | func, herestr, shopt |
 | ulimit: command not found | procsub, redir, vredir |
-| syntax error: Unclosed here-document | comsub-eof, heredoc |
+| syntax error: Unexpected 'SEPARATOR_OP' | arith, redir |
+| syntax error: Unexpected 'Esac' | case, posix2 |
+| syntax error: Unexpected 'LINEBREAK_IN' | alias, parser |
 | -a: command not found | builtins, execscript |
+| syntax error: Unexpected 'CLOSE_PAREN' | comsub, quote |
+| syntax error: Unclosed here-document | comsub-eof, heredoc |
 | a: not found | exp-tests, nameref |
 | history: command not found | histexpand, history |
 | !!: command not found | histexpand, history |
 | !e: command not found | histexpand, history |
-| foo: not found | nameref, varenv |
 | 'A[]]': not a valid identifier | assoc, quotearray |
-| syntax error: Unexpected 'SEPARATOR_OP' | parser, redir |
+| foo: not found | nameref, varenv |
 | /dev/tty: No such device or address (os error N): open '/dev/tty' | read, test |
 | 'x+=N': not a valid identifier | appendop |
 | second): command not found | array |
@@ -144,10 +146,8 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | x=newvalue: command not found | alias |
 | a: command not found | alias |
 | fooN: command not found | alias |
-| syntax error: Unexpected 'LINEBREAK_IN' | alias |
 | syntax error: Unexpected 'In' | alias |
 | myalias: command not found | alias |
-| aN: command not found | alias |
 
 ## Per test
 
@@ -157,15 +157,15 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | --- | --- | --- | --- | --- | --- |
 | alias | pass | no | 6% | 9% | 3,22c3,45 ⏎ &lt; ./alias.tests: qfoo: command not found ⏎ &lt; ./alias.tests: foo: command not found |
 | appendop | pass | no | 27% | 29% | 3a4 ⏎ &gt; 145 ⏎ 7,12c8,14 |
-| arith | pass | no | 0% | 0% | 1c1,263 ⏎ &lt; ./arith.tests: line 85: syntax error: Parse error on line 85: Unexpected 'CLOSE_PAREN' ⏎ --- |
-| arith-for | pass | no | 0% | 0% | 1c1,86 ⏎ &lt; ./arith-for.tests: line 108: syntax error: Parse error on line 108: Unexpected 'WORD' ⏎ --- |
+| arith | pass | no | 0% | 0% | 1c1,263 ⏎ &lt; ./arith.tests: line 180: syntax error: Parse error on line 180: Unexpected 'SEPARATOR_OP' ⏎ --- |
+| arith-for | pass | no | 67% | 67% | 13a14,51 ⏎ &gt; fx ()  ⏎ &gt; {  |
 | array | pass | no | 9% | 10% | 2,14c2,4 ⏎ &lt; ./array.tests: second): command not found ⏎ &lt; 127 |
 | array2 | pass | no | 96% | 96% | 26,27c26,29 ⏎ &lt; argv[1] = &lt;1&gt; ⏎ &lt; argv[1] = &lt;bobtom dick harryjoe&gt; |
 | assoc | pass | no | 23% | 23% | 1,18c1,26 ⏎ &lt; declare -A fluff=([foo]="one" [bar]="two") ⏎ &lt; declare -A fluff=([bar]="two") |
 | attr | pass | no | 12% | 14% | 1,7c1,10 ⏎ &lt; after f1:declare -a a=([0]="1") ⏎ &lt; after f2:declare -a a=([0]="2") |
 | braces | pass | no | 34% | 34% | 1,3c1,3 ⏎ &lt; ff{c,b,a} ⏎ &lt; f{d,e,f}g |
 | builtins | pass | no | 28% | 31% | 0a1 ⏎ &gt; 1000 ⏎ 13,17d13 |
-| case | pass | no | 0% | 0% | 1c1,63 ⏎ &lt; ./case.tests: line 17: syntax error: Parse error on line 17: Unexpected 'CLOSE_PAREN' ⏎ --- |
+| case | pass | no | 0% | 0% | 1c1,63 ⏎ &lt; ./case.tests: line 66: syntax error: Parse error on line 66: Unexpected 'Esac' ⏎ --- |
 | casemod | pass | no | 72% | 72% | 16,23c16,23 ⏎ &lt; Acknowledgement Oenophile ⏎ &lt; ACKNOWLEDGEMENT OENOPHILE |
 | complete | pass | no | 0% | 0% | 1,37c1,63 ⏎ &lt; ./complete.tests: complete: command not found ⏎ &lt; ./complete.tests: complete: command not found |
 | comsub | pass | no | 74% | 78% | 1c1 ⏎ &lt; ./comsub.tests: hijkl: command not found ⏎ --- |
@@ -212,12 +212,12 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | nquote3 | pass | no | 87% | 87% | 27,31c27,36 ⏎ &lt; argv[1] = &lt;&gt; ⏎ &lt; argv[1] = &lt;&gt; |
 | nquote4 | pass | no | 11% | 11% | 1,2c1 ⏎ &lt; argv[1] = &lt;abx{}cd&gt; ⏎ &lt; argv[1] = &lt;abx{41}cd&gt; |
 | nquote5 | pass | yes | 100% | 100% |  |
-| parser | pass | no | 11% | 20% | 2c2,16 ⏎ &lt; ./posix2syntax.sub: line 23: syntax error: Parse error on line 23: Unexpected 'SEPARATOR_OP' ⏎ --- |
+| parser | pass | no | 57% | 94% | 2c2 ⏎ &lt; bash5: line 1: syntax error: Parse error on line 1: Unexpected 'WORD' ⏎ --- |
 | posix2 | pass | no | 0% | 0% | 1c1,4 ⏎ &lt; ./posix2.tests: line 189: syntax error: Parse error on line 189: Unexpected 'Esac' ⏎ --- |
 | posixexp | pass | no | 0% | 0% | 1c1,308 ⏎ &lt; ./posixexp.tests: line 1: syntax error: Parse error on line 1: Unexpected 'CONTINUE' ⏎ --- |
 | posixexp2 | pass | no | 0% | 0% | 1c1,40 ⏎ &lt; ./posixexp2.tests: line 60: syntax error: Unclosed " ⏎ --- |
 | posixpat | pass | no | 94% | 94% | 24a25 ⏎ &gt; ok 2 ⏎ 26a28 |
-| posixpipe | env | no | 0% | 0% | 1c1,41 ⏎ &lt; ./posixpipe.tests: line 17: syntax error: Parse error on line 17: Unexpected 'NEWLINE_LIST' ⏎ --- |
+| posixpipe | env | no | 63% | 83% | 3,7d2 ⏎ &lt; /usr/bin/time: cannot run !: No such file or directory ⏎ &lt; Command exited with non-zero status 127 |
 | precedence | pass | no | 41% | 41% | 5,6c5,6 ⏎ &lt;  Truth 1 && Truth 2  \|\| Say 3   output=12 ⏎ &lt;  Truth 1 && Truth 2  \|\| Say 3   output=12 |
 | printf | pass | no | 0% | 0% | 1c1,298 ⏎ &lt; ./printf.tests: line 1: syntax error: Parse error on line 1: Unexpected 'OPEN_PAREN' ⏎ --- |
 | procsub | pass | no | 68% | 77% | 6c6 ⏎ &lt; /usr/bin/cat: '': No such file or directory ⏎ --- |

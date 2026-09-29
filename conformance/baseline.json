@@ -11,7 +11,7 @@
     "appendop.tests": true,
     "appendop1.sub": true,
     "appendop2.sub": true,
-    "arith-for.tests": false,
+    "arith-for.tests": true,
     "arith.tests": false,
     "arith1.sub": true,
     "arith2.sub": true,
@@ -343,7 +343,7 @@
     "parser.tests": true,
     "parser1.sub": true,
     "posix2.tests": false,
-    "posix2syntax.sub": false,
+    "posix2syntax.sub": true,
     "posixexp.tests": false,
     "posixexp1.sub": true,
     "posixexp2.sub": true,
@@ -355,7 +355,7 @@
     "posixexp7.sub": true,
     "posixexp8.sub": true,
     "posixpat.tests": true,
-    "posixpipe.tests": false,
+    "posixpipe.tests": true,
     "precedence.tests": true,
     "printf.tests": false,
     "printf1.sub": true,
@@ -493,9 +493,9 @@
       "reference": "pass"
     },
     "run-arith-for": {
-      "upstream": 0,
+      "upstream": 0.667,
       "pass": false,
-      "stdout": 0,
+      "stdout": 0.667,
       "reference": "pass"
     },
     "run-array": {
@@ -818,9 +818,9 @@
       "reference": "pass"
     },
     "run-parser": {
-      "upstream": 0.111,
+      "upstream": 0.571,
       "pass": false,
-      "stdout": 0.2,
+      "stdout": 0.941,
       "reference": "pass"
     },
     "run-posix2": {
@@ -848,9 +848,9 @@
       "reference": "pass"
     },
     "run-posixpipe": {
-      "upstream": 0,
+      "upstream": 0.634,
       "pass": false,
-      "stdout": 0,
+      "stdout": 0.829,
       "reference": "env"
     },
     "run-precedence": {

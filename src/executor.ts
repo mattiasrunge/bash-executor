@@ -21,6 +21,7 @@ import {
   type AstNodePipeline,
   type AstNodeRedirect,
   type AstNodeScript,
+  type AstNodeSelect,
   type AstNodeSubshell,
   type AstNodeUntil,
   type AstNodeWhile,
@@ -331,6 +332,8 @@ export class AstExecutor {
         return this.executeUntil(node as AstNodeUntil, ctx);
       case 'For':
         return this.executeFor(node as AstNodeFor, ctx);
+      case 'Select':
+        return this.executeSelect(node as AstNodeSelect, ctx);
       case 'ArithmeticFor':
         return this.executeArithmeticFor(node as AstNodeArithmeticFor, ctx);
       case 'Case':
@@ -774,13 +777,16 @@ export class AstExecutor {
     const redirects = [...(node.prefix ?? []), ...(node.suffix ?? [])].filter((arg) => arg.type === 'Redirect') as AstNodeRedirect[];
 
     if (!node?.name) {
+      // `!` on its own negates an empty command: 1
+      const status = node.bang ? (assignStatus === 0 ? 1 : 0) : assignStatus;
+
       if (redirects.length === 0) {
-        return this.applyErrexit(assignStatus, ctx);
+        return this.applyErrexit(status, ctx);
       }
 
       const pipes = await this.applyRedirections(ctx, redirects);
 
-      return this.withFileBridging(ctx, async () => await this.applyErrexit(assignStatus, ctx), pipes);
+      return this.withFileBridging(ctx, async () => await this.applyErrexit(status, ctx), pipes);
     }
 
     // Create an args list
@@ -1509,13 +1515,7 @@ export class AstExecutor {
     return this.withCompoundRedirections(node, parentCtx, async (ctx) => {
       // The whole word list is expanded once, before the first iteration, so the
       // body cannot change what is still to be iterated over.
-      const values: string[] = [];
-
-      for (const word of node.wordlist || []) {
-        const expanded = await this.resolveExpansions(word, ctx);
-
-        values.push(...expanded.values);
-      }
+      const values = await this.loopWords(node, ctx);
 
       const traceLine = `for ${node.name.text} in ${values.map((v) => this.quoteForTrace(v)).join(' ')}`;
 
@@ -1536,6 +1536,75 @@ export class AstExecutor {
       }
 
       return last;
+    });
+  }
+
+  /**
+   * The words a `for` or `select` goes over: its list, expanded, or without
+   * `in` the positional parameters, as `for i; do` has them.
+   */
+  private async loopWords(node: AstNodeFor | AstNodeSelect, ctx: ExecContextIf): Promise<string[]> {
+    if (!node.wordlist) {
+      const params = ctx.getParams();
+
+      return Array.from({ length: Number(params['#'] ?? 0) }, (_, i) => params[String(i + 1)] ?? '');
+    }
+
+    const values: string[] = [];
+
+    for (const word of node.wordlist) {
+      values.push(...(await this.resolveExpansions(word, ctx)).values);
+    }
+
+    return values;
+  }
+
+  /**
+   * `select name in words`: the words as a numbered menu on stderr, then the
+   * `PS3` prompt and a line from stdin for each pass. The line goes in `REPLY`
+   * and the word it numbers in `name` — empty for anything else — and the body
+   * runs; an empty line shows the menu again. The loop ends at `break` or at
+   * the end of the input, which leaves 1.
+   */
+  protected async executeSelect(node: AstNodeSelect, parentCtx: ExecContextIf): Promise<number> {
+    return this.withCompoundRedirections(node, parentCtx, async (ctx) => {
+      const values = await this.loopWords(node, ctx);
+      const width = String(values.length).length;
+      const menu = values.map((value, i) => `${String(i + 1).padStart(width)}) ${value}\n`).join('');
+      let showMenu = true;
+
+      if (values.length === 0) {
+        return 0;
+      }
+
+      while (true) {
+        const ps3 = ctx.getParams().PS3 ?? ctx.getEnv().PS3 ?? '#? ';
+
+        await this.shell.pipeWrite(ctx.getStderr(), (showMenu ? menu : '') + ps3).catch(() => {});
+        showMenu = false;
+
+        const line = this.shell.pipeReadLine ? await this.shell.pipeReadLine(ctx.getStdin()) : null;
+
+        if (line === null) {
+          await this.shell.pipeWrite(ctx.getStderr(), '\n').catch(() => {});
+          return 1;
+        }
+
+        if (line.trim() === '') {
+          showMenu = true;
+          continue;
+        }
+
+        const choice = /^\s*\d+\s*$/.test(line) ? Number(line) : 0;
+
+        ctx.setParams({ REPLY: line, [node.name.text]: choice >= 1 && choice <= values.length ? values[choice - 1] : '' });
+
+        const { stop, code } = await this.runLoopBody(node.do, ctx);
+
+        if (stop) {
+          return code;
+        }
+      }
     });
   }
 
@@ -1572,11 +1641,15 @@ export class AstExecutor {
       const clauseExpanded = await this.resolveExpansions(node.clause, ctx, undefined, { split: false, glob: false });
       const clauseValue = clauseExpanded.values.join(' ');
 
+      let status = 0;
+      // After `;&`, the next item's commands run without its patterns being tested
+      let fallThrough = false;
+
       for (const caseItem of node.cases || []) {
         // Check if any pattern matches (patterns undergo expansion and quote
         // removal: quoted characters match literally, unquoted globs are active)
-        let matched = false;
-        for (const pattern of caseItem.pattern) {
+        let matched = fallThrough;
+        for (const pattern of matched ? [] : caseItem.pattern) {
           const regex = await this.expandCasePattern(pattern, ctx);
           if (regex.test(clauseValue)) {
             matched = true;
@@ -1584,15 +1657,26 @@ export class AstExecutor {
           }
         }
 
-        if (matched) {
-          if (!caseItem.body) {
-            return 0;
-          }
-          return await this.executeNode(caseItem.body, ctx);
+        if (!matched) {
+          continue;
+        }
+
+        status = caseItem.body ? await this.executeNode(caseItem.body, ctx) : 0;
+
+        // exit, return, break and continue leave the case as they are
+        if (isExitSignal(status) || isReturnSignal(status) || status === BREAK_CODE || status === CONTINUE_CODE) {
+          return status;
+        }
+
+        fallThrough = caseItem.terminator === ';&';
+
+        // `;;` ends the case; `;;&` goes on testing the items after this one
+        if (!fallThrough && caseItem.terminator !== ';;&') {
+          return status;
         }
       }
 
-      return 0;
+      return status;
     });
   }
 
@@ -1746,6 +1830,12 @@ export class AstExecutor {
 
     // Parameters, command substitutions and quote removal, as in double quotes
     const expanded = (await this.expandHereDocument(part.expression, ctx)).replace(/(?<!\\)"/g, '');
+
+    // An empty expression is 0: `(( ))` fails quietly, `$(( ))` is 0
+    if (expanded.trim() === '') {
+      return 0;
+    }
+
     let ast: AstArithmeticExpression;
 
     try {
