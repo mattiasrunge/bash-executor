@@ -1513,6 +1513,10 @@ export class AstExecutor {
 
   protected async executeFor(node: AstNodeFor, parentCtx: ExecContextIf): Promise<number> {
     return this.withCompoundRedirections(node, parentCtx, async (ctx) => {
+      if (!(await this.loopNameIsValid(node, ctx))) {
+        return this.applyErrexit(1, ctx);
+      }
+
       // The whole word list is expanded once, before the first iteration, so the
       // body cannot change what is still to be iterated over.
       const values = await this.loopWords(node, ctx);
@@ -1537,6 +1541,17 @@ export class AstExecutor {
 
       return last;
     });
+  }
+
+  /** `for 1 in …` parses, and fails when it runs, as in bash. */
+  private async loopNameIsValid(node: AstNodeFor | AstNodeSelect, ctx: ExecContextIf): Promise<boolean> {
+    if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(node.name.text)) {
+      return true;
+    }
+
+    await this.shell.pipeWrite(ctx.getStderr(), `\`${node.name.text}': not a valid identifier\n`).catch(() => {});
+
+    return false;
   }
 
   /**
@@ -1568,6 +1583,10 @@ export class AstExecutor {
    */
   protected async executeSelect(node: AstNodeSelect, parentCtx: ExecContextIf): Promise<number> {
     return this.withCompoundRedirections(node, parentCtx, async (ctx) => {
+      if (!(await this.loopNameIsValid(node, ctx))) {
+        return this.applyErrexit(1, ctx);
+      }
+
       const values = await this.loopWords(node, ctx);
       const width = String(values.length).length;
       const menu = values.map((value, i) => `${String(i + 1).padStart(width)}) ${value}\n`).join('');

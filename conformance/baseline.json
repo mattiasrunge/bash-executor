@@ -152,7 +152,7 @@
     "dstack.tests": true,
     "dstack2.tests": true,
     "dynvar.tests": true,
-    "errors.tests": false,
+    "errors.tests": true,
     "errors1.sub": true,
     "errors2.sub": true,
     "errors3.sub": true,
@@ -365,7 +365,7 @@
     "procsub.tests": true,
     "procsub1.sub": true,
     "procsub2.sub": true,
-    "quote.tests": false,
+    "quote.tests": true,
     "quote1.sub": false,
     "quote2.sub": true,
     "quote3.sub": true,
@@ -437,7 +437,7 @@
     "type2.sub": true,
     "type3.sub": true,
     "type4.sub": false,
-    "unicode1.sub": false,
+    "unicode1.sub": true,
     "unicode2.sub": true,
     "unicode3.sub": true,
     "varenv.tests": true,
@@ -553,9 +553,9 @@
       "reference": "pass"
     },
     "run-comsub": {
-      "upstream": 0.743,
+      "upstream": 0.757,
       "pass": false,
-      "stdout": 0.782,
+      "stdout": 0.797,
       "reference": "pass"
     },
     "run-comsub-eof": {
@@ -631,9 +631,9 @@
       "reference": "env"
     },
     "run-exp-tests": {
-      "upstream": 0.277,
+      "upstream": 0.281,
       "pass": false,
-      "stdout": 0.347,
+      "stdout": 0.351,
       "reference": "pass"
     },
     "run-exportfunc": {
@@ -764,9 +764,9 @@
       "reference": "pass"
     },
     "run-more-exp": {
-      "upstream": 0.638,
+      "upstream": 0.663,
       "pass": false,
-      "stdout": 0.793,
+      "stdout": 0.809,
       "reference": "pass"
     },
     "run-nameref": {
@@ -872,9 +872,9 @@
       "reference": "pass"
     },
     "run-quote": {
-      "upstream": 0,
+      "upstream": 0.66,
       "pass": false,
-      "stdout": 0,
+      "stdout": 0.662,
       "reference": "pass"
     },
     "run-quotearray": {
@@ -927,9 +927,9 @@
       "reference": "pass"
     },
     "run-strip": {
-      "upstream": 0.783,
-      "pass": false,
-      "stdout": 0.783,
+      "upstream": 1,
+      "pass": true,
+      "stdout": 1,
       "reference": "pass"
     },
     "run-test": {

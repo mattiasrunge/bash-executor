@@ -5,10 +5,10 @@ see [README.md](README.md) for what the scores mean.
 
 | Measure | Result |
 | --- | --- |
-| Test files that parse | 448 / 471 |
-| `run-*` scripts passing | 3 / 83 (real bash here: 74) |
-| Mean upstream score | 46% |
-| Mean stdout score | 50% |
+| Test files that parse | 451 / 471 |
+| `run-*` scripts passing | 4 / 83 (real bash here: 74) |
+| Mean upstream score | 47% |
+| Mean stdout score | 51% |
 
 ## Gaps
 
@@ -22,12 +22,12 @@ that command, while the parser here takes the whole file at once. Some files hol
 | Unclosed here-document | comsub-eof0.sub, comsub-eof2.sub, comsub-eof3.sub, heredoc.tests, heredoc3.sub, heredoc7.sub | 6 |
 | Unexpected 'Rbrace' | coproc.tests, nameref11.sub, nameref18.sub, type4.sub | 4 |
 | Unexpected 'CONTINUE' | assoc5.sub, posixexp.tests, quote1.sub | 3 |
-| Unexpected 'CLOSE_PAREN' | comsub5.sub, comsub6.sub, quote.tests | 3 |
-| Unexpected 'OPEN_PAREN' | array2.sub, unicode1.sub | 2 |
-| Unexpected 'WORD' | errors.tests, vredir2.sub | 2 |
+| Unexpected 'CLOSE_PAREN' | comsub5.sub, comsub6.sub | 2 |
 | Unexpected 'In' | alias4.sub | 1 |
+| Unexpected 'OPEN_PAREN' | array2.sub | 1 |
 | Unexpected 'EOF' | comsub-posix1.sub | 1 |
 | Unclosed " | posixexp2.tests | 1 |
+| Unexpected 'WORD' | vredir2.sub | 1 |
 
 ### Builtins the executor lacks
 
@@ -67,13 +67,13 @@ What bash-ts refused to parse as it ran: test scripts, the `.sub` files and `-c`
 
 | Name | Tests | Times hit |
 | --- | --- | --- |
-| Unexpected 'CLOSE_PAREN' | comsub, parser, posix2, quote | 5 |
+| Unexpected 'CONTINUE' | assoc, comsub-eof, posixexp, quote | 4 |
 | Unexpected 'Rbrace' | coproc, nameref, type | 5 |
-| Unexpected 'WORD' | errors, parser, vredir | 4 |
-| Unexpected 'CONTINUE' | assoc, comsub-eof, posixexp | 3 |
+| Unexpected 'CLOSE_PAREN' | comsub, parser, posix2 | 4 |
 | Unclosed here-document | comsub-eof, heredoc | 4 |
 | Unexpected 'In' | alias, comsub-posix | 2 |
 | Unexpected 'EOF' | comsub-posix, exportfunc | 2 |
+| Unexpected 'WORD' | parser, vredir | 2 |
 | Unexpected 'Done' | comsub-posix | 4 |
 | Unexpected 'Esac' | comsub-posix | 2 |
 | for (( … )) takes three expressions separated by ';', got "i=0; i &lt; 3" | arith-for | 1 |
@@ -105,17 +105,17 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | wait: command not found | assoc, execscript, func, procsub, redir, trap |
 | hash: command not found | assoc, builtins, execscript, rsh, type |
 | foo: command not found | alias, execscript, exportfunc, nquote |
-| syntax error: Unexpected 'CLOSE_PAREN' | comsub, parser, posix2, quote |
+| syntax error: Unexpected 'CONTINUE' | assoc, comsub-eof, posixexp, quote |
 | the test suite should not be run as root | execscript, glob-test, new-exp, test |
 | unbound variable | array, new-exp, varenv |
-| syntax error: Unexpected 'CONTINUE' | assoc, comsub-eof, posixexp |
-| syntax error: Unexpected 'WORD' | errors, parser, vredir |
+| syntax error: Unexpected 'CLOSE_PAREN' | comsub, parser, posix2 |
 | syntax error: Unexpected 'Rbrace' | coproc, nameref, type |
 | compgen: command not found | func, herestr, shopt |
 | ulimit: command not found | procsub, redir, vredir |
 | syntax error: Unexpected 'In' | alias, comsub-posix |
 | -a: command not found | builtins, execscript |
 | syntax error: Unclosed here-document | comsub-eof, heredoc |
+| not a valid identifier | errors, parser |
 | syntax error: Unexpected 'EOF' | comsub-posix, exportfunc |
 | a: not found | exp-tests, nameref |
 | getopts: command not found | getopts, posix2 |
@@ -124,6 +124,7 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | !e: command not found | histexpand, history |
 | 'A[]]': not a valid identifier | assoc, quotearray |
 | foo: not found | nameref, varenv |
+| syntax error: Unexpected 'WORD' | parser, vredir |
 | /dev/tty: No such device or address (os error N): open '/dev/tty' | read, test |
 | 'x+=N': not a valid identifier | appendop |
 | second): command not found | array |
@@ -140,7 +141,6 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | myalias: command not found | alias |
 | aN: command not found | alias |
 | N ? N : x+=N: syntax error: Invalid left-hand side in assignment | arith |
-| N#N : syntax error: invalid arithmetic base | arith |
 
 ## Per test
 
@@ -161,7 +161,7 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | case | pass | no | 84% | 86% | 8,9c8,9 ⏎ &lt; hi1 ⏎ &lt; 2.0 |
 | casemod | pass | no | 72% | 72% | 16,23c16,23 ⏎ &lt; Acknowledgement Oenophile ⏎ &lt; ACKNOWLEDGEMENT OENOPHILE |
 | complete | pass | no | 0% | 0% | 1,37c1,63 ⏎ &lt; ./complete.tests: complete: command not found ⏎ &lt; ./complete.tests: complete: command not found |
-| comsub | pass | no | 74% | 78% | 1c1 ⏎ &lt; ./comsub.tests: hijkl: command not found ⏎ --- |
+| comsub | pass | no | 76% | 80% | 1c1 ⏎ &lt; ./comsub.tests: hijkl: command not found ⏎ --- |
 | comsub-eof | pass | no | 39% | 77% | 1c1 ⏎ &lt; ./comsub-eof0.sub: syntax error: Unclosed here-document ⏎ --- |
 | comsub-posix | pass | no | 77% | 90% | 62c62,63 ⏎ &lt; ./comsub-posix1.sub: line 1: syntax error: Parse error on line 1: Unexpected 'EOF' ⏎ --- |
 | cond | pass | no | 85% | 85% | 28a29,30 ⏎ &gt; returns: 0 ⏎ &gt; ./cond.tests: line 122: [[: 4+: syntax error: operand expected (error token is "+") |
@@ -172,9 +172,9 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | dirstack | pass | no | 34% | 45% | 1,7c1,11 ⏎ &lt; pushd: /tmp/xxx-notthere: No such file or directory ⏎ &lt; pushd: no other directory |
 | dollars | pass | no | 68% | 68% | 25,26c25,28 ⏎ &lt; argv[1] = &lt;1&gt; ⏎ &lt; argv[1] = &lt;bobtom dick harryjoe&gt; |
 | dynvar | pass | no | 31% | 40% | 2,4c2,5 ⏎ &lt; BASH_ARGV0 mismatch: hello (./dynvar.tests) ⏎ &lt; BASH_ARGV0 mismatch: arg0 (./dynvar.tests) |
-| errors | pass | no | 0% | 0% | 1c1,208 ⏎ &lt; ./errors.tests: line 36: syntax error: Parse error on line 36: Unexpected 'WORD' ⏎ --- |
+| errors | pass | no | 0% | 0% | 1,23c1,208 ⏎ &lt; alias: -x: not found ⏎ &lt; alias: hoowah: not found |
 | execscript | env | no | 64% | 80% | 1d0 ⏎ &lt; execscript: the test suite should not be run as root ⏎ 9c8 |
-| exp-tests | pass | no | 28% | 35% | 41d40 ⏎ &lt; argv[1] = &lt;&gt; ⏎ 48,705c47,51 |
+| exp-tests | pass | no | 28% | 35% | 41,42c41 ⏎ &lt; argv[1] = &lt;&gt; ⏎ &lt; argv[1] = &lt;"Hello world!"&gt; |
 | exportfunc | pass | no | 0% | 0% | 1,4c1,14 ⏎ &lt; bash: foo: command not found ⏎ &lt; bash: foo-a: command not found |
 | extglob | pass | no | 83% | 85% | 44c44 ⏎ &lt; @(*) ⏎ --- |
 | extglob2 | pass | no | 90% | 90% | 45,46c45 ⏎ &lt; 1:  [[ foo = !(foo)* ]] ⏎ &lt; Test failed:  [[ foo = !(foo)* ]] |
@@ -196,7 +196,7 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | jobs | env | timeout | 0% | 4% | timeout |
 | lastpipe | pass | yes | 100% | 100% |  |
 | mapfile | pass | no | 61% | 62% | 16a17,32 ⏎ &gt; a[0] Abcdefghijklmnop ⏎ &gt; [1] aBcdefghijklmnop |
-| more-exp | pass | no | 64% | 79% | 2c2 ⏎ &lt; argv[1] = &lt;aaa&gt; ⏎ --- |
+| more-exp | pass | no | 66% | 81% | 2c2 ⏎ &lt; argv[1] = &lt;aaa&gt; ⏎ --- |
 | nameref | pass | no | 16% | 20% | 1,3c1,5 ⏎ &lt; bar ⏎ &lt; flow |
 | new-exp | pass | no | 10% | 19% | 1d0 ⏎ &lt; new-exp.tests: the test suite should not be run as root ⏎ 3,4c2 |
 | nquote | pass | no | 71% | 77% | 7,10c7,10 ⏎ &lt; argv[1] = &lt;$hello,&gt; ⏎ &lt; argv[2] = &lt;$world&gt; |
@@ -205,7 +205,7 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | nquote3 | pass | no | 87% | 87% | 27,31c27,36 ⏎ &lt; argv[1] = &lt;&gt; ⏎ &lt; argv[1] = &lt;&gt; |
 | nquote4 | pass | no | 11% | 11% | 1,2c1 ⏎ &lt; argv[1] = &lt;abx{}cd&gt; ⏎ &lt; argv[1] = &lt;abx{41}cd&gt; |
 | nquote5 | pass | yes | 100% | 100% |  |
-| parser | pass | no | 62% | 100% | 2c2 ⏎ &lt; bash5: line 1: syntax error: Parse error on line 1: Unexpected 'WORD' ⏎ --- |
+| parser | pass | no | 62% | 100% | 2c2 ⏎ &lt; 'invalid-name': not a valid identifier ⏎ --- |
 | posix2 | pass | no | 18% | 29% | 2,7c2,4 ⏎ &lt; OPTIND initial value test failed ⏎ &lt; ./posix2.tests: getopts: command not found |
 | posixexp | pass | no | 0% | 0% | 1c1,308 ⏎ &lt; ./posixexp.tests: line 1: syntax error: Parse error on line 1: Unexpected 'CONTINUE' ⏎ --- |
 | posixexp2 | pass | no | 0% | 0% | 1c1,40 ⏎ &lt; ./posixexp2.tests: line 60: syntax error: Unclosed " ⏎ --- |
@@ -214,7 +214,7 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | precedence | pass | no | 41% | 41% | 5,6c5,6 ⏎ &lt;  Truth 1 && Truth 2  \|\| Say 3   output=12 ⏎ &lt;  Truth 1 && Truth 2  \|\| Say 3   output=12 |
 | printf | pass | no | 40% | 42% | 1,2c1,2 ⏎ &lt; printf: usage: printf format [arguments] ⏎ &lt; printf: usage: printf format [arguments] |
 | procsub | pass | no | 68% | 77% | 6c6 ⏎ &lt; /usr/bin/cat: '': No such file or directory ⏎ --- |
-| quote | pass | no | 0% | 0% | 1c1,182 ⏎ &lt; ./quote.tests: line 1: syntax error: Parse error on line 1: Unexpected 'CLOSE_PAREN' ⏎ --- |
+| quote | pass | no | 66% | 66% | 13,14c13 ⏎ &lt; foo\ ⏎ &lt; bar |
 | quotearray | pass | no | 32% | 37% | 1,6c1,8 ⏎ &lt; declare -A assoc=([x],b[$(echo uname &gt;&2)]="1") ⏎ &lt; declare -A assoc=([x],b[$(echo uname &gt;&2)]="2") |
 | read | env | timeout | 31% | 39% | timeout |
 | redir | pass | no | 55% | 60% | 2c2 ⏎ &lt; /tmp/redir-test: cannot overwrite existing file ⏎ --- |
@@ -223,7 +223,7 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | set-e | pass | no | 88% | 88% | 17c17 ⏎ &lt; 0 bad ⏎ --- |
 | set-x | pass | no | 76% | 83% | 0a1,2 ⏎ &gt; + (( i=0 )) ⏎ &gt; + (( i&lt;=5 )) |
 | shopt | pass | no | 83% | 84% | 1c1 ⏎ &lt; shopt: -z: invalid option ⏎ --- |
-| strip | pass | no | 78% | 78% | 10,11c10,12 ⏎ &lt; 'abababanbababab  ' ⏎ &lt; 'nnnn' |
+| strip | pass | yes | 100% | 100% |  |
 | test | env | no | 88% | 92% | 1d0 ⏎ &lt; test-tests: the test suite should not be run as root ⏎ 5c4 |
 | tilde | pass | no | 61% | 61% | 2c2 ⏎ &lt; /home/mattias/foo ⏎ --- |
 | tilde2 | pass | no | 57% | 57% | 2,3c2,3 ⏎ &lt;  ⏎ &lt;  |

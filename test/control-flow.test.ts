@@ -780,3 +780,10 @@ Deno.test('! alone and repeated', async () => {
   const result = await shell.runAndCapture('!; echo $?; ! !; echo $?; ! ! true; echo $?; ! ! ! true; echo $?');
   assertEquals(result.stdout, '1\n0\n0\n1\n');
 });
+
+Deno.test('for with a name that is not one fails when it runs', async () => {
+  const shell = new TestShell();
+  const result = await shell.runAndCapture('for 1 in a b; do echo x; done; echo "st=$?"');
+  assertEquals(result.stdout, 'st=1\n');
+  assertEquals(result.stderr, "`1': not a valid identifier\n");
+});
