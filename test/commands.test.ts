@@ -110,3 +110,29 @@ Deno.test('Command with Arguments', async (t) => {
     assertEquals(result.stdout, 'count:2');
   });
 });
+
+Deno.test('command names that expand to zero or several words', async (t) => {
+  await t.step('an empty name leaves the next word as the command', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('empty=; $empty echo hi');
+    assertEquals(result.stdout, 'hi\n');
+  });
+
+  await t.step('a name that splits runs the first word with the rest as arguments', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('cmd="echo a b"; $cmd c');
+    assertEquals(result.stdout, 'a b c\n');
+  });
+
+  await t.step('nothing left is no command, and takes the substitution status', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('$(false); echo "s=$?"; $unset; echo "s=$?"');
+    assertEquals(result.stdout, 's=1\ns=0\n');
+  });
+
+  await t.step('the redirections of an empty command still happen', async () => {
+    const shell = new TestShell();
+    await shell.runAndCapture('$unset > /tmp/made');
+    assertEquals(shell.getFile('/tmp/made'), '');
+  });
+});

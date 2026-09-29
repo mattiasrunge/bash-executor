@@ -709,6 +709,9 @@ export class AstExecutor {
     const literalName = node.name && !node.name.expansion?.length ? node.name.text : '';
     const declaration = DECLARATION_COMMANDS.has(literalName);
 
+    // Words expand left to right, the name first: `$(a) $(b)` runs a before b
+    const expandedName = await this.resolveExpansions(node.name, ctx, subs);
+
     for (const arg of node.suffix?.filter((arg) => arg.type === 'Word') || []) {
       const assignment = declaration ? utils.parseAssignmentWord(arg.text) : null;
 
@@ -725,12 +728,21 @@ export class AstExecutor {
     // Apply IO redirections
     const redirectPipes = await this.applyRedirections(ctx, node.suffix?.filter((arg) => arg.type === 'Redirect'), subs);
 
-    // Expand command
-    const expandedName = await this.resolveExpansions(node.name, ctx);
+    // A name that expands to nothing leaves the next word to be the command, and
+    // one that expands to several makes the rest arguments: `$empty echo hi` runs
+    // echo, `$cmd` with cmd='ls -l' runs ls. When every word is gone there is no
+    // command at all, only the redirections, and the status is that of the last
+    // command substitution.
+    const words = [...expandedName.values, ...args];
 
-    // TODO: We can fail for any number of things above, should we apply the bang inversion to those as well?
+    if (words.length === 0) {
+      return this.withFileBridging(ctx, async () => await this.applyErrexit(expandedName.status ?? 0, ctx), redirectPipes)
+        .finally(() => this.finishProcessSubstitutions(subs, ctx));
+    }
 
-    const cmdName = expandedName.values[0]; // TODO: Can we expand to more than one value here?
+    const cmdName = words[0];
+
+    args.splice(0, args.length, ...words.slice(1));
 
     await this.trace(parentCtx, [cmdName, ...(args || [])].map((word) => this.quoteForTrace(word)).join(' '));
 
