@@ -129,7 +129,7 @@ export class ExecContext implements ExecContextIf {
     return new ExecContext(this);
   }
 
-  subContext(): ExecContextIf {
+  subContext(subshell = false): ExecContextIf {
     const ctx = new ExecContext();
 
     ctx.setCwd(this.getCwd());
@@ -177,8 +177,8 @@ export class ExecContext implements ExecContextIf {
     // The descriptors above 2 the subshell starts with, the shell's and its command's own
     ctx.fds = this.visibleFds();
 
-    // A process of its own, as far as $BASHPID tells
-    ctx.subshellPid = String(nextSubshellPid++);
+    // A process of its own, as far as $BASHPID tells, or still the shell's
+    ctx.subshellPid = subshell ? String(nextSubshellPid++) : this.subshellPid;
 
     // A subshell inherits the shell's options and cannot write them back
     ctx.options = { ...this.getShellOptions() };

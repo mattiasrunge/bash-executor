@@ -826,7 +826,7 @@ export class AstExecutor {
     } else if (this.shell.executeBackground) {
       await this.shell.executeBackground(ctx, run, command);
     } else {
-      handled(run(ctx.subContext()));
+      handled(run(ctx.subContext(true)));
     }
 
     this.coprocs.push(record);
@@ -1423,7 +1423,7 @@ export class AstExecutor {
       // `exec >file &` runs in a background subshell: it opens the file there,
       // and the shell's own descriptors stay as they were
       if (node.async) {
-        const code = await this.runCommand({ ...node, async: false }, parentCtx.subContext());
+        const code = await this.runCommand({ ...node, async: false }, parentCtx.subContext(true));
 
         return isExitSignal(code) ? getExitCode(code) : code;
       }
@@ -1705,7 +1705,7 @@ export class AstExecutor {
    */
   protected async finishProcessSubstitutions(subs: ProcessSubstitutions, ctx: ExecContextIf): Promise<void> {
     for (const { path, ast } of subs.deferred) {
-      const cmdCtx = ctx.subContext();
+      const cmdCtx = ctx.subContext(true);
 
       cmdCtx.redirectStdin(path);
 
@@ -1805,7 +1805,7 @@ export class AstExecutor {
 
   protected async executeSubshell(node: AstNodeSubshell, parentCtx: ExecContextIf): Promise<number> {
     // `( … )` is a subshell: env/cwd changes inside must not escape to the parent.
-    const ctx = parentCtx.subContext();
+    const ctx = parentCtx.subContext(true);
     // A subshell is a top level of its own: an aborted command ends it, not the
     // shell, and so does an unset parameter under `set -u`
     const result = await this.withFileBridging(ctx, () => {
@@ -1917,7 +1917,7 @@ export class AstExecutor {
    * corpus, say — hung the shell for good.
    */
   private async substitute(commandAST: AstNode, ctx: ExecContextIf): Promise<{ code: number; output: string }> {
-    const cmdCtx = ctx.subContext();
+    const cmdCtx = ctx.subContext(true);
     cmdCtx.setLocalEnv({ TERM: '0' });
 
     // `$( )` does not inherit `set -e`, unless in POSIX mode or under
@@ -1966,7 +1966,7 @@ export class AstExecutor {
         // into the parent (or race the other concurrently-running stages). Under
         // `shopt -s lastpipe` the last one runs in the shell itself, so
         // `echo x | read v` sets v, as bash does without job control.
-        const cmdCtx = isLastCommand && lastpipe ? ctx.spawnContext() : ctx.subContext();
+        const cmdCtx = isLastCommand && lastpipe ? ctx.spawnContext() : ctx.subContext(true);
 
         // A stage is a subshell, and `set -e` ends it as it would any — the
         // last one under lastpipe is the shell, and ends the shell; the shell
@@ -3926,7 +3926,7 @@ export class AstExecutor {
     }
 
     // A subshell: what it writes goes to the file, and nothing it sets leaks out
-    const cmdCtx = ctx.subContext();
+    const cmdCtx = ctx.subContext(true);
 
     cmdCtx.setErrexitSuppressed(true);
     cmdCtx.redirectStdout(path);

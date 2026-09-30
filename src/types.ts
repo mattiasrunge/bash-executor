@@ -464,9 +464,12 @@ export interface ExecContextIf {
 
   /**
    * Spawns a new execution context for sub shells.
+   * @param subshell - A subshell as bash has one, `( )`, `$( )`, a pipeline's
+   *                   stage: it gets a `$BASHPID` of its own. Without it the
+   *                   context is only kept apart, and is still the same shell.
    * @returns {ExecContextIf} The new execution context.
    */
-  subContext(): ExecContextIf;
+  subContext(subshell?: boolean): ExecContextIf;
 
   /** Gets the cancellation signal inherited by work in this context. */
   getAbortSignal(): AbortSignal | undefined;

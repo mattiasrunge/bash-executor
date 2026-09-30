@@ -1,4 +1,5 @@
 import { assertEquals } from '@std/assert';
+import { ExecContext } from '../src/context.ts';
 import { TestShell } from './lib/test-shell.ts';
 
 Deno.test('Variable Assignment', async (t) => {
@@ -235,4 +236,12 @@ Deno.test('BASHPID is $$ in the shell, another number in a subshell, and not to 
   const result = await shell.runAndCapture('echo $BASHPID; [ "$(echo $BASHPID)" != 4242 ] && echo other; BASHPID=1; echo $BASHPID');
 
   assertEquals(result.stdout, '4242\nother\n4242\n');
+});
+
+Deno.test("a host's own subcontext is still the shell, as far as BASHPID tells", async () => {
+  const ctx = new ExecContext();
+
+  ctx.setParams({ '$': '4242' });
+
+  assertEquals([ctx.subContext().getParams().BASHPID, ctx.subContext(true).getParams().BASHPID !== '4242'], ['4242', true]);
 });

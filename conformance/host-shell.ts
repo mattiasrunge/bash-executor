@@ -146,7 +146,7 @@ export class RealShell implements ShellIf {
     start: async (ctx: ExecContextIf, run: (jobCtx: ExecContextIf) => Promise<number>): Promise<JobHandle> => {
       const pid = String(this.nextJobPid++);
       const record: JobRecord = { children: new Set(), abort: new AbortController(), finished: false };
-      const jobCtx = ctx.subContext();
+      const jobCtx = ctx.subContext(true);
 
       jobCtx.setAbortSignal(record.abort.signal);
       this.jobRecords.set(pid, record);
