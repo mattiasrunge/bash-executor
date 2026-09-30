@@ -3022,6 +3022,38 @@ export class AstExecutor {
     // An empty value is matched as it is, `${x/*/y}` with x empty is y
     if (value === '') return full('') ? replacement('') : value;
 
+    // Text that is no pattern at all, `${s//a/b}`: found as text
+    if (!isGlobPattern(glob, true)) {
+      const text = unquoteGlob(glob);
+
+      return xp.globally ? value.split(text).join(replacement(text)) : value.replace(text, () => replacement(text));
+    }
+
+    // Without an extended pattern's alternatives, the longest match at a place
+    // is the one a greedy regular expression finds there: one try per place
+    if (!/(^|[^\\])[@*+?!]\(/.test(glob)) {
+      const sticky = new RegExp(globToRegexSource(glob), 'y');
+      let out = '';
+      let at = 0;
+
+      while (at < value.length) {
+        sticky.lastIndex = at;
+
+        const found = sticky.exec(value)?.[0];
+
+        if (found) {
+          out += replacement(found);
+          at += found.length;
+
+          if (!xp.globally) return out + value.slice(at);
+        } else {
+          out += value[at++];
+        }
+      }
+
+      return out;
+    }
+
     let out = '';
     let at = 0;
 
