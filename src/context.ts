@@ -87,12 +87,13 @@ export class ExecContext implements ExecContextIf {
   private vars = new Map<string, Variable>();
   private fns: Record<string, FunctionDef> = {};
   private traps: Record<string, string> = {};
-  private jobTable = new JobTable();
+  // The shell's own, in its root context alone: a spawned one asks the root
+  private jobTable!: JobTable;
   private getoptsState?: GetoptsState;
   private umask = 0o022;
   private dirStack: string[] = [];
   private fds: Record<string, string> = {};
-  private options: Record<string, boolean> = { ...DEFAULT_SHELL_OPTIONS, ...DEFAULT_SHOPT_OPTIONS };
+  private options!: Record<string, boolean>;
   private abortSignal?: AbortSignal;
   // undefined means "whatever the shell above says"; set explicitly, it decides
   private errexitSuppressed?: boolean;
@@ -122,6 +123,13 @@ export class ExecContext implements ExecContextIf {
       // The shell's own tables, as bash shows them: the aliases and the hashed commands
       this.vars.set('BASH_ALIASES', { kind: 'assoc', value: {}, attrs: new Set() });
       this.vars.set('BASH_CMDS', { kind: 'assoc', value: {}, attrs: new Set() });
+
+      // What only the shell has, made once for it rather than for every command's context
+      this.jobTable = new JobTable();
+      this.options = { ...DEFAULT_SHELL_OPTIONS, ...DEFAULT_SHOPT_OPTIONS };
+      this.dynamic = new Set(DYNAMIC_PARAMS);
+      this.secondsFrom = Date.now();
+      this.randomSeed = Math.floor(Math.random() * 2 ** 31);
     }
   }
 
@@ -292,10 +300,10 @@ export class ExecContext implements ExecContextIf {
    * bash's dynamic variables, in the shell's own context: their value is made
    * each time one is read. One that is unset is an ordinary variable from then on.
    */
-  private dynamic = new Set(DYNAMIC_PARAMS);
-  private secondsFrom = Date.now();
+  private dynamic!: Set<string>;
+  private secondsFrom = 0;
   private secondsBase = 0;
-  private randomSeed = Math.floor(Math.random() * 2 ** 31);
+  private randomSeed = 0;
   /** The value RANDOM gave last, which bash never gives twice in a row */
   private lastRandom = -1;
   /** A subshell's own BASHPID; the shell's is `$$` */
@@ -400,6 +408,38 @@ export class ExecContext implements ExecContextIf {
   }
 
   /**
+   * One parameter as `$name` gives it, without making all of them: a special or
+   * positional one, the nearest variable of that name (what a nameref refers
+   * to), exported or not, or a dynamic one. An array is not one here, as it is
+   * not in `getParams`.
+   */
+  getParam(name: string): string | undefined {
+    if (isSpecialParam(name)) {
+      // A function frame's positional parameters are the whole set, as in getParams
+      const positional = /^([1-9]\d*|#|@|\*)$/.test(name);
+
+      for (let scope: ExecContext | undefined = this; scope; scope = scope.parent) {
+        if (name in scope.special) return scope.special[name];
+        if (positional && scope.parent && '#' in scope.special) return undefined;
+      }
+
+      return undefined;
+    }
+
+    const found = this.lookup(name);
+
+    if (found) {
+      if (found.variable.attrs.has('n')) return this.scalarOf(name);
+
+      return typeof found.variable.value === 'string' ? found.variable.value : undefined;
+    }
+
+    const root = this.root();
+
+    return root.dynamic.has(name) ? root.dynamicValue(name) : undefined;
+  }
+
+  /**
    * Assign where bash would: dynamic scoping sends a name to the nearest context
    * that has it — a function's `local x` takes `x=2` in that function and in
    * what it calls — and to the shell itself when none does. The positional
@@ -428,7 +468,8 @@ export class ExecContext implements ExecContextIf {
       }
     }
 
-    return this.getParams();
+    // What was set, not every parameter: making those on every assignment cost more than the rest of a command
+    return Object.fromEntries(Object.entries(values).filter((entry): entry is [string, string] => entry[1] !== null));
   }
 
   private paramOwner(key: string): ExecContext {
@@ -464,13 +505,8 @@ export class ExecContext implements ExecContextIf {
       }
     }
 
-    const own: Record<string, string> = { ...this.special };
-
-    for (const [name, variable] of this.vars) {
-      if (typeof variable.value === 'string') own[name] = variable.value;
-    }
-
-    return own;
+    // What was set; the scope's own are `getOwnVariables`, not made on every assignment
+    return Object.fromEntries(Object.entries(values).filter((entry): entry is [string, string] => entry[1] !== null));
   }
 
   getArray(name: string): string[] | undefined {

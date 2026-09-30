@@ -487,9 +487,9 @@
       "reference": "pass"
     },
     "run-arith": {
-      "upstream": 0.972,
+      "upstream": 0.975,
       "pass": false,
-      "stdout": 0.967,
+      "stdout": 0.972,
       "reference": "pass"
     },
     "run-arith-for": {

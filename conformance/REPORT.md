@@ -111,6 +111,9 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | ever: command not found | alias |
 | 'alias long_comment='# for x in '' | alias |
 | myalias: command not found | alias |
+| complete: command not found | complete |
+| 'switch foo in foo) echo ok N;; esac' | comsub |
+| 'comsubN)' | comsub |
 | ﷑second): command not found | array |
 | *: syntax error: operand expected (error token is "*") | array |
 | c: readonly variable | array |
@@ -120,9 +123,6 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | foo: [ab]]=bar: must use subscript when assigning associative array | array |
 | $(echo total N): syntax error: operand expected (error token is "$(echo total N)") | array |
 | c: N: must use subscript when assigning associative array | array |
-| d: $a: must use subscript when assigning associative array | array |
-| unset: scalar: not an array variable | array |
-| a\[N\]: syntax error: invalid arithmetic operator (error token is "\[N\]") | array |
 
 ## Per test
 
@@ -132,7 +132,7 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | --- | --- | --- | --- | --- | --- |
 | alias | pass | no | 47% | 49% | 3,4c3,4 ⏎ &lt; ./alias.tests: line 1: quux: command not found ⏎ &lt; baz |
 | appendop | pass | yes | 100% | 100% |  |
-| arith | pass | no | 97% | 97% | 196d195 ⏎ &lt;  ⏎ 198,199d196 |
+| arith | pass | no | 98% | 97% | 196c196 ⏎ &lt;  ⏎ --- |
 | arith-for | pass | no | 97% | 97% | 67c67,68 ⏎ &lt; bash: -c: line 1: syntax error: for (( … )) takes three expressions separated by ';', got " i=0; "i &lt; 3" " ⏎ --- |
 | array | pass | no | 81% | 84% | 2,3c2,4 ⏎ &lt; ./array.tests: line 28: ﷑second): command not found ⏎ &lt; 127 |
 | array2 | pass | yes | 100% | 100% |  |

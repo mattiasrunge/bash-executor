@@ -246,8 +246,7 @@ export class AstExecutor {
     // Said already, where it happened: an abort that carries no message
     if (!message) return;
 
-    const params = ctx.getParams();
-    const prefix = this.lineNumbers ? `${this.sourceFrame.name ?? params['0'] ?? 'bash'}: line ${params.LINENO ?? 0}: ` : '';
+    const prefix = this.lineNumbers ? `${this.sourceFrame.name ?? ctx.getParam('0') ?? 'bash'}: line ${ctx.getParam('LINENO') ?? 0}: ` : '';
     const text = message.endsWith('\n') ? message : `${message}\n`;
 
     // A usage message is said without the place, as bash does
@@ -276,7 +275,7 @@ export class AstExecutor {
     // `main` is the script itself, shown only once something is above it
     ctx.setArray('FUNCNAME', [name, ...(names?.length ? names : sources?.length ? ['main'] : [])]);
     ctx.setArray('BASH_SOURCE', [source, ...(sources ?? [])]);
-    ctx.setArray('BASH_LINENO', [ctx.getParams().LINENO ?? '0', ...(lines ?? [])]);
+    ctx.setArray('BASH_LINENO', [ctx.getParam('LINENO') ?? '0', ...(lines ?? [])]);
 
     try {
       return await run();
@@ -1007,7 +1006,7 @@ export class AstExecutor {
         const unterminated = r.heredoc.unterminated;
 
         if (unterminated) {
-          const line = ctx.getParams().LINENO;
+          const line = ctx.getParam('LINENO');
 
           ctx.setParams({ LINENO: String(this.sourceFrame.base + unterminated.endLine) });
           await this.diagnose(
@@ -1144,7 +1143,7 @@ export class AstExecutor {
     const numbered = (fd: string) => ({ ...r, numberIo: { ...r.numberIo!, text: fd } }) as AstNodeRedirect;
 
     if ((r.op.text === '>&' || r.op.text === '<&') && r.file.text === '-') {
-      const fd = ctx.getParams()[name] ?? '';
+      const fd = ctx.getParam(name) ?? '';
 
       if (!/^\d+$/.test(fd)) {
         throw new RedirectionError(`${name}: ambiguous redirect`);
@@ -1418,8 +1417,8 @@ export class AstExecutor {
 
     if (ctx.getTrap('DEBUG') && (this.functionDepth === 0 || ctx.getShellOption('functrace'))) {
       // The trap's own lines are its own: what runs after it is still on this one
-      const line = ctx.getParams().LINENO;
-      const trapped = await this.runTrap('DEBUG', ctx, Number(ctx.getParams()['?'] ?? 0));
+      const line = ctx.getParam('LINENO');
+      const trapped = await this.runTrap('DEBUG', ctx, Number(ctx.getParam('?') ?? 0));
 
       if (line !== undefined) ctx.setParams({ LINENO: line });
       if (isExitSignal(trapped)) return trapped;
@@ -1665,7 +1664,7 @@ export class AstExecutor {
         const execute = (script: string, opts: { file?: string } = {}) =>
           opts.file !== undefined
             ? this.inCallFrame(ctx, 'source', opts.file, () => this.inSourceFrame({ base: 0, name: opts.file }, () => this.executeSource(script, ctx)))
-            : this.inSourceFrame({ base: Number(ctx.getParams().LINENO ?? 1) - 1, name: this.sourceFrame.name }, () => this.executeSource(script, ctx));
+            : this.inSourceFrame({ base: Number(ctx.getParam('LINENO') ?? 1) - 1, name: this.sourceFrame.name }, () => this.executeSource(script, ctx));
         const result = await builtin(ctx, args || [], this.shell, execute, {
           expandSubscript: (subscript, keyed) => this.arithmeticSubscript(subscript, keyed, ctx),
           reportSyntaxError: (err, where, source) => this.reportSyntaxError(ctx, err, where, source),
@@ -1786,7 +1785,7 @@ export class AstExecutor {
     });
 
     // FUNCNEST caps how deep functions may call: going deeper aborts the whole command
-    const funcnest = Number.parseInt(ctx.getParams().FUNCNEST ?? ctx.getEnv().FUNCNEST ?? '', 10);
+    const funcnest = Number.parseInt(ctx.getParam('FUNCNEST') ?? '', 10);
 
     if (funcnest > 0 && this.functionDepth >= funcnest) {
       throw new CommandAbortError(`${fn.name}: maximum function nesting level exceeded (${funcnest})`, { code: 'E_FUNCNEST' });
@@ -1802,7 +1801,7 @@ export class AstExecutor {
 
     // Back from the function, $LINENO is the line it was called on again: an
     // ERR trap for a failing call says that line, not the body's last
-    const callLine = ctx.getParams().LINENO;
+    const callLine = ctx.getParam('LINENO');
     let result: number;
 
     // The function's own redirections, `f() { …; } > log`, are expanded and opened each time it runs
@@ -1823,7 +1822,7 @@ export class AstExecutor {
 
       // A function with a `local OPTIND` hands the caller's getopts back as it
       // found it, so a getopts loop can call one that has a loop of its own
-      if ('OPTIND' in fnCtx.setLocalParams({})) ctx.setGetoptsState(getopts);
+      if ('OPTIND' in fnCtx.getOwnVariables()) ctx.setGetoptsState(getopts);
     }
 
     // An error that ends the function is said where it happened; a return is back on the call's line
@@ -2219,7 +2218,7 @@ export class AstExecutor {
     // Its lines count on from the line that set it off, as an eval's do —
     // `trap 'echo "failed on $LINENO"' ERR` — bar the EXIT trap's, which bash
     // counts from 1
-    const line = ctx.getParams().LINENO;
+    const line = ctx.getParam('LINENO');
     const base = name === 'EXIT' ? 0 : Number(line ?? 1) - 1;
 
     try {
@@ -2254,7 +2253,7 @@ export class AstExecutor {
       return false;
     }
 
-    await this.runTrap(name, ctx, Number(ctx.getParams()['?'] ?? 0));
+    await this.runTrap(name, ctx, Number(ctx.getParam('?') ?? 0));
 
     return true;
   }
@@ -2314,8 +2313,8 @@ export class AstExecutor {
       return;
     }
 
-    const params = ctx.getParams();
-    let ps4 = params.PS4 ?? ctx.getEnv().PS4 ?? '+ ';
+    const params = this.paramView(ctx);
+    let ps4 = params.PS4 ?? '+ ';
 
     // PS4 is expanded, `PS4='+${LINENO}: '`, and its first character said once
     // more for each command substitution the command runs in
@@ -2774,7 +2773,7 @@ export class AstExecutor {
       }
 
       while (true) {
-        const ps3 = ctx.getParams().PS3 ?? ctx.getEnv().PS3 ?? '#? ';
+        const ps3 = ctx.getParam('PS3') ?? '#? ';
 
         await this.shell.pipeWrite(ctx.getStderr(), (showMenu ? menu : '') + ps3).catch(() => {});
         showMenu = false;
@@ -3346,7 +3345,8 @@ export class AstExecutor {
 
     if (assoc) return { set: subscript in assoc };
 
-    const array = ctx.getArray(name) ?? (ctx.getParams()[name] !== undefined ? [ctx.getParams()[name]] : undefined);
+    const scalar = ctx.getParam(name);
+    const array = ctx.getArray(name) ?? (scalar !== undefined ? [scalar] : undefined);
     const index = Number(await evaluateArithmeticText(subscript, contextVariables(ctx)));
     const at = index < 0 ? (array?.length ?? 0) + index : index;
 
@@ -3384,7 +3384,7 @@ export class AstExecutor {
     // Variable tests
     if (op === '-v') {
       // -v name: whether it is set — an array by its element 0, `a[k]` by that element, `a[@]` by having any
-      const params = { ...ctx.getEnv(), ...ctx.getParams() };
+      const params = this.paramView(ctx);
       return await this.isParameterSet(arg, ctx, params);
     }
 
@@ -3654,10 +3654,28 @@ export class AstExecutor {
    * splitting and is not the same as an unset one.
    */
   protected getIfs(ctx: ExecContextIf): string {
-    const params = ctx.getParams();
-    const env = ctx.getEnv();
+    return ctx.getParam('IFS') ?? utils.DEFAULT_IFS;
+  }
 
-    return params['IFS'] ?? env['IFS'] ?? utils.DEFAULT_IFS;
+  /**
+   * The parameters and the environment as one record, as `{ ...getEnv(),
+   * ...getParams() }` would be, but read a name at a time: expanding `$x` made
+   * every variable of every scope, which was most of what a simple command cost.
+   * Listing it — `${!prefix*}` — still makes them all.
+   */
+  protected paramView(ctx: ExecContextIf): Record<string, string> {
+    const all = () => ({ ...ctx.getEnv(), ...ctx.getParams() });
+
+    return new Proxy({} as Record<string, string>, {
+      get: (_, key) => typeof key === 'string' ? ctx.getParam(key) : undefined,
+      has: (_, key) => typeof key === 'string' && ctx.getParam(key) !== undefined,
+      ownKeys: () => Reflect.ownKeys(all()),
+      getOwnPropertyDescriptor: (_, key) => {
+        const value = typeof key === 'string' ? ctx.getParam(key) : undefined;
+
+        return value === undefined ? undefined : { value, enumerable: true, configurable: true, writable: false };
+      },
+    });
   }
 
   /**
@@ -3979,7 +3997,7 @@ export class AstExecutor {
       return true;
     }
 
-    const previous = append ? ctx.getParams()[name] ?? ctx.getEnv()[name] ?? '' : '';
+    const previous = append ? ctx.getParam(name) ?? '' : '';
     let assigned = previous + value;
 
     // `declare -i` makes the value arithmetic, evaluated now: x=1+2 is 3, x+=4 adds
@@ -3994,7 +4012,7 @@ export class AstExecutor {
       // Before a command it is in that command's environment too, exported for it alone
       ctx.setLocalParams({ [name]: assigned });
       ctx.setLocalEnv({ [name]: assigned });
-    } else if (ctx.getShellOption('allexport') || (ctx.getParams()[name] === undefined && name in ctx.getEnv())) {
+    } else if (ctx.getShellOption('allexport') || ctx.getVariable(name)?.attributes.includes('x')) {
       // `set -a` makes a plain assignment an exported one, so a child sees it;
       // so does assigning a variable that is exported already
       ctx.setEnv({ [name]: assigned });
@@ -4332,7 +4350,7 @@ export class AstExecutor {
       (ctx.getAssoc(name) ? 'A' : ctx.getArray(name) ? 'a' : '') +
       (ctx.isIntegerVar(name) ? 'i' : '') +
       (ctx.isReadonlyVar(name) ? 'r' : '') +
-      (name in ctx.getEnv() && ctx.getParams()[name] === undefined ? 'x' : '');
+      (name in ctx.getEnv() && ctx.getParam(name) === undefined ? 'x' : '');
 
     switch (letter) {
       case 'Q':
@@ -4564,7 +4582,7 @@ export class AstExecutor {
         continue;
       }
 
-      const params = { ...ctx.getEnv(), ...ctx.getParams() };
+      const params = this.paramView(ctx);
 
       if (!(await this.isParameterSet(name, ctx, params))) {
         if (ctx.getShellOption('nounset')) throw new UnboundVariableError(`!${name}`);
@@ -4627,10 +4645,7 @@ export class AstExecutor {
           throw new CommandAbortError(`${written}: bad substitution`, { code: 'E_BAD_SUBSTITUTION' });
         }
 
-        const params = {
-          ...ctx.getEnv(),
-          ...ctx.getParams(),
-        };
+        const params = this.paramView(ctx);
 
         // $@ and ${arr[@]} produce one field per element even inside quotes,
         // which a single substituted string cannot express — so the elements go
@@ -4904,9 +4919,8 @@ export class AstExecutor {
    * error.
    */
   private async expandPathnames(ctx: ExecContextIf, values: string[], patterns: string[]): Promise<string[]> {
-    const params = ctx.getParams();
-    const env = ctx.getEnv();
-    const locale = params.LC_ALL || env.LC_ALL || params.LC_COLLATE || env.LC_COLLATE || params.LANG || env.LANG || 'C';
+    const params = this.paramView(ctx);
+    const locale = params.LC_ALL || params.LC_COLLATE || params.LANG || 'C';
     const globignore = params.GLOBIGNORE ?? '';
     const options: GlobOptions = {
       dotglob: ctx.getShellOption('dotglob'),

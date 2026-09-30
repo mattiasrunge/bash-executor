@@ -662,19 +662,23 @@ export function contextVariables(ctx: ExecContextIf, expand?: (subscript: string
 
   return {
     get: (name, subscript) => {
+      const value = ctx.getParam(name);
+
+      // A scalar, the common case, without looking for arrays of the name
+      if (subscript === undefined && value !== undefined) return Promise.resolve(value);
+
       const assoc = ctx.getAssoc(name);
       const array = ctx.getArray(name);
-      const params = { ...ctx.getEnv(), ...ctx.getParams() };
 
       if (subscript === undefined) {
-        return Promise.resolve(params[name] ?? array?.[0] ?? assoc?.['0']);
+        return Promise.resolve(array?.[0] ?? assoc?.['0']);
       }
 
       if (assoc) return Promise.resolve(assoc[subscript]);
       if (array) return Promise.resolve(array[indexOf(subscript, array.length)]);
 
       // `x[0]` on a scalar is the scalar
-      return Promise.resolve(Number(subscript) === 0 ? params[name] : undefined);
+      return Promise.resolve(Number(subscript) === 0 ? value : undefined);
     },
     set: (name, subscript, value) => {
       if (subscript === undefined) {

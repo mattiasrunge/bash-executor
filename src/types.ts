@@ -541,16 +541,23 @@ export interface ExecContextIf {
   getParams: () => Record<string, string>;
 
   /**
+   * One parameter as `$name` gives it — a special or positional one, a
+   * variable's value, exported or not, or a dynamic one — without making the
+   * whole set `getParams` does. Undefined when unset, and for an array.
+   */
+  getParam: (name: string) => string | undefined;
+
+  /**
    * Sets the parameters.
    * @param {Record<string, string | null>} values - The parameters to set.
-   * @returns {Record<string, string>} The updated parameters.
+   * @returns {Record<string, string>} The values set, the ones that were not unset.
    */
   setParams: (values: Record<string, string | null>) => Record<string, string>;
 
   /**
    * Sets the local parameters.
    * @param {Record<string, string | null>} values - The local parameters to set.
-   * @returns {Record<string, string>} The updated local parameters.
+   * @returns {Record<string, string>} The values set, the ones that were not unset.
    */
   setLocalParams: (
     values: Record<string, string | null>,
