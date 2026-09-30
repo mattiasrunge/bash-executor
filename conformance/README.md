@@ -69,7 +69,9 @@ file that parsed no longer does, a pass turns into a failure, or a score drops b
 more than `tolerance` in [`config.json`](config.json) (timing-dependent tests
 wobble a little). `conformance:update` refuses to write a lower baseline unless
 given `--allow-drop`, so update it when a change improves the scores and commit
-it with that change.
+it with that change. A test listed under `flaky`, with the reason, fails now and
+then for reasons of its own: its drop is printed as `FLAKY` and neither fails the
+run nor lowers its baseline.
 
 ## Known limits of the harness
 

@@ -101,15 +101,13 @@ Deno.test('read builtin', async (t) => {
       assertEquals(ctx.getParams()['path'], 'path\\file');
     });
 
-    await t.step('without -r processes backslashes', async () => {
+    await t.step('without -r a backslash makes the next character itself', async () => {
       const ctx = new ExecContext();
-      // Input: hello\nworld (backslash-n), which becomes hello<newline>world
-      // Then IFS splits on newline, giving ["hello", "world"]
-      // Single variable gets words joined with space: "hello world"
-      const shell = createMockShell('hello\\nworld\n');
-      const result = await readBuiltin(ctx, ['text'], shell, noopExecute);
+      // As in bash: `\n` is an n, and `\ ` a blank that does not split
+      const shell = createMockShell('hello\\nworld\\ x y\n');
+      const result = await readBuiltin(ctx, ['text', 'rest'], shell, noopExecute);
       assertEquals(result.code, 0);
-      assertEquals(ctx.getParams()['text'], 'hello world');
+      assertEquals([ctx.getParams()['text'], ctx.getParams()['rest']], ['hellonworld x', 'y']);
     });
   });
 
@@ -195,4 +193,28 @@ Deno.test('read -u fd', async (t) => {
     assertEquals(result.exitCode, 0);
     assertEquals(result.stdout, 'one two three \n');
   });
+});
+
+Deno.test('read splits a line as bash does', async (t) => {
+  // Each expected value is bash 5.2's
+  const cases: Array<[string, string]> = [
+    ['IFS=: read -r user pass uid rest <<< "root:x:0:0:root:/root:/bin/bash"; echo "[$user][$pass][$uid][$rest]"', '[root][x][0][0:root:/root:/bin/bash]'],
+    ['IFS== read -r key value <<< "url=a=b"; echo "[$key][$value]"', '[url][a=b]'],
+    ['IFS=, read -r a b <<< "1,2,"; echo "[$a][$b]"', '[1][2]'],
+    ['IFS=, read -r a b <<< "1,2,,"; echo "[$a][$b]"', '[1][2,,]'],
+    ['IFS=": " read x y <<< ":::"; echo "($x)($y)"', '()(::)'],
+    ['IFS=": " read x y <<< " a : b : c "; echo "($x)($y)"', '(a)(b : c)'],
+    ['IFS=: read x y z <<< "a::b"; echo "[$x][$y][$z]"', '[a][][b]'],
+    ['IFS=, read -r -a arr <<< "a,,b,"; echo "${#arr[@]} [${arr[1]}]"', '3 []'],
+    ['read a b <<< "  one   two  three  "; echo "[$a][$b]"', '[one][two  three]'],
+    ['read a b <<< "x\\ y z"; echo "[$a][$b]"', '[x y][z]'],
+    ['read <<< "  a \\b  "; echo "[$REPLY]"', '[  a b  ]'],
+    ['IFS= read a b <<< "  p q  "; echo "[$a][$b]"', '[  p q  ][]'],
+  ];
+
+  for (const [script, expected] of cases) {
+    await t.step(script, async () => {
+      assertEquals((await new TestShell().runAndCapture(script)).stdout, `${expected}\n`);
+    });
+  }
 });

@@ -297,3 +297,40 @@ Deno.test('set -e and $? as bash has them', async (t) => {
     assertEquals(await run('set -e; ! { false; echo A $?; } | cat; echo "B $?"'), 'A 1\nB 1\nst 0\n');
   });
 });
+
+Deno.test('set -x shows what bash shows', async (t) => {
+  // Each expected trace is bash 5.2's for the same script
+  await t.step('PS4 expanded, and once more of its first character in a $( )', async () => {
+    const result = await new TestShell().runAndCapture('PS4="+[\\${FUNCNAME[0]:-main}] "; set -x; f() { echo a; }; f; x=$(echo b)');
+
+    assertEquals(result.stderr, '+[main] f\n+[f] echo a\n++[main] echo b\n+[main] x=b\n');
+  });
+
+  await t.step('(( )), each part of for (( )), case, and each [[ ]] term reached', async () => {
+    const result = await new TestShell().runAndCapture(
+      'x=5; y="a b"; set -x; (( x + $x )); for (( i = $x; i < 6; i++ )); do :; done; case "$y" in *) ;; esac; [[ $x -eq 5 && -n $y ]]; [[ ! -z $y || $x == 4* ]]',
+    );
+
+    assertEquals(
+      result.stderr,
+      [
+        '((  x + 5  ))',
+        '(( i = 5 ))',
+        '(( i < 6 ))',
+        ':',
+        '(( i++  ))',
+        '(( i < 6 ))',
+        'case "$y" in',
+        '[[ 5 -eq 5 ]]',
+        '[[ -n a b ]]',
+        '[[ ! -z a b ]]',
+      ].map((line) => `+ ${line}\n`).join(''),
+    );
+  });
+});
+
+Deno.test('$LINENO in a trap is the line that set it off', async () => {
+  const result = await new TestShell().runAndCapture('trap \'echo "err $LINENO"\' ERR\necho one\nfalse\ng() { false; }\n\ng');
+
+  assertEquals(result.stdout, 'one\nerr 3\nerr 6\n');
+});

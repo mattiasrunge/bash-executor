@@ -25,7 +25,14 @@ const WORK = join(CACHE, 'work');
 const BASH_TS = join(HERE, 'bash-ts');
 const REAL_BASH = '/bin/bash';
 
-type Config = { bash: string; timeoutSeconds: number; tolerance: number; exclude: Record<string, string> };
+type Config = {
+  bash: string;
+  timeoutSeconds: number;
+  tolerance: number;
+  exclude: Record<string, string>;
+  /** Tests that fail now and then for reasons of their own: a drop is said, not held against the run */
+  flaky?: Record<string, string>;
+};
 
 const config: Config = JSON.parse(await Deno.readTextFile(join(HERE, 'config.json')));
 const SRC = join(CACHE, `bash-${config.bash}`);
@@ -595,9 +602,14 @@ async function main(): Promise<number> {
 
   const drops = compare(baseline, parse, tests);
 
+  // A flaky test's drop is said, and neither fails the run nor lowers its baseline
+  const flaky = (drop: string) => Object.keys(config.flaky ?? {}).some((name) => drop.startsWith(`${name}:`));
+
   for (const drop of drops) {
-    console.error(`REGRESSION ${drop}`);
+    console.error(`${flaky(drop) ? 'FLAKY' : 'REGRESSION'} ${drop}`);
   }
+
+  drops.splice(0, drops.length, ...drops.filter((drop) => !flaky(drop)));
 
   if (flags.update) {
     if (drops.length > 0 && !flags.allowDrop) {
@@ -613,8 +625,9 @@ async function main(): Promise<number> {
 
     for (const [name, scores] of Object.entries(tests)) {
       const { firstDiff: _, ...kept } = scores;
+      const before = baseline.tests[name];
 
-      next.tests[name] = kept;
+      next.tests[name] = before && name in (config.flaky ?? {}) && (before.pass && !kept.pass || kept.upstream < before.upstream) ? before : kept;
     }
 
     next.tests = Object.fromEntries(Object.entries(next.tests).sort(([a], [b]) => a.localeCompare(b)));

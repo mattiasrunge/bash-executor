@@ -266,3 +266,11 @@ Deno.test('dynamic scoping of assignments', async (t) => {
     assertEquals(result.stdout, '1\n2\n3\n');
   });
 });
+
+Deno.test("a function's own redirections are opened each time it runs", async () => {
+  const shell = new TestShell();
+  const result = await shell.runAndCapture('g() { echo "into $1"; } > /out.txt; g 1; g 2; f() { echo gone; } >> /dev/null; f; echo after');
+
+  assertEquals(result.stdout, 'after\n');
+  assertEquals(shell.getFile('/out.txt'), 'into 2\n');
+});

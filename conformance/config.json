@@ -6,5 +6,8 @@
     "run-all": "the driver itself, not a test",
     "run-minimal": "the driver for a minimal-config bash, not a test",
     "run-gprof": "profiling driver, not a test"
+  },
+  "flaky": {
+    "run-printf": "printf3.sub reads the clock twice and compares, so a second ticking over between the two fails it under load"
   }
 }

@@ -36,7 +36,7 @@ import { JOB_BUILTINS } from './builtins/jobs.ts';
 import { type BuiltinRegistry, SPECIAL_BUILTINS } from './builtins/types.ts';
 import { assocKeys } from './builtins/variable-listing.ts';
 import type { ErrorPosition } from './errors.ts';
-import { exportedFunctionName, exportedFunctionText, functionEnvName } from './print-command.ts';
+import { exportedFunctionName, exportedFunctionText, type FunctionDefinition, functionEnvName } from './print-command.ts';
 import { singleQuoted } from './quote.ts';
 import { syntaxErrorLines } from './syntax-error.ts';
 import { cpuTime, timeReport } from './timing.ts';
@@ -826,7 +826,7 @@ export class AstExecutor {
     } else if (this.shell.executeBackground) {
       await this.shell.executeBackground(ctx, run, command);
     } else {
-      handled(run(ctx.subContext(true)));
+      handled(run(this.subshellOf(ctx)));
     }
 
     this.coprocs.push(record);
@@ -982,8 +982,7 @@ export class AstExecutor {
         continue;
       }
 
-      const { values } = await this.resolveExpansions(r.file, ctx, subs);
-      const target = values[0] || r.file.text;
+      const target = await this.redirectTarget(r, ctx, subs);
 
       // `N<file`, `N>file` and the like, N above 2: a descriptor of its own, not a path
       // to reopen at every write, closed with the command
@@ -1097,6 +1096,32 @@ export class AstExecutor {
     return temporary;
   }
 
+  /**
+   * The word of a redirection, expanded as bash expands it: to one word, or
+   * the redirection is ambiguous — `> $f` with f='a b', or f empty, writes
+   * nowhere rather than to `a`. Pathname expansion takes part, except in
+   * POSIX mode, and must find one file too. A here-string's word is one word
+   * whatever it holds, neither split nor globbed.
+   */
+  private async redirectTarget(r: AstNodeRedirect, ctx: ExecContextIf, subs?: ProcessSubstitutions): Promise<string> {
+    // A here-document's word is its delimiter, not a file
+    if (r.heredoc) return r.file.text;
+
+    if (r.op.text === '<<<') {
+      const { values } = await this.resolveExpansions(r.file, ctx, subs, { split: false, glob: false });
+
+      return values.join(' ');
+    }
+
+    const { values } = await this.resolveExpansions(r.file, ctx, subs, { glob: !ctx.getShellOption('posix') });
+
+    if (values.length !== 1) {
+      throw new RedirectionError(`${r.file.text}: ambiguous redirect`);
+    }
+
+    return values[0];
+  }
+
   /** Descriptors `applyRedirections` opened for one command, closed rather than removed when it is done. */
   private redirectHandles = new Set<string>();
 
@@ -1186,8 +1211,7 @@ export class AstExecutor {
     }
 
     const fd = r.numberIo?.text ?? (r.op.text === '<' ? '0' : '1');
-    const { values } = await this.resolveExpansions(r.file, ctx);
-    const target = values[0] || r.file.text;
+    const target = await this.redirectTarget(r, ctx);
 
     if (r.op.text === '>') {
       await this.assertClobberable(ctx, target);
@@ -1229,6 +1253,9 @@ export class AstExecutor {
    * refused. What else a host cannot open it reports as it opens it.
    */
   protected async assertOpenable(ctx: ExecContextIf, target: string, mode: 'read' | 'write'): Promise<void> {
+    // No name is no file, `> ""`, whatever the host would make of it
+    if (target === '') throw new RedirectionError(': No such file or directory');
+
     if (!this.shell.testPath || this.shell.isPipe(target) || /^\d+$/.test(target) || target.startsWith('/dev/')) return;
 
     const exists = (path: string) => this.shell.testPath!(ctx, path, 'EXISTS').catch(() => true);
@@ -1423,7 +1450,7 @@ export class AstExecutor {
       // `exec >file &` runs in a background subshell: it opens the file there,
       // and the shell's own descriptors stay as they were
       if (node.async) {
-        const code = await this.runCommand({ ...node, async: false }, parentCtx.subContext(true));
+        const code = await this.runCommand({ ...node, async: false }, this.subshellOf(parentCtx));
 
         return isExitSignal(code) ? getExitCode(code) : code;
       }
@@ -1705,7 +1732,7 @@ export class AstExecutor {
    */
   protected async finishProcessSubstitutions(subs: ProcessSubstitutions, ctx: ExecContextIf): Promise<void> {
     for (const { path, ast } of subs.deferred) {
-      const cmdCtx = ctx.subContext(true);
+      const cmdCtx = this.subshellOf(ctx, true);
 
       cmdCtx.redirectStdin(path);
 
@@ -1726,7 +1753,7 @@ export class AstExecutor {
    */
   protected async executeFunction(
     ctx: ExecContextIf,
-    fn: { name: string; body: AstNodeCompoundList; ctx: ExecContextIf },
+    fn: { name: string; body: AstNodeCompoundList; ctx: ExecContextIf; definition?: FunctionDefinition },
     args: string[],
   ): Promise<number> {
     // bash scopes dynamically: the frame hangs off the caller, so a function
@@ -1772,10 +1799,23 @@ export class AstExecutor {
     this.functionDepth++;
     this.loopDepth = 0;
 
+    // Back from the function, $LINENO is the line it was called on again: an
+    // ERR trap for a failing call says that line, not the body's last
+    const callLine = ctx.getParams().LINENO;
     let result: number;
 
+    // The function's own redirections, `f() { …; } > log`, are expanded and opened each time it runs
+    const redirections = fn.definition?.node.redirections;
+    const run = async () => {
+      if (!redirections?.length) return await this.executeNode(fn.body, fnCtx);
+
+      const pipes = await this.applyRedirections(fnCtx, redirections);
+
+      return await this.withFileBridging(fnCtx, () => this.executeNode(fn.body, fnCtx), pipes);
+    };
+
     try {
-      result = await this.inCallFrame(fnCtx, fn.name, this.functionSources.get(fn.body) ?? 'environment', () => this.executeNode(fn.body, fnCtx));
+      result = await this.inCallFrame(fnCtx, fn.name, this.functionSources.get(fn.body) ?? 'environment', run);
     } finally {
       this.functionDepth--;
       this.loopDepth = loopDepth;
@@ -1785,6 +1825,9 @@ export class AstExecutor {
       if ('OPTIND' in fnCtx.setLocalParams({})) ctx.setGetoptsState(getopts);
     }
 
+    // An error that ends the function is said where it happened; a return is back on the call's line
+    if (callLine !== undefined) ctx.setParams({ LINENO: callLine });
+
     // Convert return signal to actual return code
     const code = isReturnSignal(result) ? getReturnCode(result) : result;
 
@@ -1792,7 +1835,8 @@ export class AstExecutor {
     // or the caller's under `set -T`: functions do not inherit it otherwise
     const inherited = ctx.getShellOption('functrace') || ctx.getTrap('RETURN') !== returnTrap;
 
-    if (!isExitSignal(code) && inherited) {
+    // Not while a trap runs, though: a function the DEBUG trap calls sets off no RETURN trap
+    if (!isExitSignal(code) && inherited && this.runningTraps.size === 0) {
       const trapped = await this.runTrap('RETURN', fnCtx, code);
 
       if (isExitSignal(trapped)) {
@@ -1805,7 +1849,7 @@ export class AstExecutor {
 
   protected async executeSubshell(node: AstNodeSubshell, parentCtx: ExecContextIf): Promise<number> {
     // `( … )` is a subshell: env/cwd changes inside must not escape to the parent.
-    const ctx = parentCtx.subContext(true);
+    const ctx = this.subshellOf(parentCtx);
     // A subshell is a top level of its own: an aborted command ends it, not the
     // shell, and so does an unset parameter under `set -u`
     const result = await this.withFileBridging(ctx, () => {
@@ -1917,7 +1961,7 @@ export class AstExecutor {
    * corpus, say — hung the shell for good.
    */
   private async substitute(commandAST: AstNode, ctx: ExecContextIf): Promise<{ code: number; output: string }> {
-    const cmdCtx = ctx.subContext(true);
+    const cmdCtx = this.subshellOf(ctx, true);
     cmdCtx.setLocalEnv({ TERM: '0' });
 
     // `$( )` does not inherit `set -e`, unless in POSIX mode or under
@@ -1966,7 +2010,7 @@ export class AstExecutor {
         // into the parent (or race the other concurrently-running stages). Under
         // `shopt -s lastpipe` the last one runs in the shell itself, so
         // `echo x | read v` sets v, as bash does without job control.
-        const cmdCtx = isLastCommand && lastpipe ? ctx.spawnContext() : ctx.subContext(true);
+        const cmdCtx = isLastCommand && lastpipe ? ctx.spawnContext() : this.subshellOf(ctx);
 
         // A stage is a subshell, and `set -e` ends it as it would any — the
         // last one under lastpipe is the shell, and ends the shell; the shell
@@ -2171,8 +2215,14 @@ export class AstExecutor {
     this.runningTraps.add(name);
     ctx.setParams({ '?': String(status) });
 
+    // Its lines count on from the line that set it off, as an eval's do —
+    // `trap 'echo "failed on $LINENO"' ERR` — bar the EXIT trap's, which bash
+    // counts from 1
+    const line = ctx.getParams().LINENO;
+    const base = name === 'EXIT' ? 0 : Number(line ?? 1) - 1;
+
     try {
-      const code = await this.executeSource(action, ctx);
+      const code = await this.inSourceFrame({ base, name: this.sourceFrame.name }, () => this.executeSource(action, ctx));
 
       if (isExitSignal(code)) {
         return code;
@@ -2184,6 +2234,7 @@ export class AstExecutor {
     } finally {
       this.runningTraps.delete(name);
       ctx.setParams({ '?': String(status) });
+      if (line !== undefined) ctx.setParams({ LINENO: line });
     }
 
     return status;
@@ -2222,6 +2273,32 @@ export class AstExecutor {
     return isExitSignal(code) ? getExitCode(code) : status;
   }
 
+  /** How deep in substitutions each subshell the executor started is, by its context. */
+  private substitutionDepths = new WeakMap<ExecContextIf, number>();
+
+  /** A subshell of `ctx`, and one level deeper in substitutions when it is one — `$( )`, `<( )` or `>( )`. */
+  private subshellOf(ctx: ExecContextIf, substitution = false): ExecContextIf {
+    const sub = ctx.subContext(true);
+
+    this.substitutionDepths.set(sub, this.substitutionDepth(ctx) + (substitution ? 1 : 0));
+
+    return sub;
+  }
+
+  /** How many command substitutions `ctx` runs inside, found on the subshell it belongs to. */
+  private substitutionDepth(ctx: ExecContextIf): number {
+    for (let at: ExecContextIf | undefined = ctx; at; at = at.getParent()) {
+      const depth = this.substitutionDepths.get(at);
+
+      if (depth !== undefined) return depth;
+    }
+
+    return 0;
+  }
+
+  /** Set while PS4 is expanded, so that what it runs is not traced in turn. */
+  private expandingPs4 = false;
+
   /**
    * `set -x`: write what is about to run to the shell's stderr.
    *
@@ -2232,14 +2309,34 @@ export class AstExecutor {
    * skipped rather than made to work: the trace is a diagnostic, not output.
    */
   protected async trace(ctx: ExecContextIf, line: string): Promise<void> {
-    if (!ctx.getShellOption('xtrace')) {
+    if (!ctx.getShellOption('xtrace') || this.expandingPs4) {
       return;
     }
 
     const params = ctx.getParams();
-    const ps4 = params.PS4 ?? ctx.getEnv().PS4 ?? '+ ';
+    let ps4 = params.PS4 ?? ctx.getEnv().PS4 ?? '+ ';
 
-    await this.shell.pipeWrite(ctx.getStderr(), `${ps4}${line}\n`).catch(() => {});
+    // PS4 is expanded, `PS4='+${LINENO}: '`, and its first character said once
+    // more for each command substitution the command runs in
+    if (/[$`\\]/.test(ps4)) {
+      this.expandingPs4 = true;
+
+      try {
+        ps4 = await this.expandHereDocument(ps4, ctx);
+      } catch {
+        // A PS4 that does not expand is used as it is
+      } finally {
+        this.expandingPs4 = false;
+      }
+    }
+
+    ps4 = ps4.charAt(0).repeat(this.substitutionDepth(ctx)) + ps4;
+
+    // BASH_XTRACEFD names another descriptor for it, `exec 4>trace; BASH_XTRACEFD=4`
+    const fd = params.BASH_XTRACEFD;
+    const target = fd && /^\d+$/.test(fd) ? (ctx.getFd(fd) ?? fd) : ctx.getStderr();
+
+    await this.shell.pipeWrite(target, `${ps4}${line}\n`).catch(() => {});
   }
 
   /**
@@ -2407,12 +2504,9 @@ export class AstExecutor {
       return 1;
     }
 
+    // bash expands and opens a function's redirections each time it runs it, not when it is defined
     const ctx = parentCtx.spawnContext();
 
-    // bash expands and opens a function's redirections each time it runs it, not when it is defined
-    await this.applyRedirections(ctx, node.redirections).catch((err) => {
-      if (!(err instanceof RedirectionError || err instanceof CommandAbortError)) throw err;
-    });
     parentCtx.setFunction(node.name.text, node.body, ctx, { node, source: this.currentSource });
 
     // An exported function stays exported when it is defined again, as the new definition
@@ -2722,7 +2816,7 @@ export class AstExecutor {
 
         if (trapped !== undefined) throw new LoopExit(trapped);
 
-        return part ? await this.arithmeticValue(part, ctx) : empty;
+        return part ? await this.arithmeticValue(part, ctx, (text) => `(( ${text.trimStart()} ))`) : empty;
       };
 
       try {
@@ -2755,6 +2849,9 @@ export class AstExecutor {
       // IFS=: and x=a:b matches against a:b, `case * in` against *
       const clauseExpanded = await this.resolveExpansions(node.clause, ctx, undefined, { split: false, glob: false });
       const clauseValue = clauseExpanded.values.join(' ');
+
+      // `set -x` shows the subject as written
+      await this.trace(ctx, `case ${node.clause.loc ? this.nodeSource(node.clause) : node.clause.text} in`);
 
       let status = 0;
       // After `;&`, the next item's commands run without its patterns being tested
@@ -3011,7 +3108,7 @@ export class AstExecutor {
     if (trapped !== undefined) return trapped;
 
     try {
-      const result = await this.arithmeticValue(node, ctx);
+      const result = await this.arithmeticValue(node, ctx, (text) => `(( ${text} ))`);
       // In bash, (( expr )) returns 0 (success) if expr is non-zero, 1 (failure) if expr is zero
       return this.applyErrexit(result !== 0 ? 0 : 1, ctx);
     } catch (err) {
@@ -3045,8 +3142,13 @@ export class AstExecutor {
    * substitutions, quote removal, as in double quotes — then evaluated as bash
    * does, on 64-bit integers.
    */
-  protected async arithmeticBig(part: { expression: string }, ctx: ExecContextIf): Promise<bigint> {
-    const text = (await this.expandArithmetic(part.expression, ctx)).replace(/(?<!\\)"/g, '');
+  protected async arithmeticBig(part: { expression: string }, ctx: ExecContextIf, traced?: (expanded: string) => string): Promise<bigint> {
+    const expanded = await this.expandArithmetic(part.expression, ctx);
+
+    // `set -x` shows it expanded, `((  x + 5  ))`, before it is evaluated
+    if (traced) await this.trace(ctx, traced(expanded));
+
+    const text = expanded.replace(/(?<!\\)"/g, '');
 
     return await evaluateArithmeticText(text, contextVariables(ctx, (subscript, keyed) => this.arithmeticSubscript(subscript, keyed, ctx)));
   }
@@ -3112,8 +3214,8 @@ export class AstExecutor {
   }
 
   /** `arithmeticBig` as a number, for a count, an index or a test. */
-  protected async arithmeticValue(part: { expression: string }, ctx: ExecContextIf): Promise<number> {
-    return Number(await this.arithmeticBig(part, ctx));
+  protected async arithmeticValue(part: { expression: string }, ctx: ExecContextIf, traced?: (expanded: string) => string): Promise<number> {
+    return Number(await this.arithmeticBig(part, ctx, traced));
   }
 
   /**
@@ -3147,26 +3249,35 @@ export class AstExecutor {
   /**
    * Recursively evaluates a conditional expression AST node.
    */
+  /**
+   * @param negated - The term is under a `!`, which `set -x` shows before it
+   */
   protected async evaluateConditionalExpression(
     node: AstConditionalExpression,
     ctx: ExecContextIf,
+    negated = false,
   ): Promise<boolean> {
     switch (node.type) {
-      case 'ConditionalWord':
+      case 'ConditionalWord': {
         // A standalone word is true if non-empty after expansion
-        return (await this.expandConditionalWord(node, ctx)).length > 0;
+        const word = await this.expandConditionalWord(node, ctx);
+
+        await this.traceCondition(ctx, negated, [word]);
+
+        return word.length > 0;
+      }
 
       case 'ConditionalNegation':
-        return !(await this.evaluateConditionalExpression(node.argument, ctx));
+        return !(await this.evaluateConditionalExpression(node.argument, ctx, true));
 
       case 'ConditionalLogicalExpression':
         return this.evaluateConditionalLogical(node, ctx);
 
       case 'ConditionalUnaryExpression':
-        return this.evaluateConditionalUnary(node, ctx);
+        return this.evaluateConditionalUnary(node, ctx, negated);
 
       case 'ConditionalBinaryExpression':
-        return this.evaluateConditionalBinary(node, ctx);
+        return this.evaluateConditionalBinary(node, ctx, negated);
 
       default:
         throw new UnknownNodeTypeError(
@@ -3175,6 +3286,24 @@ export class AstExecutor {
           this.currentSource,
         );
     }
+  }
+
+  /**
+   * `set -x` for one term of a `[[ ]]`, as bash shows it when it evaluates the
+   * term: its words expanded, a pattern as written — `[[ 5 -eq 5 ]]`, then
+   * `[[ -n a b ]]` for the one after `&&`, and nothing for one never reached.
+   */
+  private async traceCondition(ctx: ExecContextIf, negated: boolean, words: string[]): Promise<void> {
+    if (!ctx.getShellOption('xtrace')) return;
+
+    await this.trace(ctx, `[[ ${negated ? '! ' : ''}${words.join(' ')} ]]`);
+  }
+
+  /** An arithmetic operand of `[[ ]]` as `set -x` shows it: expanded, unless that would run a `$( )` a second time. */
+  private async tracedOperand(word: AstConditionalWord, ctx: ExecContextIf): Promise<string> {
+    if (!ctx.getShellOption('xtrace')) return '';
+
+    return word.expansion?.some((xp) => xp.type === 'CommandExpansion' || xp.type === 'ProcessSubstitution') ? word.text : await this.expandConditionalWord(word, ctx);
   }
 
   /**
@@ -3229,6 +3358,7 @@ export class AstExecutor {
   protected async evaluateConditionalUnary(
     node: AstConditionalUnaryExpression,
     ctx: ExecContextIf,
+    negated = false,
   ): Promise<boolean> {
     const op = node.operator;
 
@@ -3236,10 +3366,15 @@ export class AstExecutor {
     if (op === '-v') {
       const element = await this.conditionalElement(node.argument, ctx);
 
-      if (element) return element.set;
+      if (element) {
+        await this.traceCondition(ctx, negated, [op, node.argument.written ?? node.argument.text]);
+        return element.set;
+      }
     }
 
     const arg = await this.expandConditionalWord(node.argument, ctx);
+
+    await this.traceCondition(ctx, negated, [op, arg]);
 
     // String tests
     if (op === '-z') return arg.length === 0;
@@ -3291,11 +3426,20 @@ export class AstExecutor {
   protected async evaluateConditionalBinary(
     node: AstConditionalBinaryExpression,
     ctx: ExecContextIf,
+    negated = false,
   ): Promise<boolean> {
     const op = node.operator;
     const arithmetic = ['-eq', '-ne', '-lt', '-le', '-gt', '-ge'].includes(op);
     // An arithmetic operand is expanded as arithmetic is, below, and only there
     const left = arithmetic ? '' : await this.expandConditionalWord(node.left, ctx);
+    // A pattern shows as written; any other word as it expands
+    const pattern = op === '==' || op === '=' || op === '!=' || op === '=~';
+
+    if (ctx.getShellOption('xtrace')) {
+      const right = pattern ? node.right.written ?? node.right.text : await this.tracedOperand(node.right, ctx);
+
+      await this.traceCondition(ctx, negated, [arithmetic ? await this.tracedOperand(node.left, ctx) : left, op, right]);
+    }
 
     // String comparison operators
     // Pattern matching: the right side is a pattern as in `case`, its quoted
@@ -3926,7 +4070,7 @@ export class AstExecutor {
     }
 
     // A subshell: what it writes goes to the file, and nothing it sets leaks out
-    const cmdCtx = ctx.subContext(true);
+    const cmdCtx = this.subshellOf(ctx, true);
 
     cmdCtx.setErrexitSuppressed(true);
     cmdCtx.redirectStdout(path);

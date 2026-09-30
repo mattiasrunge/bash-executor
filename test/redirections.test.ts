@@ -395,3 +395,21 @@ Deno.test("exec in the background leaves the shell's descriptors alone", async (
   assertEquals(result.stdout, 'still\nalive\n');
   assertEquals(shell.getFile('/tmp/bg'), '');
 });
+
+Deno.test('a redirection word expands to one word, or the redirection is ambiguous', async (t) => {
+  // Each expected text is bash 5.2's, bar the `bash: line N: ` before each message
+  await t.step('two words, or none, write nowhere', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('z="a b"; echo hi > $z; echo $?; e=; echo hi > $e; echo $?; echo x > ""; echo $?');
+
+    assertEquals(result.stdout, '1\n1\n1\n');
+    assertEquals(result.stderr, '$z: ambiguous redirect\n$e: ambiguous redirect\n: No such file or directory\n');
+    assertEquals([shell.getFile('a'), shell.getFile('/a')], ['', '']);
+  });
+
+  await t.step("a here-string's word is one word, split and globbed never", async () => {
+    const result = await new TestShell().runAndCapture('x="a  b"; cat <<< $x; cat <<< *; cat <<< $nope');
+
+    assertEquals(result.stdout, 'a  b\n*\n\n');
+  });
+});

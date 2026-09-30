@@ -6,9 +6,9 @@ see [README.md](README.md) for what the scores mean.
 | Measure | Result |
 | --- | --- |
 | Test files that parse | 462 / 471 |
-| `run-*` scripts passing | 27 / 83 (real bash here: 74) |
-| Mean upstream score | 80% |
-| Mean stdout score | 82% |
+| `run-*` scripts passing | 30 / 83 (real bash here: 74) |
+| Mean upstream score | 82% |
+| Mean stdout score | 84% |
 
 ## Gaps
 
@@ -149,8 +149,8 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | cond | pass | no | 99% | 99% | 82a83 ⏎ &gt; ok 4a ⏎ 89a91 |
 | coproc | pass | yes | 100% | 100% |  |
 | cprint | pass | yes | 100% | 100% |  |
-| dbg-support | pass | no | 26% | 24% | 1,3c1,2 ⏎ &lt; debug lineno: 1 main ⏎ &lt; debug lineno: 1 main |
-| dbg-support2 | pass | no | 14% | 14% | 1,2c1,6 ⏎ &lt; lineno: 1 (18) main ⏎ &lt; lineno: 1 (18) main |
+| dbg-support | pass | no | 72% | 71% | 4a5 ⏎ &gt; debug lineno: 30 fn1 ⏎ 14c15 |
+| dbg-support2 | pass | no | 14% | 14% | 1,2c1,6 ⏎ &lt; lineno: 29 (46) main ⏎ &lt; lineno: 30 (47) main |
 | dirstack | pass | no | 40% | 45% | 4,7c4,11 ⏎ &lt; ./dstack.tests: line 26: pushd: no other directory ⏎ &lt; ./dstack.tests: line 27: popd: directory stack empty |
 | dollars | pass | no | 85% | 85% | 2,3d1 ⏎ &lt; ./dollar-at-star: line 37: *: invalid indirect expansion ⏎ &lt; ./dollar-at-star: line 38: @: invalid indirect expansion |
 | dynvar | pass | yes | 100% | 100% |  |
@@ -166,11 +166,11 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | glob-test | env | no | 72% | 73% | 2,3d1 ⏎ &lt; glob2.sub: warning: you do not have the zh_HK.big5hkscs locale installed; ⏎ &lt; glob2.sub: warning: that will cause some of these tests to fail. |
 | globstar | pass | no | 39% | 39% | 0a1,26 ⏎ &gt; lib/glob/glob.o ⏎ &gt; lib/glob/smatch.o |
 | heredoc | env | no | 93% | 99% | 92a93 ⏎ &gt; ./heredoc3.sub: line 98: warning: here-document at line 96 delimited by end-of-file (wanted 'EOF') ⏎ 102,105d102 |
-| herestr | pass | no | 87% | 87% | 6,7c6,7 ⏎ &lt; "$empty" ⏎ &lt; $empty |
+| herestr | pass | yes | 100% | 100% |  |
 | histexpand | pass | no | 33% | 44% | 1,27c1,51 ⏎ &lt; ./histexp.tests: line 23: history: command not found ⏎ &lt; ./histexp.tests: line 34: history: command not found |
 | history | pass | no | 29% | 39% | 1,17c1,36 ⏎ &lt; ./history.tests: line 17: history: command not found ⏎ &lt; ./history.tests: line 19: history: command not found |
 | ifs | pass | yes | 100% | 100% |  |
-| ifs-posix | pass | no | 0% | 0% | 1,1345c1 ⏎ &lt; echo ":::" \| ( IFS=": " read x y; echo "($x)($y)" ) # expected "()(::)" got "()( )" ⏎ &lt; echo ":: :" \| ( IFS=": " read x y; echo "($x)($y)" ) # expe |
+| ifs-posix | pass | yes | 100% | 100% |  |
 | input-test | pass | no | 67% | 67% | 2c2 ⏎ &lt; line read by ./input-line.sub was '' ⏎ --- |
 | intl | env | no | 71% | 77% | 13a14 ⏎ &gt; 1,0000 ⏎ 18,19c19 |
 | invert | pass | yes | 100% | 100% |  |
@@ -198,18 +198,18 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | procsub | pass | no | 67% | 70% | 15,17c15 ⏎ &lt; ./procsub.tests: line 63: ulimit: command not found ⏎ &lt; ./procsub.tests: line 67: ulimit: command not found |
 | quote | pass | no | 98% | 98% | 77c77 ⏎ &lt; 'weferfds'\\''dsfsdf' ⏎ --- |
 | quotearray | pass | no | 72% | 80% | 70,72c70,71 ⏎ &lt; declare -A A=([$'\t']="X" ["*"]="X" [" "]="X" ["]"]="X" ["@"]="X" ) ⏎ &lt; ./quotearray2.sub: line 62: printf: 'A[	]': not a valid identifier |
-| read | env | timeout | 50% | 50% | timeout |
-| redir | pass | no | 70% | 72% | 6c6 ⏎ &lt; ./redir.tests: line 44: a: No such file or directory ⏎ --- |
+| read | env | timeout | 65% | 65% | timeout |
+| redir | pass | no | 74% | 73% | 20c20 ⏎ &lt; BUG: after exec in redir1.sub ⏎ --- |
 | rhs-exp | pass | no | 95% | 95% | 11c11 ⏎ &lt; argv[1] = &lt;TDEFAULTS = -DSELECT_VECS=\'&m68kcoff_vec\'&gt; ⏎ --- |
 | rsh | pass | no | 17% | 0% | 1,13c1,14 ⏎ &lt; ./rsh1.sub: line 20: set: -r: invalid option ⏎ &lt; set: usage: set [-abefhkmnptuvxBCEHPT] [-o option-name] [--] [-] [arg ...] |
 | set-e | pass | yes | 100% | 100% |  |
-| set-x | pass | no | 76% | 83% | 0a1,2 ⏎ &gt; + (( i=0 )) ⏎ &gt; + (( i&lt;=5 )) |
+| set-x | pass | yes | 100% | 100% |  |
 | shopt | pass | no | 99% | 99% | 306a307,310 ⏎ &gt; 28c28 ⏎ &gt; &lt; globskipdots   	off |
 | strip | pass | yes | 100% | 100% |  |
 | test | env | timeout | 97% | 98% | timeout |
 | tilde | pass | no | 64% | 64% | 2c2 ⏎ &lt; /home/mattias/foo ⏎ --- |
 | tilde2 | pass | no | 68% | 68% | 2c2 ⏎ &lt; ~/bin:~/bin2:/bin:/usr/bin:. ⏎ --- |
-| trap | pass | no | 77% | 83% | 8c8 ⏎ &lt; [1] debug ⏎ --- |
+| trap | pass | no | 90% | 93% | 18a19 ⏎ &gt; func[29] funcdebug ⏎ 30,33d30 |
 | type | pass | no | 98% | 98% | 43,44c43,44 ⏎ &lt; /tmp/bash-ts ⏎ &lt; bash-ts is hashed (/tmp/bash-ts) |
 | varenv | pass | no | 78% | 81% | 2,5c2,3 ⏎ &lt; ./varenv.tests: line 42: c=7: command not found ⏎ &lt; 3 4 3 4 5 |
 | vredir | env | no | 93% | 95% | 14,17d13 ⏎ &lt; bad foo 1 ⏎ &lt; bad foo 2 |

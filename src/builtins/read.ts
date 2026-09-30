@@ -19,6 +19,8 @@ type ReadOptions = {
   fd: string | null;
   arrayName: string | null;
   varNames: string[];
+  /** No names were given: REPLY takes the line as it is, blanks and all */
+  whole?: boolean;
 };
 
 /** A name read can assign: a variable, or an element of one, `A[k]`. */
@@ -100,45 +102,120 @@ function parseOptions(args: string[]): ReadOptions | BuiltinResult {
     if (!assignable(name)) return { code: 1, stderr: `read: \`${name}': not a valid identifier\n` };
   }
 
-  // Default variable name is REPLY
+  // Default variable name is REPLY, which takes the line whole, unsplit
   if (options.varNames.length === 0 && !options.arrayName) {
     options.varNames = ['REPLY'];
+    options.whole = true;
   }
 
   return options;
 }
 
-/**
- * Process backslash escapes in a string.
- *
- * @param str - The string to process
- * @returns The string with escapes processed
- */
-function processEscapes(str: string): string {
-  let result = '';
-  let i = 0;
+/** A character of the line, and whether a backslash made it stand for itself. */
+type Char = { c: string; escaped: boolean };
 
-  while (i < str.length) {
-    if (str[i] === '\\' && i + 1 < str.length) {
-      const next = str[i + 1];
-      if (next === 'n') {
-        result += '\n';
-      } else if (next === 't') {
-        result += '\t';
-      } else if (next === '\\') {
-        result += '\\';
-      } else {
-        // Other escapes: remove backslash
-        result += next;
-      }
-      i += 2;
-    } else {
-      result += str[i];
-      i++;
+/** The line as characters: without -r a backslash is taken off, and the one after it is literal. */
+function characters(line: string, raw: boolean): Char[] {
+  const chars: Char[] = [];
+
+  for (let i = 0; i < line.length; i++) {
+    if (!raw && line[i] === '\\') {
+      if (i + 1 < line.length) chars.push({ c: line[++i], escaped: true });
+      continue;
     }
+
+    chars.push({ c: line[i], escaped: false });
   }
 
-  return result;
+  return chars;
+}
+
+/**
+ * Words taken off the line one at a time, as bash's read takes them: a word
+ * runs to an IFS character not escaped, and with it goes the delimiter — the
+ * IFS blanks around it, and one other IFS character among them.
+ */
+class Words {
+  private pos = 0;
+
+  constructor(private readonly chars: Char[], private readonly ifs: string) {
+    this.skipBlanks();
+  }
+
+  get done(): boolean {
+    return this.pos >= this.chars.length;
+  }
+
+  private separates(ch: Char | undefined): boolean {
+    return ch !== undefined && !ch.escaped && this.ifs.includes(ch.c);
+  }
+
+  private blank(ch: Char | undefined): boolean {
+    return this.separates(ch) && ' \t\n'.includes(ch!.c);
+  }
+
+  private skipBlanks(): void {
+    while (this.blank(this.chars[this.pos])) this.pos++;
+  }
+
+  word(): string {
+    let word = '';
+
+    while (!this.done && !this.separates(this.chars[this.pos])) word += this.chars[this.pos++].c;
+
+    this.skipBlanks();
+
+    if (this.separates(this.chars[this.pos]) && !this.blank(this.chars[this.pos])) {
+      this.pos++;
+      this.skipBlanks();
+    }
+
+    return word;
+  }
+
+  /**
+   * What the last name gets: the rest of the line, separators and all, less
+   * the IFS blanks at its end — or, when the rest is one word and its
+   * delimiter, just the word: `1,2,` read into two names gives 2.
+   */
+  rest(): string {
+    const from = this.pos;
+    const word = this.word();
+
+    if (this.done) return word;
+
+    let end = this.chars.length;
+
+    while (end > from && this.blank(this.chars[end - 1])) end--;
+
+    return this.chars.slice(from, end).map((ch) => ch.c).join('');
+  }
+}
+
+/** The values read assigns: one per name, the last the rest of the line; every word for -a. */
+function split(line: string, options: ReadOptions, ifs: string): string[] {
+  const chars = characters(line, options.raw);
+
+  if (options.whole || ifs === '') {
+    const text = chars.map((ch) => ch.c).join('');
+
+    return options.arrayName ? (text === '' ? [] : [text]) : [text];
+  }
+
+  const words = new Words(chars, ifs);
+  const values: string[] = [];
+
+  if (options.arrayName) {
+    while (!words.done) values.push(words.word());
+
+    return values;
+  }
+
+  for (let i = 0; i < options.varNames.length - 1 && !words.done; i++) values.push(words.word());
+
+  if (!words.done) values.push(words.rest());
+
+  return values;
 }
 
 /**
@@ -192,6 +269,14 @@ export const readBuiltin: BuiltinHandler = async (
         return assign(ctx, options, [], 1);
       }
       input = line;
+
+      // Without -r a backslash at the end of a line joins the next one to it
+      while (!options.raw && options.delimiter === '\n' && /(^|[^\\])(\\\\)*\\$/.test(input)) {
+        const next = await shell.pipeReadLine(fd, options.delimiter);
+
+        input = input.slice(0, -1) + (next ?? '');
+        if (next === null) break;
+      }
     } else {
       // Fallback for shells without pipeReadLine
       input = await shell.pipeRead(fd);
@@ -215,19 +300,11 @@ export const readBuiltin: BuiltinHandler = async (
     input = input.slice(0, options.nChars);
   }
 
-  // Process backslash escapes unless -r is specified
-  if (!options.raw) {
-    input = processEscapes(input);
-  }
-
   // `IFS= read -r line` is a prefix assignment, so params come first — and an
   // IFS that is set but empty means "do not split", not "use the default"
   const ifs = ctx.getParams()['IFS'] ?? ctx.getEnv()['IFS'] ?? utils.DEFAULT_IFS;
 
-  // Split by IFS
-  const words = utils.splitByIfs(input, ifs);
-
-  return assign(ctx, options, words, 0);
+  return assign(ctx, options, split(input, options, ifs), 0);
 };
 
 /** The words read, into the array or the names; `code` is read's status when they could all be assigned. */
@@ -241,12 +318,12 @@ function assign(ctx: ExecContextIf, options: ReadOptions, words: string[], code:
     return { code };
   }
 
-  // Each name takes a word, the last one the rest of the line
+  // Each name takes its value, and a name there is none for is emptied
   const varNames = options.varNames;
   const updates: Record<string, string> = {};
 
   for (let i = 0; i < varNames.length; i++) {
-    updates[varNames[i]] = i < varNames.length - 1 ? words[i] ?? '' : words.slice(i).join(' ');
+    updates[varNames[i]] = words[i] ?? '';
   }
 
   // Readonly ones are not read into; the rest are set as any assignment sets them
