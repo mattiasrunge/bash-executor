@@ -6,9 +6,9 @@ see [README.md](README.md) for what the scores mean.
 | Measure | Result |
 | --- | --- |
 | Test files that parse | 462 / 471 |
-| `run-*` scripts passing | 30 / 83 (real bash here: 74) |
-| Mean upstream score | 82% |
-| Mean stdout score | 84% |
+| `run-*` scripts passing | 31 / 83 (real bash here: 74) |
+| Mean upstream score | 84% |
+| Mean stdout score | 86% |
 
 ## Gaps
 
@@ -132,7 +132,7 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | --- | --- | --- | --- | --- | --- |
 | alias | pass | no | 47% | 49% | 3,4c3,4 ⏎ &lt; ./alias.tests: line 1: quux: command not found ⏎ &lt; baz |
 | appendop | pass | yes | 100% | 100% |  |
-| arith | pass | no | 98% | 97% | 196,198d195 ⏎ &lt;  ⏎ &lt; 1 |
+| arith | pass | no | 97% | 97% | 196d195 ⏎ &lt;  ⏎ 198,199d196 |
 | arith-for | pass | no | 97% | 97% | 67c67,68 ⏎ &lt; bash: -c: line 1: syntax error: for (( … )) takes three expressions separated by ';', got " i=0; "i &lt; 3" " ⏎ --- |
 | array | pass | no | 81% | 84% | 2,3c2,4 ⏎ &lt; ./array.tests: line 28: ﷑second): command not found ⏎ &lt; 127 |
 | array2 | pass | yes | 100% | 100% |  |
@@ -156,15 +156,15 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | dynvar | pass | yes | 100% | 100% |  |
 | errors | pass | no | 98% | 100% | 118c118 ⏎ &lt; ./errors4.sub: line 29: break: x: numeric argument required ⏎ --- |
 | execscript | env | no | 84% | 91% | 1d0 ⏎ &lt; ./execscript: line 4: [: -eq: unary operator expected ⏎ 11c10 |
-| exp-tests | pass | no | 51% | 58% | 41,42c41 ⏎ &lt; argv[1] = &lt;&gt; ⏎ &lt; argv[1] = &lt;"Hello world!"&gt; |
+| exp-tests | pass | no | 92% | 94% | 41,42c41 ⏎ &lt; argv[1] = &lt;&gt; ⏎ &lt; argv[1] = &lt;"Hello world!"&gt; |
 | exportfunc | pass | no | 86% | 93% | 4c4 ⏎ &lt; ./exportfunc.tests: eval: line 43: syntax error: unexpected end of file ⏎ --- |
-| extglob | pass | no | 84% | 86% | 44c44 ⏎ &lt; @(*) ⏎ --- |
+| extglob | pass | no | 89% | 91% | 52c52 ⏎ &lt; no ⏎ --- |
 | extglob2 | pass | yes | 100% | 100% |  |
 | extglob3 | pass | yes | 100% | 100% |  |
 | func | pass | no | 99% | 99% | 155c155 ⏎ &lt; 5 0 ⏎ --- |
 | getopts | pass | yes | 100% | 100% |  |
-| glob-test | env | no | 72% | 73% | 2,3d1 ⏎ &lt; glob2.sub: warning: you do not have the zh_HK.big5hkscs locale installed; ⏎ &lt; glob2.sub: warning: that will cause some of these tests to fail. |
-| globstar | pass | no | 39% | 39% | 0a1,26 ⏎ &gt; lib/glob/glob.o ⏎ &gt; lib/glob/smatch.o |
+| glob-test | env | no | 94% | 96% | 1,3c1 ⏎ &lt; f*/bar ⏎ &lt; glob2.sub: warning: you do not have the zh_HK.big5hkscs locale installed; |
+| globstar | pass | yes | 100% | 100% |  |
 | heredoc | env | no | 93% | 99% | 92a93 ⏎ &gt; ./heredoc3.sub: line 98: warning: here-document at line 96 delimited by end-of-file (wanted 'EOF') ⏎ 102,105d102 |
 | herestr | pass | yes | 100% | 100% |  |
 | histexpand | pass | no | 33% | 44% | 1,27c1,51 ⏎ &lt; ./histexp.tests: line 23: history: command not found ⏎ &lt; ./histexp.tests: line 34: history: command not found |
@@ -180,7 +180,7 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | mapfile | pass | no | 69% | 69% | 17,18c17 ⏎ &lt; a ⏎ &lt; [0] Abcdefghijklmnop |
 | more-exp | pass | no | 87% | 93% | 20,22c20,30 ⏎ &lt; argv[1] = &lt;a b c d e f&gt; ⏎ &lt; argv[1] = &lt;a b c d e f&gt; |
 | nameref | pass | no | 88% | 91% | 80d79 ⏎ &lt; ./nameref4.sub: line 181: unset: x: not an array variable ⏎ 155d153 |
-| new-exp | pass | no | 88% | 91% | 1d0 ⏎ &lt; ./new-exp.tests: line 14: ((: == 0 : syntax error: operand expected (error token is "== 0 ") ⏎ 7,8c6,7 |
+| new-exp | pass | no | 89% | 91% | 1d0 ⏎ &lt; ./new-exp.tests: line 14: ((: == 0 : syntax error: operand expected (error token is "== 0 ") ⏎ 7,8c6,7 |
 | nquote | pass | no | 78% | 83% | 7,10c7,10 ⏎ &lt; argv[1] = &lt;$hello,&gt; ⏎ &lt; argv[2] = &lt;$world&gt; |
 | nquote1 | pass | yes | 100% | 100% |  |
 | nquote2 | pass | yes | 100% | 100% |  |

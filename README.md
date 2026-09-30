@@ -148,6 +148,14 @@ syntax error run before it is reported.
 shell. `{name}<file` picks a free descriptor from 10 up, puts its number in
 `name` and leaves it open, as bash does; `{name}>&-` closes it.
 
+Pathname expansion is the executor's own when the host lists directories
+(`readDirectory` on `ShellIf`): what a word quoted matches itself — `"$dir"/*`
+— while an unquoted expansion's glob characters glob, `pat='*.log'; rm $pat`;
+`globstar`, `extglob`, `dotglob`, `nocaseglob`, `nullglob`, `failglob` and
+`GLOBIGNORE` apply, and matches sort by bytes in the C locale, bash's default,
+and as the locale collates otherwise. A host with only `resolvePath` is asked
+for the matches instead.
+
 `type`, `declare -f` and `set` print a function as bash does (`printFunction`),
 from the source it was defined in. `export -f name` hands it to the commands the
 shell runs as `BASH_FUNC_name%%`, the variable bash reads it back from; a host

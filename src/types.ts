@@ -231,6 +231,15 @@ export const PATH_TEST_OPERATOR_MAP: Record<string, string> = {
 type PathTestOperator = keyof typeof PATH_TEST_OPERATOR_MAP;
 export type PathTestOperation = typeof PATH_TEST_OPERATOR_MAP[PathTestOperator];
 
+/** An entry of a directory, as `readDirectory` gives it. */
+export type DirectoryEntry = {
+  name: string;
+  /** A directory, or a link to one */
+  directory: boolean;
+  /** A symbolic link: `**` does not go down into one */
+  link?: boolean;
+};
+
 /** CPU time in seconds, the shell's and its finished children's. */
 export type CpuTimes = { user: number; system: number; childrenUser: number; childrenSystem: number };
 
@@ -419,6 +428,19 @@ export interface ShellIf {
    * @returns The expanded path.
    */
   resolvePath?: (ctx: ExecContextIf, text: string) => Promise<string[]>;
+
+  /**
+   * The entries of a directory, for pathname expansion, which the executor
+   * then does itself, as bash does: quoted characters match themselves, and
+   * `globstar`, `extglob`, `dotglob`, `nocaseglob` and `GLOBIGNORE` apply.
+   * Without it the executor asks `resolvePath` instead.
+   *
+   * @param path - The directory, relative to the context's cwd unless absolute; `.` for the cwd
+   * @returns Each entry's name and whether it is a directory (a link to one
+   *          included), without `.` and `..`; null when `path` is not a
+   *          directory the shell can read
+   */
+  readDirectory?: (ctx: ExecContextIf, path: string) => Promise<DirectoryEntry[] | null>;
 
   /**
    * A callback to resolve users' home directories. If specified, the parser calls it whenever it needs to resolve a tilde expansion. If the option is not specified, the parser won't try to resolve any tilde expansion. When the callback is called with a null value for `username`, the callback should return the current user's home directory.

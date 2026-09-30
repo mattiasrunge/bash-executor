@@ -487,9 +487,9 @@
       "reference": "pass"
     },
     "run-arith": {
-      "upstream": 0.975,
+      "upstream": 0.972,
       "pass": false,
-      "stdout": 0.972,
+      "stdout": 0.967,
       "reference": "pass"
     },
     "run-arith-for": {
@@ -499,9 +499,9 @@
       "reference": "pass"
     },
     "run-array": {
-      "upstream": 0.809,
+      "upstream": 0.812,
       "pass": false,
-      "stdout": 0.842,
+      "stdout": 0.844,
       "reference": "pass"
     },
     "run-array2": {
@@ -631,9 +631,9 @@
       "reference": "env"
     },
     "run-exp-tests": {
-      "upstream": 0.512,
+      "upstream": 0.922,
       "pass": false,
-      "stdout": 0.576,
+      "stdout": 0.938,
       "reference": "pass"
     },
     "run-exportfunc": {
@@ -643,9 +643,9 @@
       "reference": "pass"
     },
     "run-extglob": {
-      "upstream": 0.837,
+      "upstream": 0.891,
       "pass": false,
-      "stdout": 0.858,
+      "stdout": 0.906,
       "reference": "pass"
     },
     "run-extglob2": {
@@ -673,15 +673,15 @@
       "reference": "pass"
     },
     "run-glob-test": {
-      "upstream": 0.716,
+      "upstream": 0.936,
       "pass": false,
-      "stdout": 0.733,
+      "stdout": 0.958,
       "reference": "env"
     },
     "run-globstar": {
-      "upstream": 0.391,
-      "pass": false,
-      "stdout": 0.391,
+      "upstream": 1,
+      "pass": true,
+      "stdout": 1,
       "reference": "pass"
     },
     "run-heredoc": {
@@ -776,7 +776,7 @@
       "reference": "pass"
     },
     "run-new-exp": {
-      "upstream": 0.884,
+      "upstream": 0.885,
       "pass": false,
       "stdout": 0.908,
       "reference": "pass"

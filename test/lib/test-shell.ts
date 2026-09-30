@@ -1,6 +1,7 @@
 import {
   AstExecutor,
   createBuiltinRegistry,
+  type DirectoryEntry,
   type ExecCommandOptions,
   ExecContext,
   type ExecContextIf,
@@ -431,6 +432,22 @@ export class TestShell implements ShellIf {
     if (op === 'DIRECTORY') return await directory;
 
     return await (op === 'EXISTS' ? this.files.has(path) || directory : false);
+  }
+
+  /** The virtual files as a directory tree: a directory is one a file is in. */
+  async readDirectory(ctx: ExecContextIf, path: string): Promise<DirectoryEntry[] | null> {
+    const dir = (path.startsWith('/') ? path : `${ctx.getCwd().replace(/\/$/, '')}/${path === '.' ? '' : path}`).replace(/\/+$/, '') + '/';
+    const entries = new Map<string, boolean>();
+
+    for (const file of this.files.keys()) {
+      if (!file.startsWith(dir)) continue;
+
+      const [name, ...rest] = file.slice(dir.length).split('/');
+
+      if (name) entries.set(name, (entries.get(name) ?? false) || rest.length > 0);
+    }
+
+    return await (entries.size > 0 || dir === '/' ? [...entries].map(([name, directory]) => ({ name, directory })) : null);
   }
 
   /**

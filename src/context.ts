@@ -296,6 +296,8 @@ export class ExecContext implements ExecContextIf {
   private secondsFrom = Date.now();
   private secondsBase = 0;
   private randomSeed = Math.floor(Math.random() * 2 ** 31);
+  /** The value RANDOM gave last, which bash never gives twice in a row */
+  private lastRandom = -1;
   /** A subshell's own BASHPID; the shell's is `$$` */
   private subshellPid?: string;
 
@@ -312,10 +314,15 @@ export class ExecContext implements ExecContextIf {
 
         return `${Math.floor(micros / 1e6)}.${String(micros % 1e6).padStart(6, '0')}`;
       }
-      case 'RANDOM':
-        // bash's own generator is a different one; what matters is 0 to 32767, and a seed
-        this.randomSeed = (this.randomSeed * 1103515245 + 12345) % 2 ** 31;
-        return String(this.randomSeed >> 16 & 0x7fff);
+      case 'RANDOM': {
+        // bash 5.2's own generator, so that `RANDOM=42` starts the sequence bash's does
+        let value: number;
+
+        do value = this.nextRandom(); while (value === this.lastRandom);
+
+        this.lastRandom = value;
+        return String(value);
+      }
       case 'SRANDOM':
         return String(crypto.getRandomValues(new Uint32Array(1))[0]);
       case 'BASHPID':
@@ -325,13 +332,31 @@ export class ExecContext implements ExecContextIf {
     }
   }
 
+  /**
+   * bash's brand(): the minimal standard generator (Park and Miller, by
+   * Schrage's method), its high and low halves folded together, 0 to 32767.
+   */
+  private nextRandom(): number {
+    let seed = this.randomSeed === 0 ? 123459876 : this.randomSeed;
+    const high = Math.floor(seed / 127773);
+    const low = seed - 127773 * high;
+    const next = 16807 * low - 2836 * high;
+
+    seed = next < 0 ? next + 0x7fffffff : next;
+    this.randomSeed = seed;
+
+    return ((seed >>> 16) ^ (seed & 0xffff)) & 0x7fff;
+  }
+
   /** Setting a dynamic variable: SECONDS counts on from it, RANDOM takes it as a seed, BASH_ARGV0 is $0. */
   private setDynamic(name: string, value: string): void {
     if (name === 'SECONDS') {
       this.secondsBase = Number.parseInt(value, 10) || 0;
       this.secondsFrom = Date.now();
     } else if (name === 'RANDOM') {
-      this.randomSeed = (Number.parseInt(value, 10) || 0) % 2 ** 31;
+      // As strtol reads it, into 32 bits
+      this.randomSeed = (Number.parseInt(value, 10) || 0) >>> 0;
+      this.lastRandom = -1;
     } else if (name === 'BASH_ARGV0') {
       this.special['0'] = value;
     }

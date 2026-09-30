@@ -15,6 +15,7 @@ import {
   BashSyntaxError,
   createBuiltinRegistry,
   DEFAULT_SHELL_OPTIONS,
+  DEFAULT_SHOPT_OPTIONS,
   ExecContext,
   getExitCode,
   logoutBuiltin,
@@ -86,6 +87,9 @@ function parseArgs(argv: string[]): Invocation {
 
         if (letter === 'o') {
           setOption(name, on);
+        } else if (name in DEFAULT_SHOPT_OPTIONS) {
+          // `-O globstar`: shopt's, which the context keeps with set's
+          inv.options[name] = on;
         } else {
           logGap({ kind: 'host-limit', name: `shopt ${name}` });
         }

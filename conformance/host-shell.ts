@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { isAbsolute, join, resolve } from '@std/path';
-import type { CpuTimes, ExecCommandOptions, ExecContextIf, JobHandle, JobHostIf, PathTestOperation, ShellIf } from '../mod.ts';
+import type { CpuTimes, DirectoryEntry, ExecCommandOptions, ExecContextIf, JobHandle, JobHostIf, PathTestOperation, ShellIf } from '../mod.ts';
 import { encodeShellText } from '../mod.ts';
 import { globToRegexSource } from '../src/pattern.ts';
 import { PipeBuffer } from '../test/lib/pipe-buffer.ts';
@@ -702,6 +702,24 @@ export class RealShell implements ShellIf {
   }
 
   /** Pathname expansion; a pattern that matches nothing stays as it was, bash's default. */
+  async readDirectory(ctx: ExecContextIf, path: string): Promise<DirectoryEntry[] | null> {
+    const dir = this.path(ctx, path);
+    const entries: DirectoryEntry[] = [];
+
+    try {
+      for await (const entry of Deno.readDir(dir)) {
+        // A link to a directory is one, as far as a pattern is concerned
+        const directory = entry.isDirectory || (entry.isSymlink && Boolean((await statOf(`${dir}/${entry.name}`))?.isDirectory));
+
+        entries.push({ name: entry.name, directory, link: entry.isSymlink });
+      }
+    } catch {
+      return null;
+    }
+
+    return entries;
+  }
+
   async resolvePath(ctx: ExecContextIf, text: string): Promise<string[]> {
     if (!/[*?[]|[@+!]\(/.test(text)) {
       return [text];

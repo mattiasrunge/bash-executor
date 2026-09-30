@@ -38,6 +38,7 @@ import { assocKeys } from './builtins/variable-listing.ts';
 import type { ErrorPosition } from './errors.ts';
 import { exportedFunctionName, exportedFunctionText, type FunctionDefinition, functionEnvName } from './print-command.ts';
 import { singleQuoted } from './quote.ts';
+import { expandPattern, type GlobOptions, globPatterns, isGlobPattern, patternOf } from './glob.ts';
 import { syntaxErrorLines } from './syntax-error.ts';
 import { cpuTime, timeReport } from './timing.ts';
 import { closingBracket, closingQuote, contextVariables, evaluateArithmeticText, subscriptEnd } from './arith.ts';
@@ -4857,8 +4858,21 @@ export class AstExecutor {
     // Use unquoteWordWithProtectedRanges to preserve quotes that came from expansions
     // (e.g., JSON content like {"key":"value"} should keep its quotes)
     // This also applies IFS field splitting, to unquoted expansion results only
-    const unquotedResult = utils.unquoteWordWithProtectedRanges(value, protectedRanges, opts.split === false ? '' : this.getIfs(ctx));
+    const ifs = opts.split === false ? '' : this.getIfs(ctx);
+    const unquotedResult = utils.unquoteWordWithProtectedRanges(value, protectedRanges, ifs);
     const result = { values: unquotedResult.values, status };
+
+    // Pathname expansion done here, from the directories the host lists: each
+    // field a pattern in which what the word quoted matches itself
+    if (opts.glob !== false && this.shell.readDirectory && !ctx.getShellOption('noglob')) {
+      const patterns = globPatterns(value, protectedRanges, ifs);
+
+      if (patterns && patterns.length === result.values.length) {
+        result.values = await this.expandPathnames(ctx, result.values, patterns.map(patternOf));
+
+        return result;
+      }
+    }
 
     // Path globbing expansion must be done last, and `set -f` turns it off — the
     // pattern is then just a word, which is also what an unmatched one becomes
@@ -4882,6 +4896,47 @@ export class AstExecutor {
     }
 
     return result;
+  }
+
+  /**
+   * Each field that is a pattern, `*.txt`, as the paths it matches, or itself
+   * when none does — unless `nullglob` drops it or `failglob` makes that an
+   * error.
+   */
+  private async expandPathnames(ctx: ExecContextIf, values: string[], patterns: string[]): Promise<string[]> {
+    const params = ctx.getParams();
+    const env = ctx.getEnv();
+    const locale = params.LC_ALL || env.LC_ALL || params.LC_COLLATE || env.LC_COLLATE || params.LANG || env.LANG || 'C';
+    const globignore = params.GLOBIGNORE ?? '';
+    const options: GlobOptions = {
+      dotglob: ctx.getShellOption('dotglob'),
+      nocaseglob: ctx.getShellOption('nocaseglob'),
+      globstar: ctx.getShellOption('globstar'),
+      extglob: ctx.getShellOption('extglob'),
+      ignore: globignore.split(':').filter((glob) => glob !== ''),
+      // bash's default locale is C, which sorts by bytes, as does POSIX
+      bytewise: /^(C|POSIX)([._@]|$)/.test(locale),
+    };
+    const out: string[] = [];
+
+    for (const [i, pattern] of patterns.entries()) {
+      if (!isGlobPattern(pattern, options.extglob)) {
+        out.push(values[i]);
+        continue;
+      }
+
+      const matches = await expandPattern(pattern, (dir) => this.shell.readDirectory!(ctx, dir), options);
+
+      if (matches.length > 0) {
+        out.push(...matches);
+      } else if (ctx.getShellOption('failglob')) {
+        throw new GlobNoMatchError(values[i]);
+      } else if (!ctx.getShellOption('nullglob')) {
+        out.push(values[i]);
+      }
+    }
+
+    return out;
   }
 
   /**

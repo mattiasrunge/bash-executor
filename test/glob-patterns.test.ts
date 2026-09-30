@@ -1,6 +1,5 @@
 import { assertEquals } from '@std/assert';
 import { TestShell } from './lib/test-shell.ts';
-import type { ExecContextIf } from '../src/types.ts';
 
 Deno.test('Case Statement Glob Patterns - Wildcards', async (t) => {
   await t.step('* matches any string', async () => {
@@ -422,10 +421,11 @@ Deno.test('Case Statement - Edge Cases', async (t) => {
 });
 
 Deno.test('nullglob and failglob', async (t) => {
-  // A host that knows one file, a.c, and gives an unmatched pattern back as it was
+  // A host with one file, /a.c, where the shell starts
   class GlobShell extends TestShell {
-    resolvePath(_ctx: ExecContextIf, text: string): Promise<string[]> {
-      return Promise.resolve(/^[a*?]*\.c$/.test(text) && text !== 'b.c' ? ['a.c'] : [text]);
+    constructor() {
+      super();
+      this.setFile('/a.c', '');
     }
   }
 
