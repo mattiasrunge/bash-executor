@@ -174,6 +174,9 @@ function takeHostEnv(): Record<string, string> {
 async function main(): Promise<number> {
   const hostEnv = takeHostEnv();
   const inv = parseArgs(Deno.args);
+
+  // Run as sh, bash starts in posix mode
+  if ((Deno.env.get('BASH_TS_INVOKED') ?? '').split('/').pop() === 'sh' && !('posix' in inv.options)) inv.options.posix = true;
   const self = selfCommand();
 
   Deno.env.set('BASH_TS_SCRIPT', inv.file ?? (inv.command !== undefined ? '-c' : 'stdin'));
@@ -246,7 +249,7 @@ async function main(): Promise<number> {
   let code: number;
 
   try {
-    code = getExitCode(await executor.execute(source, ctx, { file: inv.command === undefined ? inv.file : undefined }));
+    code = getExitCode(await executor.execute(source, ctx, { file: inv.command === undefined ? inv.file : undefined, command: inv.command !== undefined }));
   } catch (err) {
     if (err instanceof BashSyntaxError) {
       // The executor has run the complete commands before the error already

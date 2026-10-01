@@ -170,6 +170,8 @@ export class UnsupportedArithmeticNodeError extends BashExecutorError {
  */
 export class UnboundVariableError extends BashExecutorError {
   readonly parameter: string;
+  /** Said already, inside the redirections of the command it happened in: `{ …; } 2>/dev/null` */
+  reported = false;
 
   constructor(parameter: string, message = 'unbound variable') {
     super(`${parameter}: ${message}`, { code: 'E_UNBOUND_VARIABLE' });

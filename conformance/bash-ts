@@ -8,10 +8,20 @@
 
 # Through a symlink, as execscript's /tmp/bash, it is still itself
 SELF=$(readlink -f "$0")
+# The name it was run as: bash run as sh starts in posix mode
+BASH_TS_INVOKED=$0
+export BASH_TS_INVOKED
 
-# Sourced rather than run — `. ${THIS_SH}` in execscript — it is what bash is,
-# a binary, which cannot be; not a script that would exec over the shell
-case "$SELF" in */conformance/bash-ts) ;; *) return 126 ;; esac
+case "$SELF" in
+  */conformance/bash-ts) ;;
+  *)
+    # Sourced rather than run — `. ${THIS_SH}` in execscript — it is what bash
+    # is, a binary, which cannot be; not a script that would exec over the shell
+    [ "${BASH_SOURCE[0]}" = "$0" ] && [ -n "${BASH_TS_SELF-}" ] || return 126
+    # A copy, as posixexp's $TMPDIR/sh: the one it was copied from knows where it lives
+    SELF=$BASH_TS_SELF
+    ;;
+esac
 
 HERE=$(dirname "$SELF")
 BASH_TS_SELF="${HERE}/bash-ts"

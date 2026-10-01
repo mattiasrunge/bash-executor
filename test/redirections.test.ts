@@ -279,6 +279,16 @@ Deno.test('Redirections on compound commands', async (t) => {
     const result = await shell.runAndCapture('{ read a; read b; echo "$a-$b"; } <<< "$(printf "x\\ny\\n")"');
     assertEquals(result.stdout, 'x-y\n');
   });
+
+  await t.step('a subshell takes its own redirections, the complaint it ends with too', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('(echo out; echo err >&2) > /tmp/o 2> /tmp/e\n(echo ${u?gone}) 2> /tmp/u\necho "st=$?"');
+    assertEquals(result.stdout, 'st=1\n');
+    assertEquals(result.stderr, '');
+    assertEquals(shell.getFile('/tmp/o'), 'out\n');
+    assertEquals(shell.getFile('/tmp/e'), 'err\n');
+    assertEquals(shell.getFile('/tmp/u'), 'u: gone\n');
+  });
 });
 
 Deno.test('exec opens a file once for the commands after it', async (t) => {

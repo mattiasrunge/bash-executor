@@ -69,9 +69,9 @@ import {
 // The special parameters, which are set even when nothing has assigned to them
 /** POSIX's special builtins: in POSIX mode an assignment before one outlasts it. */
 
-const ALWAYS_SET_PARAMS = new Set(['?', '#', '$', '!', '0', '-', '_', '@', '*']);
+const ALWAYS_SET_PARAMS = new Set(['?', '#', '$', '0', '-', '_', '@', '*']);
 
-// What bash exits with when an expansion fails in a non-interactive shell
+// What bash running a -c string exits with when an expansion fails
 const UNBOUND_VARIABLE_CODE = 127 as const;
 
 /**
@@ -395,9 +395,14 @@ export class AstExecutor {
    *                      `eval`, `source` or trap it ran — which the status alone
    *                      does not tell. A host whose shell reads its input a line
    *                      at a time ends the shell on it.
+   * @param opts.command - The script is a `bash -c` string: an unset parameter
+   *                       ends it with 127, where a script read from a file or
+   *                       a prompt leaves 1, as bash does
    * @returns {Promise<number>} - The exit code of the executed script.
    */
-  public async execute(source: string, ctx: ExecContextIf, opts: { exited?: { value: boolean }; file?: string } = {}): Promise<number> {
+  public async execute(source: string, ctx: ExecContextIf, opts: { exited?: { value: boolean }; file?: string; command?: boolean } = {}): Promise<number> {
+    this.commandString = opts.command ?? false;
+
     // A script read from a file is `main` at the bottom of the call stack, and
     // the file its BASH_SOURCE; a string run as it is has no such frame
     if (opts.file !== undefined && !ctx.getArray('BASH_SOURCE')?.length) {
@@ -1324,11 +1329,12 @@ export class AstExecutor {
         throw err;
       }
 
-      await this.diagnose(ctx, err.message);
+      if (!err.reported) await this.diagnose(ctx, err.message);
 
-      // Measured: bash leaves 127 behind for an expansion error, but under
-      // `set -e` the shell goes out through errexit with the command's own 1
-      const code = ctx.getShellOption('errexit') ? 1 : UNBOUND_VARIABLE_CODE;
+      // Measured: bash leaves 1 behind for an expansion error, 127 when it
+      // runs a -c string; under `set -e` the shell goes out through errexit
+      // with the command's own 1, and a `$( )` that dies of one leaves 1
+      const code = this.commandString && !ctx.getShellOption('errexit') && !this.inSubshell(ctx) ? UNBOUND_VARIABLE_CODE : 1;
 
       ctx.setParams({ '?': String(code) });
 
@@ -1874,24 +1880,29 @@ export class AstExecutor {
   }
 
   protected async executeSubshell(node: AstNodeSubshell, parentCtx: ExecContextIf): Promise<number> {
-    // `( … )` is a subshell: env/cwd changes inside must not escape to the parent.
-    const ctx = this.subshellOf(parentCtx);
-    // A subshell is a top level of its own: an aborted command ends it, not the
-    // shell, and so does an unset parameter under `set -u`
-    const result = await this.withFileBridging(ctx, () => {
-      return this.executeNode(node.list, ctx);
-    }).catch(async (err) => {
-      if (err instanceof CommandAbortError) return this.abortStatus(err, ctx);
-      if (!(err instanceof UnboundVariableError)) return Promise.reject(err);
+    // `( … ) 2>&1`: its own redirections are in place for all of it, the
+    // complaints it ends with included
+    const code = await this.withCompoundRedirections(node, parentCtx, async (redirected) => {
+      // `( … )` is a subshell: env/cwd changes inside must not escape to the parent.
+      const ctx = this.subshellOf(redirected);
+      // A subshell is a top level of its own: an aborted command ends it, not the
+      // shell, and so does an unset parameter under `set -u`
+      const result = await this.withFileBridging(ctx, () => {
+        return this.executeNode(node.list, ctx);
+      }).catch(async (err) => {
+        if (err instanceof CommandAbortError) return this.abortStatus(err, ctx);
+        if (!(err instanceof UnboundVariableError)) return Promise.reject(err);
 
-      await this.diagnose(ctx, err.message);
+        // A subshell that dies of an unset parameter leaves 1, as bash's does
+        if (!err.reported) await this.diagnose(ctx, err.message);
 
-      return ctx.getShellOption('errexit') ? 1 : UNBOUND_VARIABLE_CODE;
+        return 1;
+      });
+
+      // `(exit 3)` ends the subshell, not the shell: to the caller it is status 3.
+      // Its EXIT trap runs as it ends.
+      return await this.runExitTrap(ctx, isExitSignal(result) ? getExitCode(result) : isReturnSignal(result) ? getReturnCode(result) : result);
     });
-
-    // `(exit 3)` ends the subshell, not the shell: to the caller it is status 3.
-    // Its EXIT trap runs as it ends.
-    const code = await this.runExitTrap(ctx, isExitSignal(result) ? getExitCode(result) : isReturnSignal(result) ? getReturnCode(result) : result);
 
     // To the caller the subshell is one command, so it leaves one status behind —
     // the array its own pipelines built lives and dies with the subshell's context.
@@ -2086,10 +2097,17 @@ export class AstExecutor {
 
         executions.push(
           handled(
-            this.executeNode(node.commands[n], cmdCtx).catch((err) =>
+            this.executeNode(node.commands[n], cmdCtx).catch(async (err) => {
               // A stage is a subshell, and an aborted command ends only it — unless lastpipe made it the shell
-              err instanceof CommandAbortError && !(isLastCommand && lastpipe) ? this.abortStatus(err, cmdCtx) : Promise.reject(err)
-            ).finally(() => {
+              if (isLastCommand && lastpipe) return Promise.reject(err);
+              if (err instanceof CommandAbortError) return this.abortStatus(err, cmdCtx);
+              if (!(err instanceof UnboundVariableError)) return Promise.reject(err);
+
+              // Measured: 1, or under -c 127 for a simple command, as bash's stages leave
+              if (!err.reported) await this.diagnose(cmdCtx, err.message);
+
+              return this.commandString && node.commands[n].type === 'Command' ? UNBOUND_VARIABLE_CODE : 1;
+            }).finally(() => {
               if (stdoutRedirected) {
                 this.shell.pipeClose(cmdCtx.getStdout()).catch((err) => console.error('Failed to close pipe: ', err));
               }
@@ -2311,6 +2329,18 @@ export class AstExecutor {
     return sub;
   }
 
+  /** Whether the script running is a `bash -c` string, which an unset parameter ends with 127. */
+  private commandString = false;
+
+  /** Whether `ctx` runs in a subshell, `( … )` or `$( … )`, rather than the shell itself. */
+  private inSubshell(ctx: ExecContextIf): boolean {
+    for (let at: ExecContextIf | undefined = ctx; at; at = at.getParent()) {
+      if (this.substitutionDepths.has(at)) return true;
+    }
+
+    return false;
+  }
+
   /** How many command substitutions `ctx` runs inside, found on the subshell it belongs to. */
   private substitutionDepth(ctx: ExecContextIf): number {
     for (let at: ExecContextIf | undefined = ctx; at; at = at.getParent()) {
@@ -2470,6 +2500,8 @@ export class AstExecutor {
       }
 
       return lastCode;
+    } catch (err) {
+      throw node.redirections?.length ? await this.reportedWithin(err, ctx) : err;
     } finally {
       await this.finishProcessSubstitutions(subs, ctx);
 
@@ -2477,6 +2509,20 @@ export class AstExecutor {
         await this.releaseTemporary(pipe);
       }
     }
+  }
+
+  /**
+   * An unset parameter is said where it happened, inside the redirections of
+   * the compound command around it — `{ echo ${u?}; } 2>/dev/null` says
+   * nothing — and not again by whatever it ends.
+   */
+  private async reportedWithin(err: unknown, ctx: ExecContextIf): Promise<unknown> {
+    if (err instanceof UnboundVariableError && !err.reported) {
+      await this.diagnose(ctx, err.message);
+      err.reported = true;
+    }
+
+    return err;
   }
 
   /**
@@ -2573,6 +2619,8 @@ export class AstExecutor {
 
     try {
       return await this.withFileBridging(ctx, () => fn(ctx), redirectPipes);
+    } catch (err) {
+      throw await this.reportedWithin(err, ctx);
     } finally {
       await this.finishProcessSubstitutions(subs, ctx);
 
@@ -3847,8 +3895,16 @@ export class AstExecutor {
     assoc = false,
   ): Promise<{ values: string[]; status: number }> {
     if (!node.expansion || node.expansion.length === 0) {
+      // `( "" )` is one empty element, which quote removal left no trace of
+      if (parts.value === '') {
+        const written = this.writtenText(node) ?? '';
+        const inner = written.slice(written.indexOf('(') + 1, written.lastIndexOf(')'));
+
+        return { values: /^\s*(""|'')\s*$/.test(inner) ? [''] : [], status: 0 };
+      }
+
       // Quote removal already ran at parse time, gaps and all
-      return { values: parts.value === '' ? [] : parts.value.split(utils.ARRAY_ELEMENT_SEPARATOR), status: 0 };
+      return { values: parts.value.split(utils.ARRAY_ELEMENT_SEPARATOR), status: 0 };
     }
 
     const { text, protectedRanges, status } = await this.substituteExpansions(node, ctx);
@@ -4366,6 +4422,13 @@ export class AstExecutor {
       return { value: this.optionFlags(ctx), set: true };
     }
 
+    // $* and $@ joined, set when there is a positional parameter
+    if (name === '*' || name === '@') {
+      const values = this.positionalParams(params);
+
+      return { value: values.join(name === '*' ? (this.getIfs(ctx)[0] ?? '') : ' '), set: values.length > 0 };
+    }
+
     if (subscript === undefined) {
       if (ctx.namerefLoops(name)) {
         await this.diagnose(ctx, `warning: ${name}: circular name reference`);
@@ -4443,7 +4506,7 @@ export class AstExecutor {
    * and `${a[@]}` alone as well (those never reach here). The special parameters
    * are always set, whether or not this executor has got round to writing one.
    */
-  protected assertParameterSet(parameter: string | number, isSet: boolean, ctx: ExecContextIf): void {
+  protected assertParameterSet(parameter: string | number, isSet: boolean, ctx: ExecContextIf, shown = String(parameter)): void {
     if (isSet || !ctx.getShellOption('nounset')) {
       return;
     }
@@ -4454,7 +4517,7 @@ export class AstExecutor {
       return;
     }
 
-    throw new UnboundVariableError(name);
+    throw new UnboundVariableError(shown);
   }
 
   /**
@@ -4701,6 +4764,11 @@ export class AstExecutor {
 
     const { name, subscript } = this.splitSubscript(xp.parameter ?? '');
 
+    // `${f[@]:0:1}` of a plain variable is a substring of its value, as bash has it
+    if (xp.op === 'substring' && params[name] !== undefined && !ctx.getArray(name) && !ctx.getAssoc(name)) {
+      return null;
+    }
+
     if (subscript === '@' || subscript === '*') {
       return { values: this.arrayElements(name, ctx, params), join: subscript === '@' ? 'field' : 'ifs' };
     }
@@ -4742,15 +4810,28 @@ export class AstExecutor {
 
       const params = this.paramView(ctx);
 
-      const { value: target, set } = await this.lookupParameter(name, ctx, params);
+      let { value: target, set } = await this.lookupParameter(name, ctx, params);
 
+      // `${!*}` with no positional parameters leads to nothing: unset, not invalid
+      if (!set && (name === '@' || name === '*')) {
+        if (ctx.getShellOption('nounset') && !/^:?[-=+?]/.test(rest)) throw new UnboundVariableError(`!${name}`);
+
+        target = name;
+        set = true;
+      }
+
+      // `set -u` or not, as bash says it
       if (!set) {
-        if (ctx.getShellOption('nounset')) throw new UnboundVariableError(`!${name}`);
         throw new CommandAbortError(`${name}: invalid indirect expansion`, { code: 'E_BAD_SUBSTITUTION' });
       }
 
       if (!/^([A-Za-z_][A-Za-z0-9_]*(\[.*\])?|\d+|[@*#?$!-])$/s.test(target)) {
         throw new CommandAbortError(`${target}: invalid variable name`, { code: 'E_BAD_SUBSTITUTION' });
+      }
+
+      // `set -u` and what it leads to is unset: bash names the indirection, `!x`
+      if (ctx.getShellOption('nounset') && !/^:?[-=+?]/.test(rest) && !/^[@*]$|\[[@*]\]$/.test(target) && !(await this.isParameterSet(target, ctx, params))) {
+        throw new UnboundVariableError(`!${name}`);
       }
 
       const ast = await parse(`\${${target}${rest}}`, { mode: 'word-expansion' });
@@ -4786,7 +4867,8 @@ export class AstExecutor {
     let status = 0;
 
     // Set when the whole word is a list expansion that turned out to be empty
-    let emptyList = false;
+    // Where a `"$@"` expanded to nothing
+    const emptyAt: number[] = [];
 
     for (const xp of await this.resolveIndirections(node.expansion, ctx)) {
       if (xp.resolved) {
@@ -4848,13 +4930,10 @@ export class AstExecutor {
             list.values = list.values.filter((value, i) => value !== '' || (!alone && (i === 0 || i === list.values.length - 1)));
           }
 
-          // An empty list in a word of its own expands to no word at all, not to
-          // one empty word: `f "$@"` with no arguments passes nothing.
+          // An empty list leaves nothing, not even its quotes: `f "$@"` with no
+          // arguments passes no word. Whether the word goes is decided at the end
           if (list.values.length === 0 && separator === utils.FIELD_MARKER) {
-            const rest = node.text.slice(0, xp.loc!.start) + node.text.slice(xp.loc!.end + 1);
-            if (rest.replace(/"/g, '') === '') {
-              emptyList = true;
-            }
+            emptyAt.push(xp.loc!.start);
           }
 
           rValue.replace(xp.loc!.start, xp.loc!.end + 1, list.values.join(separator));
@@ -4881,12 +4960,41 @@ export class AstExecutor {
             const word = xpAny.word as AstNodeWord;
             const inner = word.expansion?.length
               ? await this.substituteExpansions(word, ctx, subs, opts)
-              : { text: String(xpAny.wordSource ?? word.text), protectedRanges: [], status: 0 };
+              : { text: String(xpAny.wordSource ?? word.text), protectedRanges: [], status: 0, emptyList: false };
 
             status = inner.status || status;
-            rValue.replaceWithRanges(xp.loc!.start, xp.loc!.end + 1, inner.text, inner.protectedRanges);
+
+            // `${u-"$@"}` with no parameters: nothing, as an empty "$@" is
+            if (inner.emptyList) {
+              emptyAt.push(xp.loc!.start);
+              rValue.replace(xp.loc!.start, xp.loc!.end + 1, '');
+              continue;
+            }
+
+            // A tilde prefix is expanded, `${u-~}` as `~` is; the parser saw no word there
+            let { text, protectedRanges: ranges } = inner;
+            const tilde = /^~([A-Za-z0-9._-]*)(?=\/|$)/.exec(text);
+
+            if (tilde && this.shell.resolveHomeUser && !ranges.some((range) => range.start === 0)) {
+              const home = await this.shell.resolveHomeUser(ctx, tilde[1] || null).catch(() => '');
+
+              if (home) {
+                const prefix = singleQuoted(home);
+                const shift = prefix.length - tilde[0].length;
+
+                text = prefix + text.slice(tilde[0].length);
+                ranges = ranges.map((range) => ({ start: range.start + shift, end: range.end + shift }));
+              }
+            }
+
+            // Its own unquoted text is what the expansion gave, split by IFS as that
+            // is: with IFS null, `${0+ $X }` keeps its blanks
+            rValue.replaceWithRanges(xp.loc!.start, xp.loc!.end + 1, text, [...ranges, ...unquotedLiterals(text, ranges)]);
             continue;
           }
+
+          // `set -u` holds for an operator on the value, `${u#x}` and `${u@Q}` alike
+          if (DISTRIBUTING_OPS.has(String(xpAny.op))) this.assertParameterSet(xp.parameter!, isSet, ctx);
 
           const transformed = await this.applyValueOperator(xpAny, paramValue, ctx);
           const dquoted = isDoubleQuotedAt(node.text, xp.loc!.start);
@@ -4895,16 +5003,16 @@ export class AstExecutor {
             resolved = transformed;
           } else if (xpAny.op === 'useDefaultValue') {
             // ${var:-word} — use word if var is unset or empty
-            resolved = paramValue || await this.operatorWordValue(xpAny, ctx, dquoted);
+            resolved = paramValue || await this.operatorWordValue(xpAny, ctx, dquoted, !opts.noSplit);
           } else if (xpAny.op === 'useDefaultValueIfUnset') {
             // ${var-word} — use word if var is unset
-            resolved = isSet ? paramValue : await this.operatorWordValue(xpAny, ctx, dquoted);
+            resolved = isSet ? paramValue : await this.operatorWordValue(xpAny, ctx, dquoted, !opts.noSplit);
           } else if (xpAny.op === 'useAlternativeValue') {
             // ${var:+word} — use word if var is set and non-empty
-            resolved = paramValue ? await this.operatorWordValue(xpAny, ctx, dquoted) : '';
+            resolved = paramValue ? await this.operatorWordValue(xpAny, ctx, dquoted, !opts.noSplit) : '';
           } else if (xpAny.op === 'useAlternativeValueIfUnset') {
             // ${var+word} — use word if var is set
-            resolved = isSet ? await this.operatorWordValue(xpAny, ctx, dquoted) : '';
+            resolved = isSet ? await this.operatorWordValue(xpAny, ctx, dquoted, !opts.noSplit) : '';
           } else if (xpAny.op === 'assignDefaultValue' || xpAny.op === 'assignDefaultValueIfUnset') {
             // ${var:=word} / ${var=word} — when var is empty (or unset), it is assigned word, and
             // expands to it. Only a variable can be: `${1:=x}` is refused.
@@ -4917,7 +5025,8 @@ export class AstExecutor {
                 throw new CommandAbortError(`$${xp.parameter}: cannot assign in this way`, { code: 'E_BAD_ASSIGNMENT' });
               }
 
-              resolved = await this.operatorWordValue(xpAny, ctx, dquoted);
+              // What it assigns is not split, as no assignment is
+              resolved = await this.operatorWordValue(xpAny, ctx, dquoted, false, true);
               await this.applyAssignment({ name, subscript, append: false, values: [resolved], list: false, status: 0 }, ctx, false);
             } else {
               resolved = paramValue;
@@ -4951,7 +5060,11 @@ export class AstExecutor {
               resolved = subscript === '@' || subscript === '*' ? String(this.arrayElements(name, ctx, params).length) : String(paramValue.length);
             }
           } else {
-            this.assertParameterSet(xp.parameter!, isSet, ctx);
+            // bash names an unbraced special or positional parameter as written, `$1`
+            const braced = node.text[xp.loc!.start + 1] === '{';
+            const shown = braced || /^[A-Za-z_]/.test(String(xp.parameter)) ? String(xp.parameter) : `$${xp.parameter}`;
+
+            this.assertParameterSet(xp.parameter!, isSet, ctx, shown);
 
             resolved = paramValue;
           }
@@ -4992,6 +5105,10 @@ export class AstExecutor {
       }
     }
 
+    // The word may go when an empty "$@" was in it and no other quotes are: those
+    // keep it, `""$@` is one empty word, while `"$xxx$@"` is none
+    const emptyList = emptyAt.length > 0 && !hasOtherQuotes(node.text, (node.expansion ?? []).map((xp) => xp.loc!), emptyAt);
+
     return { text: rValue.text, protectedRanges: rValue.protectedRanges, status, emptyList };
   }
 
@@ -5017,10 +5134,6 @@ export class AstExecutor {
       noSplit: opts.split === false || node.type === 'AssignmentWord',
     });
 
-    if (emptyList) {
-      return { values: [], status };
-    }
-
     const hasPathExpansion = node.expansion.some((xp) => xp.type === 'PathExpansion' && !xp.resolved);
 
     // POSIX: Assignment values do not undergo field splitting
@@ -5035,6 +5148,11 @@ export class AstExecutor {
     const ifs = opts.split === false ? '' : this.getIfs(ctx);
     const unquotedResult = utils.unquoteWordWithProtectedRanges(value, protectedRanges, ifs);
     const result = { values: unquotedResult.values, status };
+
+    // Nothing but an empty "$@" and what expanded to nothing: no word at all
+    if (emptyList && result.values.every((field) => field === '')) {
+      return { values: [], status };
+    }
 
     // Pathname expansion done here, from the directories the host lists: each
     // field a pattern in which what the word quoted matches itself
@@ -5119,11 +5237,17 @@ export class AstExecutor {
    * it would between double quotes (and the `}`), and a nested `"…"` only
    * groups. Outside double quotes the word is read as a word anywhere is.
    */
-  private async operatorWordValue(xp: Record<string, unknown>, ctx: ExecContextIf, dquoted: boolean): Promise<string> {
+  /**
+   * The word of `${x-word}` and its kin, in double quotes as the expansion is.
+   * With `fields`, a `"$@"` in it stays one field per parameter, as bash keeps
+   * them in `"${1+ $@ }"`: they come back joined by the field marker.
+   */
+  private async operatorWordValue(xp: Record<string, unknown>, ctx: ExecContextIf, dquoted: boolean, fields = false, assigned = false): Promise<string> {
     const source = xp.wordSource;
 
-    if (!dquoted || typeof source !== 'string' || !/['"\\]/.test(source)) {
-      return this.resolveWordValue(xp.word, ctx);
+    // In double quotes the word is too: `"${u-$*}"` joins on IFS as "$*" does
+    if (!dquoted || typeof source !== 'string' || !/['"\\$`]/.test(source)) {
+      return this.resolveWordValue(xp.word, ctx, assigned);
     }
 
     let text = '"';
@@ -5168,15 +5292,24 @@ export class AstExecutor {
       return this.resolveWordValue(xp.word, ctx);
     }
 
+    if (fields && /\$@|\$\{@|\[@\]/.test(source)) {
+      const { values } = await this.resolveExpansions(word, ctx);
+
+      return values.join(utils.FIELD_MARKER);
+    }
+
     const { values } = await this.resolveExpansions({ ...word, type: 'AssignmentWord' } as AstNodeAssignmentWord, ctx);
 
     return values[0] ?? '';
   }
 
-  private async resolveWordValue(word: unknown, ctx: ExecContextIf): Promise<string> {
+  /** A word's value; `noSplit` takes it as an assignment does, `$*` joined on IFS and nothing split. */
+  private async resolveWordValue(word: unknown, ctx: ExecContextIf, noSplit = false): Promise<string> {
     if (!word || typeof word !== 'object') return '';
     const w = word as AstNodeWord;
     if (w.expansion && w.expansion.length > 0) {
+      if (noSplit) return (await this.resolveExpansions({ ...w, type: 'AssignmentWord' } as AstNodeAssignmentWord, ctx)).values[0] ?? '';
+
       const result = await this.resolveExpansions(w, ctx);
       return result.values.join(' ');
     }
@@ -5268,4 +5401,75 @@ function keyEnd(element: string, ranges: ProtectedRange[]): number {
   }
 
   return -1;
+}
+
+/**
+ * Whether a word has quotes that hold no empty `"$@"` (at `emptyAt`): `""`,
+ * `''` or `"$x"` beside it, which make an empty word of it. The expansions'
+ * own text (`locs`) is stepped over.
+ */
+function hasOtherQuotes(text: string, locs: { start: number; end: number }[], emptyAt: number[]): boolean {
+  const ends = new Map(locs.filter(Boolean).map((loc) => [loc.start, loc.end]));
+  let open = -1;
+  let quote = '';
+
+  for (let i = 0; i < text.length; i++) {
+    const end = ends.get(i);
+
+    if (end !== undefined) {
+      i = end;
+      continue;
+    }
+
+    const c = text[i];
+
+    if (quote) {
+      if (c === '\\' && quote === '"') {
+        i++;
+      } else if (c === quote) {
+        if (!emptyAt.some((at) => at > open && at < i)) return true;
+        quote = '';
+      }
+    } else if (c === '\\') {
+      i++;
+    } else if (c === '"' || c === "'") {
+      quote = c;
+      open = i;
+    }
+  }
+
+  return false;
+}
+
+/** The runs of a word's text that no quotes hold, no backslash escapes and no expansion put there (`ranges`). */
+function unquotedLiterals(text: string, ranges: ProtectedRange[]): ProtectedRange[] {
+  const ends = new Map(ranges.filter((range) => range.end > range.start).map((range) => [range.start, range.end]));
+  const literals: ProtectedRange[] = [];
+  let quote = '';
+  for (let i = 0; i < text.length; i++) {
+    const end = ends.get(i);
+
+    if (end !== undefined) {
+      i = end - 1;
+      continue;
+    }
+
+    const c = text[i];
+
+    if (quote) {
+      if (c === '\\' && quote === '"') i++;
+      else if (c === quote) quote = '';
+    } else if (c === '\\') {
+      i++;
+    } else if (c === '"' || c === "'") {
+      quote = c;
+    } else {
+      const last = literals[literals.length - 1];
+
+      if (last && last.end === i) last.end = i + 1;
+      else literals.push({ start: i, end: i + 1 });
+    }
+  }
+
+  return literals;
 }

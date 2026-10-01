@@ -90,16 +90,17 @@ Deno.test('errexit', async (t) => {
 });
 
 Deno.test('nounset', async (t) => {
-  await t.step('an unset parameter is an error, with status 127', async () => {
+  await t.step('an unset parameter ends the script with 1, a -c string with 127', async () => {
     const result = await new TestShell().runAndCapture('set -u; echo "$NOPE"; echo after');
     assertEquals(result.stdout, '');
     assertEquals(result.stderr, 'NOPE: unbound variable\n');
-    assertEquals(result.exitCode, 127);
+    assertEquals(result.exitCode, 1);
+    assertEquals((await new TestShell().runAndCapture('set -u; echo "$NOPE"; echo after', { command: true })).exitCode, 127);
   });
 
   await t.step('so is ${#x} and an unset positional', async () => {
-    assertEquals((await new TestShell().runAndCapture('set -u; echo "${#NOPE}"')).exitCode, 127);
-    assertEquals((await new TestShell().runAndCapture('set -u; echo "${1}"')).exitCode, 127);
+    assertEquals((await new TestShell().runAndCapture('set -u; echo "${#NOPE}"')).exitCode, 1);
+    assertEquals((await new TestShell().runAndCapture('set -u; echo "${1}"')).exitCode, 1);
   });
 
   await t.step('the operators that ask about unset are not errors', async () => {
@@ -125,8 +126,8 @@ Deno.test('nounset', async (t) => {
     assertEquals(result.exitCode, 0);
   });
 
-  await t.step('under errexit the shell leaves with 1 rather than 127', async () => {
-    assertEquals((await new TestShell().runAndCapture('set -eu; echo "${NOPE}"; echo after')).exitCode, 1);
+  await t.step('under errexit even a -c string leaves with 1', async () => {
+    assertEquals((await new TestShell().runAndCapture('set -eu; echo "${NOPE}"; echo after', { command: true })).exitCode, 1);
   });
 });
 
@@ -134,11 +135,11 @@ Deno.test('the ${x:?message} family', async (t) => {
   await t.step('an unset parameter complains with the message', async () => {
     const result = await new TestShell().runAndCapture('echo "${NOPE:?must be set}"; echo after');
     assertEquals(result.stderr, 'NOPE: must be set\n');
-    assertEquals(result.exitCode, 127);
+    assertEquals(result.exitCode, 1);
   });
 
   await t.step('an empty one complains for :? but not for ?', async () => {
-    assertEquals((await new TestShell().runAndCapture('Q=; echo "${Q:?was empty}"')).exitCode, 127);
+    assertEquals((await new TestShell().runAndCapture('Q=; echo "${Q:?was empty}"')).exitCode, 1);
     assertEquals((await new TestShell().runAndCapture('Q=; echo "${Q?only if unset}"')).exitCode, 0);
   });
 

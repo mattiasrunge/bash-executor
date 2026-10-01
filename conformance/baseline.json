@@ -499,9 +499,9 @@
       "reference": "pass"
     },
     "run-array": {
-      "upstream": 0.853,
+      "upstream": 0.868,
       "pass": false,
-      "stdout": 0.88,
+      "stdout": 0.896,
       "reference": "pass"
     },
     "run-array2": {
@@ -607,9 +607,9 @@
       "reference": "pass"
     },
     "run-dollars": {
-      "upstream": 0.87,
+      "upstream": 0.988,
       "pass": false,
-      "stdout": 0.871,
+      "stdout": 0.988,
       "reference": "pass"
     },
     "run-dynvar": {
@@ -625,15 +625,15 @@
       "reference": "pass"
     },
     "run-execscript": {
-      "upstream": 0.842,
+      "upstream": 0.847,
       "pass": false,
       "stdout": 0.914,
       "reference": "env"
     },
     "run-exp-tests": {
-      "upstream": 0.936,
+      "upstream": 0.978,
       "pass": false,
-      "stdout": 0.95,
+      "stdout": 0.983,
       "reference": "pass"
     },
     "run-exportfunc": {
@@ -764,9 +764,9 @@
       "reference": "pass"
     },
     "run-more-exp": {
-      "upstream": 0.865,
+      "upstream": 0.925,
       "pass": false,
-      "stdout": 0.934,
+      "stdout": 0.974,
       "reference": "pass"
     },
     "run-nameref": {
@@ -776,9 +776,9 @@
       "reference": "pass"
     },
     "run-new-exp": {
-      "upstream": 0.915,
+      "upstream": 0.929,
       "pass": false,
-      "stdout": 0.935,
+      "stdout": 0.945,
       "reference": "pass"
     },
     "run-nquote": {
@@ -830,9 +830,9 @@
       "reference": "pass"
     },
     "run-posixexp": {
-      "upstream": 0.927,
+      "upstream": 0.957,
       "pass": false,
-      "stdout": 0.942,
+      "stdout": 0.963,
       "reference": "pass"
     },
     "run-posixexp2": {
@@ -872,9 +872,9 @@
       "reference": "pass"
     },
     "run-quote": {
-      "upstream": 0.975,
+      "upstream": 0.995,
       "pass": false,
-      "stdout": 0.975,
+      "stdout": 0.995,
       "reference": "pass"
     },
     "run-quotearray": {
@@ -884,14 +884,14 @@
       "reference": "pass"
     },
     "run-read": {
-      "upstream": 0.647,
+      "upstream": 0.637,
       "pass": false,
-      "stdout": 0.652,
+      "stdout": 0.656,
       "reference": "env",
       "timeout": true
     },
     "run-redir": {
-      "upstream": 0.738,
+      "upstream": 0.743,
       "pass": false,
       "stdout": 0.732,
       "reference": "pass"
@@ -946,9 +946,9 @@
       "reference": "pass"
     },
     "run-tilde2": {
-      "upstream": 0.679,
+      "upstream": 0.714,
       "pass": false,
-      "stdout": 0.679,
+      "stdout": 0.714,
       "reference": "pass"
     },
     "run-trap": {
