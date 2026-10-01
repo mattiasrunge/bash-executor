@@ -46,6 +46,12 @@ export type BuiltinServices = {
    */
   expandSubscript: (subscript: string, keyed: boolean) => Promise<string>;
   /**
+   * The arguments written as `name[sub]`, bash's W_ARRAYREF words, whose
+   * subscripts were expanded with the word: `unset a["$k"]` removes the key
+   * $k holds, where `unset 'a[$k]'` expands the subscript itself.
+   */
+  arrayRefs?: Set<string>;
+  /**
    * Say a syntax error in text the builtin ran as bash says it, and on the
    * shell's stderr: `$0: eval: line N: …` for eval's string, `file: line N: …`
    * for a sourced file.

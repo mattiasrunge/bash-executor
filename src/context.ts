@@ -413,17 +413,20 @@ export class ExecContext implements ExecContextIf {
    * to), exported or not, or a dynamic one. An array is not one here, as it is
    * not in `getParams`.
    */
+  /** A special parameter from the nearest scope that has it; a function's positional ones stop at its frame. */
+  private specialParam(name: string, positional: boolean): string | undefined {
+    if (name in this.special) return this.special[name];
+    if (positional && this.parent && '#' in this.special) return undefined;
+
+    return this.parent?.specialParam(name, positional);
+  }
+
   getParam(name: string): string | undefined {
     if (isSpecialParam(name)) {
       // A function frame's positional parameters are the whole set, as in getParams
       const positional = /^([1-9]\d*|#|@|\*)$/.test(name);
 
-      for (let scope: ExecContext | undefined = this; scope; scope = scope.parent) {
-        if (name in scope.special) return scope.special[name];
-        if (positional && scope.parent && '#' in scope.special) return undefined;
-      }
-
-      return undefined;
+      return this.specialParam(name, positional);
     }
 
     const found = this.lookup(name);

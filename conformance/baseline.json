@@ -499,9 +499,9 @@
       "reference": "pass"
     },
     "run-array": {
-      "upstream": 0.812,
+      "upstream": 0.853,
       "pass": false,
-      "stdout": 0.844,
+      "stdout": 0.88,
       "reference": "pass"
     },
     "run-array2": {
@@ -511,9 +511,9 @@
       "reference": "pass"
     },
     "run-assoc": {
-      "upstream": 0.619,
+      "upstream": 0.998,
       "pass": false,
-      "stdout": 0.736,
+      "stdout": 1,
       "reference": "pass"
     },
     "run-attr": {
@@ -607,9 +607,9 @@
       "reference": "pass"
     },
     "run-dollars": {
-      "upstream": 0.853,
+      "upstream": 0.87,
       "pass": false,
-      "stdout": 0.854,
+      "stdout": 0.871,
       "reference": "pass"
     },
     "run-dynvar": {
@@ -631,9 +631,9 @@
       "reference": "env"
     },
     "run-exp-tests": {
-      "upstream": 0.922,
+      "upstream": 0.936,
       "pass": false,
-      "stdout": 0.938,
+      "stdout": 0.95,
       "reference": "pass"
     },
     "run-exportfunc": {
@@ -770,15 +770,15 @@
       "reference": "pass"
     },
     "run-nameref": {
-      "upstream": 0.881,
+      "upstream": 0.882,
       "pass": false,
       "stdout": 0.91,
       "reference": "pass"
     },
     "run-new-exp": {
-      "upstream": 0.885,
+      "upstream": 0.915,
       "pass": false,
-      "stdout": 0.908,
+      "stdout": 0.935,
       "reference": "pass"
     },
     "run-nquote": {
@@ -830,9 +830,9 @@
       "reference": "pass"
     },
     "run-posixexp": {
-      "upstream": 0.851,
+      "upstream": 0.927,
       "pass": false,
-      "stdout": 0.864,
+      "stdout": 0.942,
       "reference": "pass"
     },
     "run-posixexp2": {
@@ -854,9 +854,9 @@
       "reference": "env"
     },
     "run-precedence": {
-      "upstream": 0.69,
-      "pass": false,
-      "stdout": 0.69,
+      "upstream": 1,
+      "pass": true,
+      "stdout": 1,
       "reference": "pass"
     },
     "run-printf": {
@@ -878,9 +878,9 @@
       "reference": "pass"
     },
     "run-quotearray": {
-      "upstream": 0.717,
+      "upstream": 0.808,
       "pass": false,
-      "stdout": 0.795,
+      "stdout": 0.856,
       "reference": "pass"
     },
     "run-read": {

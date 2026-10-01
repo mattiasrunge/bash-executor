@@ -9,6 +9,7 @@
 import { decodeEscapedBytes, escapedByte } from '../bytes.ts';
 import { backslashQuoted } from '../quote.ts';
 import type { ExecContextIf, ShellIf } from '../types.ts';
+import { assignReference, type NameReference, nameReference } from './element.ts';
 import type { BuiltinHandler, BuiltinResult } from './types.ts';
 
 const INT64_MIN = -(2n ** 63n);
@@ -559,16 +560,19 @@ export const printfBuiltin: BuiltinHandler = async (
   ctx: ExecContextIf,
   args: string[],
   _shell: ShellIf,
+  _io?,
+  services?,
 ): Promise<BuiltinResult> => {
-  let target: string | undefined;
+  let target: NameReference | undefined;
 
   if (args[0] === '-v') {
-    target = args[1];
+    const name = args[1] ?? '';
+    const ref = nameReference(name, ctx);
+
     args = args.slice(2);
 
-    if (!target || !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(target)) {
-      return { code: 2, stderr: `printf: \`${target ?? ''}': not a valid identifier\n` };
-    }
+    if (!ref) return { code: 2, stderr: `printf: \`${name}': not a valid identifier\n` };
+    target = ref;
   }
 
   if (args[0] === '--') {
@@ -614,7 +618,7 @@ export const printfBuiltin: BuiltinHandler = async (
   }
 
   if (target !== undefined) {
-    ctx.setParams({ [target]: chunks.map((chunk) => chunk.stdout ?? '').join('') });
+    await assignReference(ctx, target, chunks.map((chunk) => chunk.stdout ?? '').join(''), services);
 
     return { code, stderr: errors.messages.join('') || undefined };
   }

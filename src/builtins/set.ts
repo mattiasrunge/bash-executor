@@ -6,8 +6,9 @@
 
 import { DEFAULT_SHELL_OPTIONS, type ExecContextIf, SHELL_OPTION_FLAG_MAP, type ShellIf } from '../types.ts';
 import { functionText } from '../print-command.ts';
-import { doubleQuoted, quotedIfNeeded } from '../quote.ts';
+import { quotedIfNeeded } from '../quote.ts';
 import type { BuiltinHandler, BuiltinResult } from './types.ts';
+import { compoundValue } from './variable-listing.ts';
 
 /**
  * The set builtin command.
@@ -46,14 +47,10 @@ export const setBuiltin: BuiltinHandler = async (
       lines[name] = `${name}=${quotedIfNeeded(value)}`;
     }
 
-    for (const [name, values] of Object.entries(ctx.getArrays())) {
-      lines[name] = `${name}=(${Object.entries(values).map(([index, value]) => `[${index}]=${doubleQuoted(value)}`).join(' ')})`;
-    }
+    for (const name of [...Object.keys(ctx.getArrays()), ...Object.keys(ctx.getAssocs())]) {
+      const info = ctx.getVariable(name);
 
-    for (const [name, values] of Object.entries(ctx.getAssocs())) {
-      const elements = Object.entries(values).map(([key, value]) => `[${quotedIfNeeded(key).replace(/^'.*'$/s, () => doubleQuoted(key))}]=${doubleQuoted(value)} `);
-
-      lines[name] = `${name}=(${elements.join('')})`;
+      if (info) lines[name] = `${name}=${compoundValue(info, name)}`;
     }
 
     const names = Object.keys(lines).filter((name) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name)).sort();

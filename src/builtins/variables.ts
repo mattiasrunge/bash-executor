@@ -1,4 +1,6 @@
 import { utils } from '@ein/bash-parser';
+import { contextVariables, evaluateArithmeticText } from '../arith.ts';
+import { assocEntries } from '../assoc-list.ts';
 import { exportedFunctionText, functionEnvName } from '../print-command.ts';
 import type { ExecContextIf } from '../types.ts';
 import type { BuiltinHandler } from './types.ts';
@@ -30,13 +32,7 @@ export const assignArrayArg = (ctx: ExecContextIf, arg: string, local: boolean):
   if (ctx.getAssoc(parts.name)) {
     const entries = parts.append ? { ...ctx.getAssoc(parts.name) } : {};
 
-    for (const element of elements) {
-      const keyed = element.match(/^\[([^\]]*)\]=(.*)$/s);
-
-      if (keyed) {
-        entries[keyed[1]] = keyed[2];
-      }
-    }
+    for (const { key, value } of assocEntries(parts.name, elements).entries) entries[key] = value;
 
     if (local) {
       ctx.setLocalAssoc(parts.name, entries);
@@ -114,7 +110,7 @@ export const exportBuiltin: BuiltinHandler = (ctx, args) => declareCommand('expo
  *   -f    Treat each name as a function
  *   -v    Treat each name as a variable (default)
  */
-export const unsetBuiltin: BuiltinHandler = async (ctx, args) => {
+export const unsetBuiltin: BuiltinHandler = async (ctx, args, _shell, _io, services) => {
   let unsetFunctions = false;
   let variablesOnly = false;
   let noref = false;
@@ -183,13 +179,18 @@ export const unsetBuiltin: BuiltinHandler = async (ctx, args) => {
         continue;
       }
 
+      // The subscript is expanded, as bash expands it once more, unless
+      // assoc_expand_once makes a key what it says
       if (ctx.getAssoc(element.name)) {
-        ctx.unsetAssocElement(element.name, element.subscript);
+        const literal = ctx.getShellOption('assoc_expand_once') || !services || services.arrayRefs?.has(name) === true;
+
+        ctx.unsetAssocElement(element.name, literal ? element.subscript : await services.expandSubscript(element.subscript, true));
         continue;
       }
 
       const array = ctx.getArray(element.name);
-      const parsed = Number.parseInt(element.subscript, 10) || 0;
+      const expanded = services ? await services.expandSubscript(element.subscript, false) : element.subscript;
+      const parsed = Number(await evaluateArithmeticText(expanded, contextVariables(ctx, services?.expandSubscript)));
       const index = parsed < 0 ? (array?.length ?? 0) + parsed : parsed;
 
       // Counting back from the end past the first element

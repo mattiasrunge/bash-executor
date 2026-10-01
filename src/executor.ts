@@ -34,7 +34,8 @@ import {
 import { getExitCode, getReturnCode, isExitSignal, isReturnSignal, makeExitSignal } from './builtins/exit.ts';
 import { JOB_BUILTINS } from './builtins/jobs.ts';
 import { type BuiltinRegistry, SPECIAL_BUILTINS } from './builtins/types.ts';
-import { assocKeys } from './builtins/variable-listing.ts';
+import { assocKeys, attributeLetters, compoundValue, keyQuoted, valueQuoted } from './builtins/variable-listing.ts';
+import { assocEntries, keyedElement, keyedText } from './assoc-list.ts';
 import type { ErrorPosition } from './errors.ts';
 import { exportedFunctionName, exportedFunctionText, type FunctionDefinition, functionEnvName } from './print-command.ts';
 import { singleQuoted } from './quote.ts';
@@ -101,10 +102,25 @@ const DISTRIBUTING_OPS = new Set([
   'removeLargestPrefixPattern',
   'caseChange',
   'substring',
+  'transformation',
 ]);
 
 /** Where what matched goes in the replacement of `${x/p/s}`: an unquoted `&`. A noncharacter, which no text holds. */
 const MATCH_MARK = '\uFDD3';
+
+/** Builtins that take `name[sub]` arguments, bash's ARRAYREF_BUILTIN ones */
+const ARRAYREF_BUILTINS = new Set(['declare', 'let', 'local', 'printf', 'read', 'test', '[', 'typeset', 'unset', 'wait']);
+
+/** Whether a word, as written, is `name[sub]` and nothing more: bash's valid_array_reference. */
+function isArrayReference(text: string): boolean {
+  const open = text.indexOf('[');
+
+  if (open < 1 || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(text.slice(0, open))) return false;
+
+  const close = subscriptEnd(text, open);
+
+  return close > open + 1 && close === text.length - 1;
+}
 
 /** Builtins whose arguments are assignments rather than ordinary words */
 const DECLARATION_COMMANDS = new Set(['declare', 'typeset', 'local', 'export', 'readonly']);
@@ -1602,6 +1618,7 @@ export class AstExecutor {
     // `local x=($V)` is an element list.
     const literalName = node.name && !node.name.expansion?.length ? node.name.text : '';
     const declaration = DECLARATION_COMMANDS.has(literalName);
+    const arrayRefs = new Set<string>();
 
     // Words expand left to right, the name first: `$(a) $(b)` runs a before b
     const expandedName = await this.resolveExpansions(node.name, ctx, subs);
@@ -1610,13 +1627,21 @@ export class AstExecutor {
       const assignment = declaration ? utils.parseAssignmentWord(arg.text) : null;
 
       if (assignment) {
-        args.push(await this.resolveDeclarationArg(arg, ctx, assignment));
+        // `declare -A h=(k v)`: an associative array before the builtin has made it one
+        const assoc = args.some((option) => /^-[A-Za-z]*A/.test(option));
+
+        args.push(await this.resolveDeclarationArg(arg, ctx, assignment, assoc));
         continue;
       }
 
       const { values } = await this.resolveExpansions(arg, ctx, subs);
 
       args.push(...values);
+
+      // Written as `name[sub]`, bash's W_ARRAYREF: unset expands the subscript no more
+      if (ARRAYREF_BUILTINS.has(literalName) && isArrayReference(this.writtenText(arg) ?? arg.text)) {
+        for (const value of values) arrayRefs.add(value);
+      }
     }
 
     // Apply IO redirections
@@ -1667,6 +1692,7 @@ export class AstExecutor {
             : this.inSourceFrame({ base: Number(ctx.getParam('LINENO') ?? 1) - 1, name: this.sourceFrame.name }, () => this.executeSource(script, ctx));
         const result = await builtin(ctx, args || [], this.shell, execute, {
           expandSubscript: (subscript, keyed) => this.arithmeticSubscript(subscript, keyed, ctx),
+          arrayRefs,
           reportSyntaxError: (err, where, source) => this.reportSyntaxError(ctx, err, where, source),
         });
 
@@ -3710,6 +3736,13 @@ export class AstExecutor {
     });
   }
 
+  /** A word as the source spells it, quotes and all, when the source is at hand. */
+  protected writtenText(node: AstNodeWord | AstNodeAssignmentWord): string | undefined {
+    return this.currentSource !== undefined && node.loc?.start?.char !== undefined && node.loc.end?.char !== undefined
+      ? this.currentSource.slice(node.loc.start.char, node.loc.end.char + 1)
+      : undefined;
+  }
+
   /**
    * Work out what an assignment word assigns, expansions included.
    *
@@ -3723,6 +3756,14 @@ export class AstExecutor {
 
     if (!parts) {
       return null;
+    }
+
+    // `T='([a]=1)'` reads as a list once quotes are gone; the source says it was a string
+    const written = parts.list ? this.writtenText(node) : undefined;
+    const writtenParts = written !== undefined ? utils.parseAssignmentWord(written) : null;
+
+    if (writtenParts && writtenParts.name === parts.name && !writtenParts.list) {
+      Object.assign(parts, { list: false, valueStart: parts.valueStart - 1, value: node.text.slice(parts.valueStart - 1) });
     }
 
     if (parts.list) {
@@ -3764,11 +3805,9 @@ export class AstExecutor {
    * The builtin is handed text, so an element list is handed back with its
    * boundaries still marked and split again on the other side.
    */
-  protected async resolveDeclarationArg(node: AstNodeWord, ctx: ExecContextIf, parts: utils.AssignmentParts): Promise<string> {
+  protected async resolveDeclarationArg(node: AstNodeWord, ctx: ExecContextIf, parts: utils.AssignmentParts, assoc = false): Promise<string> {
     // `c='(3)'` reads as `c=(3)` once quotes are gone; the source says which it was
-    const written = this.currentSource !== undefined && node.loc?.start?.char !== undefined && node.loc.end?.char !== undefined
-      ? this.currentSource.slice(node.loc.start.char, node.loc.end.char + 1)
-      : undefined;
+    const written = this.writtenText(node);
     // Written as a list only when the word itself starts `name=(`, unquoted
     const quotedList = parts.list && written !== undefined && !(utils.isAssignmentPrefix(written) && written[written.indexOf('=') + 1] === '(');
 
@@ -3781,7 +3820,7 @@ export class AstExecutor {
     }
 
     if (parts.list) {
-      const { values } = await this.resolveArrayElements(node as unknown as AstNodeAssignmentWord, ctx, parts);
+      const { values } = await this.resolveArrayElements(node as unknown as AstNodeAssignmentWord, ctx, parts, assoc);
 
       return `${node.text.slice(0, parts.valueStart)}${values.join(utils.ARRAY_ELEMENT_SEPARATOR)})`;
     }
@@ -3794,11 +3833,18 @@ export class AstExecutor {
 
   /**
    * The elements of an array literal, `a=(x "b c" $rest)`.
+   *
+   * A `[key]=value` element is one assignment, neither side split, and is
+   * handed on as `keyedText` gives it, so a key holding `]` stays the key. On
+   * an associative array (`assoc`, or the name is one already) whose first
+   * element is no `[key]=value`, the elements are keys and values in turn,
+   * each one word as written, and come back keyed the same way.
    */
   protected async resolveArrayElements(
     node: AstNodeAssignmentWord,
     ctx: ExecContextIf,
     parts: utils.AssignmentParts,
+    assoc = false,
   ): Promise<{ values: string[]; status: number }> {
     if (!node.expansion || node.expansion.length === 0) {
       // Quote removal already ran at parse time, gaps and all
@@ -3808,35 +3854,53 @@ export class AstExecutor {
     const { text, protectedRanges, status } = await this.substituteExpansions(node, ctx);
     const inner = text.slice(parts.valueStart, text.length - 1);
     const ifs = this.getIfs(ctx);
-
-    const values: string[] = [];
+    const written: { element: string; ranges: ProtectedRange[] }[] = [];
     let offset = parts.valueStart;
 
     for (const element of inner.split(utils.ARRAY_ELEMENT_SEPARATOR)) {
       // Runs of blanks in the literal leave empty pieces behind; a genuinely
       // empty element was written as '' or "" and survives quote removal instead
-      if (element !== '') {
-        const ranges = utils.sliceRanges(protectedRanges, offset, offset + element.length);
-        // `[key]=value` is an assignment of its own: neither side is split into fields
-        const keyed = /^\[[^\]]*\]\+?=/.test(element);
-        const unquoted = utils.unquoteWordWithProtectedRanges(element, ranges, keyed ? '' : ifs).values;
-
-        values.push(...(keyed ? [unquoted.join(' ')] : unquoted));
-      }
+      if (element !== '') written.push({ element, ranges: utils.sliceRanges(protectedRanges, offset, offset + element.length) });
 
       offset += element.length + utils.ARRAY_ELEMENT_SEPARATOR.length;
     }
 
+    const unquoted = (element: string, ranges: ProtectedRange[], split: string): string[] => utils.unquoteWordWithProtectedRanges(element, ranges, split).values;
+    const one = (element: string, ranges: ProtectedRange[]): string => unquoted(element, ranges, '').join(' ');
+    const keyed = written.map(({ element, ranges }) => keyEnd(element, ranges));
+    const values: string[] = [];
+
+    if ((assoc || ctx.getAssoc(parts.name)) && written.length > 0 && keyed[0] === -1) {
+      for (let i = 0; i < written.length; i += 2) {
+        const key = one(written[i].element, written[i].ranges);
+        const value = written[i + 1] ? one(written[i + 1].element, written[i + 1].ranges) : '';
+
+        if (key === '') await this.diagnose(ctx, `${written[i].element}: bad array subscript`);
+        else values.push(keyedText(key, value, false));
+      }
+
+      return { values, status };
+    }
+
+    for (const [i, { element, ranges }] of written.entries()) {
+      const close = keyed[i];
+
+      if (close === -1) {
+        values.push(...unquoted(element, ranges, ifs));
+        continue;
+      }
+
+      const append = element[close + 1] === '+';
+      const valueStart = close + (append ? 3 : 2);
+
+      values.push(keyedText(
+        one(element.slice(1, close), utils.sliceRanges(ranges, 1, close)),
+        one(element.slice(valueStart), utils.sliceRanges(ranges, valueStart, element.length)),
+        append,
+      ));
+    }
+
     return { values, status };
-  }
-
-  /**
-   * Split an element written as `[key]=value`, or return null for a plain one.
-   */
-  protected keyedElement(element: string): { key: string; value: string; append: boolean } | null {
-    const match = element.match(/^\[([^\]]*)\](\+?)=(.*)$/s);
-
-    return match ? { key: match[1], value: match[3], append: match[2] === '+' } : null;
   }
 
   /**
@@ -3938,16 +4002,15 @@ export class AstExecutor {
     if (list) {
       // `a=([k]=v …)` on an associative array, and `a=([2]=x)` on an indexed one
       if (ctx.getAssoc(name)) {
-        const entries = append ? { ...ctx.getAssoc(name) } : {};
+        // `[k]+=v` adds to what k held before the list, as bash looks it up in the table being replaced
+        const before = ctx.getAssoc(name) ?? {};
+        const entries = append ? { ...before } : {};
+        const { entries: assigned, errors } = assocEntries(name, values);
 
-        for (const element of values) {
-          const keyed = this.keyedElement(element);
+        for (const error of errors) await this.diagnose(ctx, error);
 
-          if (keyed) {
-            entries[keyed.key] = await this.assignedValue(ctx, name, entries[keyed.key], keyed.value, keyed.append);
-          } else {
-            await this.diagnose(ctx, `${name}: ${element}: must use subscript when assigning associative array`);
-          }
+        for (const keyed of assigned) {
+          entries[keyed.key] = await this.assignedValue(ctx, name, append ? entries[keyed.key] : before[keyed.key], keyed.value, keyed.append);
         }
 
         if (local) {
@@ -3965,7 +4028,7 @@ export class AstExecutor {
       let next = existing.length;
 
       for (const element of values) {
-        const keyed = this.keyedElement(element);
+        const keyed = keyedElement(element);
         const index = keyed ? await this.resolveIndex(keyed.key, existing.length, ctx) : next;
         const previous = keyed?.append ? existing[index] : undefined;
 
@@ -4002,6 +4065,15 @@ export class AstExecutor {
 
     if (subscript !== undefined) {
       const array = ctx.getArray(name);
+
+      // `@` and `*` name every element, which no assignment can
+      if (subscript === '@' || subscript === '*') {
+        const error = new ArithmeticError(`${name}[${subscript}]: bad array subscript`);
+
+        error.nameless = true;
+        throw error;
+      }
+
       // A subscript that is no expression ends the line, as bash's does
       const index = await this.resolveIndex(subscript, array?.length ?? 0, ctx, true);
       const element = await this.assignedValue(ctx, name, array?.[index], value, append);
@@ -4255,7 +4327,7 @@ export class AstExecutor {
 
     if (assoc) {
       // In the order bash walks its hash table, as ${!a[@]} lists the keys
-      return assocKeys(assoc).map((key) => assoc[key]);
+      return assocKeys(assoc, name).map((key) => assoc[key]);
     }
 
     const array = ctx.getArray(name);
@@ -4280,10 +4352,18 @@ export class AstExecutor {
    * whole array (`a[@]`, joined for use as a single string).
    */
   protected async parameterValue(parameter: string | number, ctx: ExecContextIf, params: Record<string, string>): Promise<string> {
+    return (await this.lookupParameter(parameter, ctx, params)).value;
+  }
+
+  /**
+   * A parameter's value, and whether it is set, with its subscript expanded
+   * once for both: `${A[$(cmd)]%x}` runs cmd once.
+   */
+  protected async lookupParameter(parameter: string | number, ctx: ExecContextIf, params: Record<string, string>): Promise<{ value: string; set: boolean }> {
     const { name, subscript } = this.splitSubscript(parameter);
 
     if (name === '-') {
-      return this.optionFlags(ctx);
+      return { value: this.optionFlags(ctx), set: true };
     }
 
     if (subscript === undefined) {
@@ -4293,20 +4373,25 @@ export class AstExecutor {
 
       // `$a` on an array is its first element, as in bash; on an associative
       // array, the one whose key is 0
-      return params[name] ?? ctx.getArray(name)?.[0] ?? ctx.getAssoc(name)?.['0'] ?? '';
+      const value = params[name] ?? ctx.getArray(name)?.[0] ?? ctx.getAssoc(name)?.['0'];
+
+      return { value: value ?? '', set: value !== undefined };
     }
 
     if (subscript === '@' || subscript === '*') {
       const separator = subscript === '*' ? (this.getIfs(ctx)[0] ?? '') : ' ';
+      const elements = this.arrayElements(name, ctx, params);
 
-      return this.arrayElements(name, ctx, params).join(separator);
+      return { value: elements.join(separator), set: elements.length > 0 };
     }
 
     const assoc = ctx.getAssoc(name);
 
     if (assoc) {
       // On an associative array the subscript is a key, not an expression
-      return assoc[await this.expandSubscript(subscript, ctx)] ?? '';
+      const value = assoc[await this.expandSubscript(subscript, ctx)];
+
+      return { value: value ?? '', set: value !== undefined };
     }
 
     const array = ctx.getArray(name);
@@ -4314,10 +4399,12 @@ export class AstExecutor {
 
     if (!array) {
       // `${x[0]}` on a scalar is the scalar itself
-      return index === 0 ? params[name] ?? '' : '';
+      const value = index === 0 ? params[name] : undefined;
+
+      return { value: value ?? '', set: value !== undefined };
     }
 
-    return array[index] ?? '';
+    return { value: array[index] ?? '', set: array[index] !== undefined };
   }
 
   /**
@@ -4408,6 +4495,45 @@ export class AstExecutor {
         return value.toLowerCase();
       default:
         return value;
+    }
+  }
+
+  /**
+   * `${a[@]@K}`, `${a[@]@k}` and `${a[@]@A}`, which are about the array, not
+   * each element: its keys and values as one string to read back in (K), as
+   * words of their own (k), or the `declare` that makes it again (A), as
+   * `${@@A}` is the `set` that makes the positional parameters again. Null
+   * for any other transformation, and for a variable that is no array.
+   */
+  protected arrayTransform(xp: { parameter?: string | number; transform?: unknown }, ctx: ExecContextIf): string[] | null {
+    const letter = String(xp.transform ?? '');
+
+    // `${@@A}`: the `set` that makes the positional parameters again
+    if (letter === 'A' && (xp.parameter === '@' || xp.parameter === '*')) {
+      const values = this.positionalParams(this.paramView(ctx));
+
+      return values.length === 0 ? [] : ['set', '--', ...values.map(singleQuoted)];
+    }
+
+    const { name, subscript } = this.splitSubscript(xp.parameter ?? '');
+    const info = ctx.getVariable(name);
+
+    if (!'KkA'.includes(letter) || letter === '' || (subscript !== '@' && subscript !== '*') || (info?.kind !== 'array' && info?.kind !== 'assoc')) {
+      return null;
+    }
+
+    const assoc = info.kind === 'assoc' ? ctx.getAssoc(name) ?? {} : undefined;
+    const array = info.kind === 'array' ? ctx.getArray(name) ?? [] : undefined;
+    const keys = assoc ? assocKeys(assoc, name) : Object.keys(array!);
+    const valueOf = (key: string): string => assoc ? assoc[key] : array![Number(key)];
+
+    switch (letter) {
+      case 'k':
+        return keys.flatMap((key) => [key, valueOf(key)]);
+      case 'K':
+        return keys.length === 0 ? [] : [keys.map((key) => `${assoc ? keyQuoted(key) : key} ${valueQuoted(valueOf(key))}`).join(' ')];
+      default:
+        return [info.value === undefined ? `declare -${attributeLetters(info)} ${name}` : `declare -${attributeLetters(info)} ${name}=${compoundValue(info, name)}`];
     }
   }
 
@@ -4545,7 +4671,7 @@ export class AstExecutor {
       const name = String(xp.parameter);
       const assoc = ctx.getAssoc(name);
       const array = ctx.getArray(name);
-      const keys = assoc ? assocKeys(assoc) : array ? Object.keys(array) : params[name] !== undefined ? ['0'] : [];
+      const keys = assoc ? assocKeys(assoc, name) : array ? Object.keys(array) : params[name] !== undefined ? ['0'] : [];
 
       return { values: keys, join: xp.expandWords ? 'field' : 'ifs' };
     }
@@ -4616,12 +4742,12 @@ export class AstExecutor {
 
       const params = this.paramView(ctx);
 
-      if (!(await this.isParameterSet(name, ctx, params))) {
+      const { value: target, set } = await this.lookupParameter(name, ctx, params);
+
+      if (!set) {
         if (ctx.getShellOption('nounset')) throw new UnboundVariableError(`!${name}`);
         throw new CommandAbortError(`${name}: invalid indirect expansion`, { code: 'E_BAD_SUBSTITUTION' });
       }
-
-      const target = await this.parameterValue(name, ctx, params);
 
       if (!/^([A-Za-z_][A-Za-z0-9_]*(\[.*\])?|\d+|[@*#?$!-])$/s.test(target)) {
         throw new CommandAbortError(`${target}: invalid variable name`, { code: 'E_BAD_SUBSTITUTION' });
@@ -4706,6 +4832,8 @@ export class AstExecutor {
             const bounds = await this.substringBounds(xp as Record<string, unknown>, values.length, ctx, positional);
 
             list.values = bounds ? values.slice(bounds.start, bounds.end) : [];
+          } else if (xp.op === 'transformation' && this.arrayTransform(xp, ctx) !== null) {
+            list.values = this.arrayTransform(xp, ctx)!;
           } else if (xp.op) {
             const xpAny = xp as Record<string, unknown>;
 
@@ -4732,8 +4860,7 @@ export class AstExecutor {
           rValue.replace(xp.loc!.start, xp.loc!.end + 1, list.values.join(separator));
         } else {
           const xpAny = xp as Record<string, unknown>;
-          const paramValue = await this.parameterValue(xp.parameter!, ctx, params);
-          const isSet = await this.isParameterSet(xp.parameter!, ctx, params);
+          const { value: paramValue, set: isSet } = await this.lookupParameter(xp.parameter!, ctx, params);
 
           let resolved: string;
 
@@ -5101,4 +5228,44 @@ export class AstExecutor {
 /** A DEBUG trap that ended the shell in the middle of a `for ((`: carries the exit signal out. */
 class LoopExit {
   constructor(readonly code: number) {}
+}
+
+/**
+ * Where the key of a `[key]=value` element ends, the `]` before its `=` or
+ * `+=`, or -1 for a plain element. What an expansion put in it (`ranges`) is
+ * the key's, `]` and quotes included.
+ */
+function keyEnd(element: string, ranges: ProtectedRange[]): number {
+  const rangeAt = new Map(ranges.filter((range) => range.end > range.start).map((range) => [range.start, range.end]));
+
+  if (element[0] !== '[' || rangeAt.has(0)) return -1;
+
+  let depth = 0;
+  let quote = '';
+
+  for (let i = 0; i < element.length; i++) {
+    const end = rangeAt.get(i);
+
+    if (end !== undefined) {
+      i = end - 1;
+      continue;
+    }
+
+    const c = element[i];
+
+    if (quote) {
+      if (c === quote) quote = '';
+      else if (c === '\\' && quote === '"') i++;
+    } else if (c === '\\') {
+      i++;
+    } else if (c === "'" || c === '"') {
+      quote = c;
+    } else if (c === '[') {
+      depth++;
+    } else if (c === ']' && --depth === 0) {
+      return element[i + 1] === '=' || (element[i + 1] === '+' && element[i + 2] === '=') ? i : -1;
+    }
+  }
+
+  return -1;
 }

@@ -73,7 +73,6 @@ class Test {
 
   async run(): Promise<boolean> {
     const { args } = this;
-    let value: boolean;
 
     switch (args.length) {
       case 0:
@@ -96,7 +95,7 @@ class Test {
         }
     }
 
-    value = await this.or();
+    const value = await this.or();
 
     if (this.pos !== args.length) {
       const at = args[this.pos];

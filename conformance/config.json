@@ -8,6 +8,7 @@
     "run-gprof": "profiling driver, not a test"
   },
   "flaky": {
-    "run-printf": "printf3.sub reads the clock twice and compares, so a second ticking over between the two fails it under load"
+    "run-printf": "printf3.sub reads the clock twice and compares, so a second ticking over between the two fails it under load",
+    "run-posixpipe": "posixpipe.tests prints `time -p` of a near-empty pipeline, whose CPU time is 0.00 or 0.01 by chance"
   }
 }

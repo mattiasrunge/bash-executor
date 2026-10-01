@@ -8,20 +8,24 @@ import { bashHashOrder } from '../hash-order.ts';
 import { ansiCIfNeeded, doubleQuoted, quotedIfNeeded } from '../quote.ts';
 import type { ExecContextIf, VariableInfo } from '../types.ts';
 
-/** How many buckets bash gives an associative array, which decides the order its keys come in. */
-const ASSOC_BUCKETS = 1024;
+/**
+ * How many buckets bash gives an associative array, which decides the order
+ * its keys come in: BASH_CMDS and BASH_ALIASES are made from the command and
+ * alias tables, and keep their sizes.
+ */
+const assocBuckets = (name?: string): number => name === 'BASH_CMDS' ? 256 : name === 'BASH_ALIASES' ? 64 : 1024;
 
 /** The keys of an associative array in the order bash walks them. */
-export const assocKeys = (assoc: Record<string, string>): string[] => bashHashOrder(Object.keys(assoc), ASSOC_BUCKETS);
+export const assocKeys = (assoc: Record<string, string>, name?: string): string[] => bashHashOrder(Object.keys(assoc), assocBuckets(name));
 
 /** A value as print_array_assignment writes it: `$'…'` for a control character, else double quotes. */
-const valueQuoted = (value: string): string => ansiCIfNeeded(value) ?? doubleQuoted(value);
+export const valueQuoted = (value: string): string => ansiCIfNeeded(value) ?? doubleQuoted(value);
 
 /** An associative array's key, quoted only when the shell would read it otherwise. */
-const keyQuoted = (key: string): string => ansiCIfNeeded(key) ?? (quotedIfNeeded(key) !== key || key === '@' || key === '*' ? doubleQuoted(key) : key);
+export const keyQuoted = (key: string): string => ansiCIfNeeded(key) ?? (quotedIfNeeded(key) !== key || key === '@' || key === '*' ? doubleQuoted(key) : key);
 
 /** The `( … )` of an array, or `()` when it has no elements: `([0]="a" [2]="c")`, `([k]="v" )`. */
-export function compoundValue(info: VariableInfo): string {
+export function compoundValue(info: VariableInfo, name?: string): string {
   if (Array.isArray(info.value)) {
     const elements = Object.entries(info.value).map(([index, value]) => `[${index}]=${valueQuoted(value)}`);
 
@@ -31,7 +35,7 @@ export function compoundValue(info: VariableInfo): string {
   if (info.value && typeof info.value === 'object') {
     const assoc = info.value;
 
-    return `(${assocKeys(assoc).map((key) => `[${keyQuoted(key)}]=${valueQuoted(assoc[key])} `).join('')})`;
+    return `(${assocKeys(assoc, name).map((key) => `[${keyQuoted(key)}]=${valueQuoted(assoc[key])} `).join('')})`;
   }
 
   return '()';
@@ -57,7 +61,7 @@ export function declareLine(name: string, info: VariableInfo, opts: { command?: 
   }
 
   if (info.value === undefined) return `${prefix}${name}\n`;
-  if (info.kind !== 'scalar') return `${prefix}${name}=${compoundValue(info)}\n`;
+  if (info.kind !== 'scalar') return `${prefix}${name}=${compoundValue(info, name)}\n`;
 
   return `${prefix}${name}=${valueQuoted(info.value as string)}\n`;
 }
@@ -82,7 +86,7 @@ export function setListing(ctx: ExecContextIf): string {
   for (const [name, info] of sortedVariables(ctx)) {
     if (info.value === undefined) continue;
 
-    out += info.kind === 'scalar' ? `${name}=${quotedIfNeeded(info.value as string)}\n` : `${name}=${compoundValue(info)}\n`;
+    out += info.kind === 'scalar' ? `${name}=${quotedIfNeeded(info.value as string)}\n` : `${name}=${compoundValue(info, name)}\n`;
   }
 
   return out;

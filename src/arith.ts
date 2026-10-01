@@ -29,6 +29,12 @@ export interface ArithVariables {
    * subscript is taken as it reads.
    */
   expand?(subscript: string, keyed: boolean): Promise<string>;
+  /**
+   * `assoc_expand_once` on an expression expanded already, `let`'s: an
+   * associative array's subscript runs to the first `]` and is the key as it
+   * stands, `a[80's]` included.
+   */
+  literalKeys?: boolean;
 }
 
 const MAX_RECURSION = 1024;
@@ -252,7 +258,7 @@ class Evaluation {
       this.at += name.length;
 
       if (this.text[this.at] === '[') {
-        const close = subscriptEnd(this.text, this.at);
+        const close = this.vars.literalKeys && this.vars.keyed(name) ? this.text.indexOf(']', this.at) : subscriptEnd(this.text, this.at);
 
         if (close === -1) this.fail('bad array subscript');
 
@@ -627,7 +633,7 @@ class Evaluation {
     if (token.subscript === undefined) return undefined;
 
     const keyed = this.vars.keyed(token.name);
-    const subscript = this.vars.expand ? await this.vars.expand(token.subscript, keyed) : token.subscript;
+    const subscript = this.vars.expand && !(keyed && this.vars.literalKeys) ? await this.vars.expand(token.subscript, keyed) : token.subscript;
 
     if (keyed) return subscript;
 

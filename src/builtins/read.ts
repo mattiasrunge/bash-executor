@@ -6,7 +6,8 @@
 
 import { utils } from '@ein/bash-parser';
 import type { ExecContextIf, ShellIf } from '../types.ts';
-import type { BuiltinHandler, BuiltinResult } from './types.ts';
+import { assignReference, type NameReference, nameReference } from './element.ts';
+import type { BuiltinHandler, BuiltinResult, BuiltinServices } from './types.ts';
 
 const USAGE = 'read: usage: read [-ers] [-a array] [-d delim] [-i text] [-n nchars] [-N nchars] [-p prompt] [-t timeout] [-u fd] [name ...]\n';
 
@@ -98,8 +99,8 @@ function parseOptions(args: string[]): ReadOptions | BuiltinResult {
 
   options.varNames = args.slice(i);
 
-  for (const name of [...options.varNames, ...(options.arrayName !== null ? [options.arrayName] : [])]) {
-    if (!assignable(name)) return { code: 1, stderr: `read: \`${name}': not a valid identifier\n` };
+  if (options.arrayName !== null && !assignable(options.arrayName)) {
+    return { code: 1, stderr: `read: \`${options.arrayName}': not a valid identifier\n` };
   }
 
   // Default variable name is REPLY, which takes the line whole, unsplit
@@ -241,10 +242,21 @@ export const readBuiltin: BuiltinHandler = async (
   ctx: ExecContextIf,
   args: string[],
   shell: ShellIf,
+  _io?,
+  services?,
 ): Promise<BuiltinResult> => {
   const options = parseOptions(args);
 
   if ('code' in options) return options;
+
+  const refs: NameReference[] = [];
+
+  for (const name of options.varNames) {
+    const ref = nameReference(name, ctx);
+
+    if (!ref) return { code: 1, stderr: `read: \`${name}': not a valid identifier\n` };
+    refs.push(ref);
+  }
 
   // Output prompt if specified
   if (options.prompt) {
@@ -266,7 +278,7 @@ export const readBuiltin: BuiltinHandler = async (
       const line = await shell.pipeReadLine(fd, options.delimiter);
       if (line === null) {
         // At the end of the input the names are still assigned, empty, and read fails
-        return assign(ctx, options, [], 1);
+        return await assign(ctx, options, refs, [], 1, services);
       }
       input = line;
 
@@ -304,11 +316,18 @@ export const readBuiltin: BuiltinHandler = async (
   // IFS that is set but empty means "do not split", not "use the default"
   const ifs = ctx.getParams()['IFS'] ?? ctx.getEnv()['IFS'] ?? utils.DEFAULT_IFS;
 
-  return assign(ctx, options, split(input, options, ifs), 0);
+  return await assign(ctx, options, refs, split(input, options, ifs), 0, services);
 };
 
 /** The words read, into the array or the names; `code` is read's status when they could all be assigned. */
-function assign(ctx: ExecContextIf, options: ReadOptions, words: string[], code: number): BuiltinResult {
+async function assign(
+  ctx: ExecContextIf,
+  options: ReadOptions,
+  refs: NameReference[],
+  words: string[],
+  code: number,
+  services?: BuiltinServices,
+): Promise<BuiltinResult> {
   // -a: the words become the elements of an array
   if (options.arrayName) {
     if (ctx.isReadonlyVar(options.arrayName)) return { code: 1, stderr: `${options.arrayName}: readonly variable\n` };
@@ -318,32 +337,15 @@ function assign(ctx: ExecContextIf, options: ReadOptions, words: string[], code:
     return { code };
   }
 
-  // Each name takes its value, and a name there is none for is emptied
-  const varNames = options.varNames;
-  const updates: Record<string, string> = {};
-
-  for (let i = 0; i < varNames.length; i++) {
-    updates[varNames[i]] = words[i] ?? '';
-  }
-
+  // Each name takes its value, and a name there is none for is emptied.
   // Readonly ones are not read into; the rest are set as any assignment sets them
-  const readonly = Object.keys(updates).filter((name) => ctx.isReadonlyVar(name.replace(/\[.*$/s, '')));
+  const readonly = refs.filter((ref) => ctx.isReadonlyVar(ref.name));
 
   if (readonly.length > 0) {
-    return { code: 1, stderr: readonly.map((name) => `${name}: readonly variable\n`).join('') };
+    return { code: 1, stderr: readonly.map((ref) => `${ref.name}${ref.subscript !== undefined ? `[${ref.subscript}]` : ''}: readonly variable\n`).join('') };
   }
 
-  for (const [name, value] of Object.entries(updates)) {
-    const element = name.match(/^([A-Za-z_][A-Za-z0-9_]*)\[(.+)\]$/s);
-
-    if (!element) {
-      ctx.assignVariable(name, value);
-    } else if (ctx.getAssoc(element[1])) {
-      ctx.setAssocElement(element[1], element[2], value);
-    } else {
-      ctx.setArrayElement(element[1], Number.parseInt(element[2], 10) || 0, value);
-    }
-  }
+  for (const [i, ref] of refs.entries()) await assignReference(ctx, ref, words[i] ?? '', services);
 
   return { code };
 }

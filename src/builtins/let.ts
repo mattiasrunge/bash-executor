@@ -41,7 +41,10 @@ export const letBuiltin: BuiltinHandler = async (
 
   for (const arg of args) {
     try {
-      lastResult = await evaluateArithmeticText(arg, contextVariables(ctx, services?.expandSubscript));
+      lastResult = await evaluateArithmeticText(arg, {
+        ...contextVariables(ctx, services?.expandSubscript),
+        literalKeys: ctx.getShellOption('assoc_expand_once'),
+      });
     } catch (error) {
       // A readonly variable is said as any assignment says it, without let's name
       if (error instanceof ReadonlyVariableError) {

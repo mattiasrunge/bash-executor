@@ -10,6 +10,7 @@
 
 import { utils } from '@ein/bash-parser';
 import { contextVariables, evaluateArithmeticText } from '../arith.ts';
+import { assocEntries, keyedElement } from '../assoc-list.ts';
 import { CommandAbortError } from '../errors.ts';
 import { functionEnvName, functionText } from '../print-command.ts';
 import { type ExecContextIf, QUOTED_LIST_MARK, type VariableInfo } from '../types.ts';
@@ -193,8 +194,24 @@ class Declaration {
     return { target: this.opts.global ? rootOf(this.ctx) : this.ctx, local: false };
   }
 
+  /**
+   * Under `assoc_expand_once`, bash reads a subscript up to its first `]`,
+   * counting no `[` inside it: `declare a["x[y"]=1` assigns key `x[y`.
+   */
+  private onceExpandedAssignment(arg: string): utils.AssignmentParts | null {
+    if (!this.ctx.getShellOption('assoc_expand_once')) return null;
+
+    const match = arg.match(/^([A-Za-z_][A-Za-z0-9_]*)\[([^\]]*)\](\+?)=/);
+
+    if (!match) return null;
+
+    const valueStart = match[0].length;
+
+    return { name: match[1], subscript: match[2], append: match[3] === '+', value: arg.slice(valueStart), valueStart, list: false };
+  }
+
   async declare(arg: string): Promise<void> {
-    const parts = utils.parseAssignmentWord(arg);
+    const parts = utils.parseAssignmentWord(arg) ?? this.onceExpandedAssignment(arg);
     const assigning = parts !== null;
     let name = parts?.name ?? arg;
     let subscript = parts?.subscript;
@@ -442,17 +459,15 @@ class Declaration {
       const elements = how.compound ? (how.value === '' ? [] : how.value.split(utils.ARRAY_ELEMENT_SEPARATOR)) : wordsOf(how.value);
 
       if (info.kind === 'assoc') {
-        const assoc = how.append ? { ...target.getAssoc(name) } : {};
+        // `[k]+=v` adds to what k held before the list, as bash looks it up in the table being replaced
+        const before = target.getAssoc(name) ?? {};
+        const assoc = how.append ? { ...before } : {};
+        const { entries, errors } = assocEntries(name, elements);
 
-        for (const element of elements) {
-          const keyed = element.match(/^\[(.*?)\](\+?)=(.*)$/s);
+        for (const error of errors) this.error(error, true);
 
-          if (!keyed) {
-            this.error(`${name}: ${element}: must use subscript when assigning associative array`, true);
-            continue;
-          }
-
-          assoc[keyed[1]] = await valueFor(assoc[keyed[1]], keyed[3], keyed[2] === '+');
+        for (const keyed of entries) {
+          assoc[keyed.key] = await valueFor(how.append ? assoc[keyed.key] : before[keyed.key], keyed.value, keyed.append);
         }
 
         target.setAssoc(name, assoc);
@@ -463,17 +478,17 @@ class Declaration {
       let next = array.length;
 
       for (const element of elements) {
-        const keyed = element.match(/^\[(.*?)\](\+?)=(.*)$/s);
+        const keyed = keyedElement(element);
         let index = next;
         let text = element;
 
         if (keyed) {
-          const evaluated = Number(await arith(keyed[1]));
+          const evaluated = Number(await arith(keyed.key));
           index = evaluated < 0 ? array.length + evaluated : evaluated;
-          text = keyed[3];
+          text = keyed.value;
         }
 
-        array[index] = await valueFor(array[index], text, keyed?.[2] === '+');
+        array[index] = await valueFor(array[index], text, keyed?.append ?? false);
         next = index + 1;
       }
 
