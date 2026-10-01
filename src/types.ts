@@ -392,6 +392,15 @@ export interface ShellIf {
   pipeReadLine?: (fd: string, delimiter?: string) => Promise<string | null>;
 
   /**
+   * `pipeReadLine`, saying as well whether the delimiter ended what was read,
+   * or the end of the input did: `read` fails on a last line with no newline
+   * after it, as bash's does, and `mapfile` adds no newline it did not read.
+   * A host without it is taken to have read a delimiter every time.
+   * @returns The text without the delimiter and whether there was one, or null on EOF.
+   */
+  pipeReadRecord?: (fd: string, delimiter?: string) => Promise<{ text: string; delimited: boolean } | null>;
+
+  /**
    * Creates a scratch file and returns its path, for process substitution.
    *
    * `cat <(cmd)` has to hand the reading command something it can open. A shell
@@ -782,6 +791,15 @@ export interface ExecContextIf {
   getUmask(): number;
 
   setUmask(mask: number): void;
+
+  /**
+   * The resource limits `ulimit` keeps, by its option letter (`n`, `s`, …):
+   * soft and hard, a number in ulimit's units or `unlimited`. Recorded for
+   * the host to apply to what it starts, as the umask is; a subshell gets a
+   * copy. A letter never set is not there.
+   */
+  getResourceLimits?(): Record<string, { soft: string; hard: string }>;
+  setResourceLimit?(letter: string, limit: { soft: string; hard: string }): void;
 
   /**
    * Gets all aliases from the execution context.

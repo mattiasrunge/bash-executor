@@ -91,6 +91,7 @@ export class ExecContext implements ExecContextIf {
   private jobTable!: JobTable;
   private getoptsState?: GetoptsState;
   private umask = 0o022;
+  private resourceLimits: Record<string, { soft: string; hard: string }> = {};
   private dirStack: string[] = [];
   private fds: Record<string, string> = {};
   private options!: Record<string, boolean>;
@@ -168,6 +169,7 @@ export class ExecContext implements ExecContextIf {
     ctx.jobTable = this.getJobTable().copy();
     ctx.getoptsState = this.getGetoptsState();
     ctx.umask = this.getUmask();
+    ctx.resourceLimits = { ...this.getResourceLimits() };
 
     // A subshell does not run the shell's traps, but what the shell ignores it
     // ignores too, as in bash
@@ -517,6 +519,9 @@ export class ExecContext implements ExecContextIf {
 
     const variable = this.lookup(name)?.variable;
 
+    // DIRSTACK is what `dirs` shows: the working directory, then the stack
+    if (name === 'DIRSTACK' && !variable) return [this.getCwd(), ...this.getDirStack()];
+
     if (variable?.kind !== 'array') return undefined;
 
     // Declared and not yet assigned, `declare -a x`: an array with nothing in it
@@ -547,6 +552,19 @@ export class ExecContext implements ExecContextIf {
 
   setArrayElement(name: string, index: number, value: string): void {
     name = this.ref(name);
+
+    // DIRSTACK[N]=dir changes the Nth entry `dirs` shows; the working directory, 0, stays
+    if (name === 'DIRSTACK' && !this.lookup(name)) {
+      const stack = this.getDirStack();
+
+      if (index >= 1 && index <= stack.length) {
+        stack[index - 1] = value;
+        this.clearDirStack();
+        for (const dir of stack.reverse()) this.pushDirStack(dir);
+      }
+
+      return;
+    }
 
     // The element goes where the variable already is, so `a[0]=x` updates the
     // array it can see instead of shadowing it; a new one lands in the shell.
@@ -997,6 +1015,14 @@ export class ExecContext implements ExecContextIf {
 
   setUmask(mask: number): void {
     this.root().umask = mask & 0o777;
+  }
+
+  getResourceLimits(): Record<string, { soft: string; hard: string }> {
+    return this.root().resourceLimits;
+  }
+
+  setResourceLimit(letter: string, limit: { soft: string; hard: string }): void {
+    this.root().resourceLimits[letter] = limit;
   }
 
   getGetoptsState(): GetoptsState | undefined {

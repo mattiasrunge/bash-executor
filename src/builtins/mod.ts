@@ -51,6 +51,7 @@ export { SIGNALS, trapBuiltin, trapName } from './trap.ts';
 export { bgBuiltin, disownBuiltin, fgBuiltin, JOB_BUILTINS, jobsBuiltin, killBuiltin, waitBuiltin } from './jobs.ts';
 export { dotBuiltin, sourceBuiltin } from './source.ts';
 export { umaskBuiltin } from './umask.ts';
+export { ulimitBuiltin } from './ulimit.ts';
 export { bracketBuiltin, testBuiltin } from './test.ts';
 export { colonBuiltin, falseBuiltin, trueBuiltin } from './trivial.ts';
 export { exportBuiltin, localBuiltin, unsetBuiltin } from './variables.ts';
@@ -83,6 +84,7 @@ import { trapBuiltin } from './trap.ts';
 import { bgBuiltin, disownBuiltin, fgBuiltin, jobsBuiltin, killBuiltin, waitBuiltin } from './jobs.ts';
 import { dotBuiltin, sourceBuiltin } from './source.ts';
 import { umaskBuiltin } from './umask.ts';
+import { ulimitBuiltin } from './ulimit.ts';
 import { bracketBuiltin, testBuiltin } from './test.ts';
 import { colonBuiltin, falseBuiltin, trueBuiltin } from './trivial.ts';
 import type { BuiltinHandler, BuiltinRegistry } from './types.ts';
@@ -108,6 +110,7 @@ export function createBuiltinRegistry(): BuiltinRegistry {
   // Phase 2: Context-modifying builtins
   registry.set('cd', cdBuiltin);
   registry.set('umask', umaskBuiltin);
+  registry.set('ulimit', ulimitBuiltin);
   registry.set('export', exportBuiltin);
   registry.set('unset', unsetBuiltin);
   registry.set('local', localBuiltin);

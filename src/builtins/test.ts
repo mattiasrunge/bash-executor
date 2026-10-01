@@ -308,11 +308,17 @@ class Test {
     const assoc = ctx.getAssoc(name);
     const array = ctx.getArray(name) ?? (params[name] !== undefined ? [params[name]] : undefined);
 
+    // An associative array's `@` and `*` are keys like any other, as bash 5.2 has them
+    if ((written === '@' || written === '*') && assoc) {
+      return written in assoc;
+    }
+
     if (written === '@' || written === '*') {
       return assoc ? Object.keys(assoc).length > 0 : (array ?? []).some((value) => value !== undefined);
     }
 
-    const expand = this.services?.expandSubscript;
+    // assoc_expand_once: a key as it stands, `test -v h["$k"]` with k='$(cmd)' runs nothing
+    const expand = assoc && ctx.getShellOption('assoc_expand_once') ? undefined : this.services?.expandSubscript;
     const subscript = expand ? await expand(written, Boolean(assoc)) : written;
 
     if (assoc) return subscript in assoc;

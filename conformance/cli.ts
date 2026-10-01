@@ -23,6 +23,7 @@ import {
   SIGNALS,
   syntaxErrorLines,
 } from '../mod.ts';
+import { parse } from '@ein/bash-parser';
 import { logGap, RealShell } from './host-shell.ts';
 
 const BASH_VERSION = '5.2.21(1)-release';
@@ -230,39 +231,30 @@ async function main(): Promise<number> {
     ctx.setShellOption(name, on);
   }
 
-  let source: string;
+  /** Run script text, starting at `line` of the script; a syntax error said as bash says it. */
+  const run = async (source: string, line = 1): Promise<{ code: number; exited: boolean }> => {
+    const exited = { value: false };
 
-  try {
-    source = inv.command ?? (inv.file !== undefined ? await readScript(inv.file) : await new Response(Deno.stdin.readable).text());
-  } catch (err) {
-    const [message, code] = err instanceof Deno.errors.IsADirectory
-      ? ['Is a directory', 126]
-      : err instanceof BinaryScriptError
-      ? ['cannot execute binary file', 126]
-      : ['No such file or directory', 127];
+    try {
+      const code = getExitCode(
+        await executor.execute(source, ctx, { file: inv.command === undefined ? inv.file : undefined, command: inv.command !== undefined, line, exited }),
+      );
 
-    console.error(`${inv.name}: ${inv.file}: ${message}`);
+      return { code, exited: exited.value };
+    } catch (err) {
+      if (err instanceof BashSyntaxError) {
+        // The executor has run the complete commands before the error already
+        // …and says it as bash does, a `-c` string naming itself so
+        const { line: at, lines } = syntaxErrorLines(err, source);
+        const prefix = `${inv.name}: ${inv.command !== undefined ? '-c: ' : ''}line ${at + line - 1}: `;
 
-    return code as number;
-  }
+        logGap({ kind: 'syntax-error', name: firstLine(err.message) });
 
-  let code: number;
+        for (const text of lines) console.error(prefix + text);
 
-  try {
-    code = getExitCode(await executor.execute(source, ctx, { file: inv.command === undefined ? inv.file : undefined, command: inv.command !== undefined }));
-  } catch (err) {
-    if (err instanceof BashSyntaxError) {
-      // The executor has run the complete commands before the error already
-      // …and says it as bash does, a `-c` string naming itself so
-      const { line, lines } = syntaxErrorLines(err, source);
-      const prefix = `${inv.name}: ${inv.command !== undefined ? '-c: ' : ''}line ${line}: `;
+        return { code: 2, exited: true };
+      }
 
-      logGap({ kind: 'syntax-error', name: firstLine(err.message) });
-
-      for (const text of lines) console.error(prefix + text);
-
-      code = 2;
-    } else {
       const message = err instanceof Error ? err.message : String(err);
 
       logGap({ kind: 'exception', name: err instanceof Error ? err.constructor.name : 'unknown', detail: firstLine(message) });
@@ -273,8 +265,38 @@ async function main(): Promise<number> {
         console.error(err.stack);
       }
 
-      code = 1;
+      return { code: 1, exited: true };
     }
+  };
+
+  let code = 0;
+
+  if (inv.command === undefined && inv.file === undefined) {
+    // From stdin a command at a time, leaving the rest for what it runs to read
+    for await (const { text, line } of stdinCommands()) {
+      const result = await run(text, line);
+
+      code = result.code;
+      if (result.exited) break;
+    }
+  } else {
+    let source: string;
+
+    try {
+      source = inv.command ?? await readScript(inv.file!);
+    } catch (err) {
+      const [message, status] = err instanceof Deno.errors.IsADirectory
+        ? ['Is a directory', 126]
+        : err instanceof BinaryScriptError
+        ? ['cannot execute binary file', 126]
+        : ['No such file or directory', 127];
+
+      console.error(`${inv.name}: ${inv.file}: ${message}`);
+
+      return status as number;
+    }
+
+    code = (await run(source)).code;
   }
 
   // The shell ends: its EXIT trap runs, and may change the status
@@ -293,6 +315,57 @@ async function main(): Promise<number> {
 }
 
 class BinaryScriptError extends Error {}
+
+/**
+ * A script on stdin, as bash reads one: a byte at a time to the end of each
+ * line, and handed on once what has been read is complete commands. Nothing
+ * past them is read, so a command the script starts reads the lines after it.
+ */
+async function* stdinCommands(): AsyncGenerator<{ text: string; line: number }> {
+  const byte = new Uint8Array(1);
+  const decoder = new TextDecoder();
+  let pending = '';
+  let start = 1;
+  let lines = 0;
+  let eof = false;
+
+  while (!eof) {
+    const bytes: number[] = [];
+
+    for (;;) {
+      const n = await Deno.stdin.read(byte);
+
+      if (n === null || n === 0) {
+        eof = true;
+        break;
+      }
+
+      bytes.push(byte[0]);
+      if (byte[0] === 10) break;
+    }
+
+    if (bytes.length > 0) {
+      pending += decoder.decode(Uint8Array.from(bytes));
+      lines++;
+    }
+
+    if (pending === '' || (!eof && !(await complete(pending)))) continue;
+
+    yield { text: pending, line: start };
+    pending = '';
+    start = lines + 1;
+  }
+}
+
+/** Whether text parses as whole commands, rather than ending inside one. */
+async function complete(text: string): Promise<boolean> {
+  try {
+    await parse(text);
+    return true;
+  } catch (err) {
+    return !(err instanceof BashSyntaxError && (err.detail?.kind === 'eof' || err.detail?.kind === 'unclosed'));
+  }
+}
 
 /** A script file, refused as bash refuses one: a NUL in its first line makes it binary. */
 async function readScript(path: string): Promise<string> {

@@ -6,7 +6,9 @@
  * `for f in $(cat list)` would split every line on IFS.
  */
 
+import { singleQuoted } from '../quote.ts';
 import type { ExecContextIf, ShellIf } from '../types.ts';
+import { readRecord } from './read-record.ts';
 import type { BuiltinHandler, BuiltinResult } from './types.ts';
 
 /**
@@ -21,6 +23,8 @@ function parseOptions(args: string[]): {
   truncate: boolean;
   fd: string | null;
   arrayName: string;
+  callback: string | null;
+  quantum: number;
 } {
   const options = {
     delimiter: '\n',
@@ -31,6 +35,8 @@ function parseOptions(args: string[]): {
     truncate: true,
     fd: null as string | null,
     arrayName: 'MAPFILE',
+    callback: null as string | null,
+    quantum: 5000,
   };
 
   let i = 0;
@@ -51,9 +57,10 @@ function parseOptions(args: string[]): {
       options.truncate = false;
     } else if (arg === '-u' && i + 1 < args.length) {
       options.fd = args[++i];
-    } else if (arg === '-C' || arg === '-c') {
-      // Callback options are accepted and ignored
-      i++;
+    } else if (arg === '-C' && i + 1 < args.length) {
+      options.callback = args[++i];
+    } else if (arg === '-c' && i + 1 < args.length) {
+      options.quantum = Number.parseInt(args[++i], 10) || 0;
     } else if (!arg.startsWith('-')) {
       options.arrayName = arg;
       break;
@@ -78,6 +85,8 @@ function parseOptions(args: string[]): {
  * -s count   Skip the first count lines
  * -O origin  Assign starting at index origin, keeping earlier elements
  * -u fd      Read from file descriptor fd
+ * -C callback  Evaluate `callback index 'line'` every quantum lines, before the line is stored
+ * -c quantum   How many lines between calls of the callback (5000)
  *
  * If no array name is given the lines go into MAPFILE.
  *
@@ -87,8 +96,10 @@ export const mapfileBuiltin: BuiltinHandler = async (
   ctx: ExecContextIf,
   args: string[],
   shell: ShellIf,
+  execute,
 ): Promise<BuiltinResult> => {
   const options = parseOptions(args);
+  let sinceCallback = 0;
 
   if (!shell.pipeReadLine) {
     return { code: 1, stderr: 'mapfile: reading line by line is not supported by this shell\n' };
@@ -100,21 +111,22 @@ export const mapfileBuiltin: BuiltinHandler = async (
   if (options.fd && ctx.getFd(options.fd) === undefined && !shell.isPipe(options.fd)) {
     return { code: 1, stderr: `mapfile: ${options.fd}: invalid file descriptor: Bad file descriptor\n` };
   }
-  const values = options.truncate ? [] : (ctx.getArray(options.arrayName) ?? []).slice(0, options.origin);
+  // -O keeps the array, the lines going over it from the origin on
+  const values = options.truncate ? [] : (ctx.getArray(options.arrayName) ?? []).slice();
 
   let read = 0;
   let skipped = 0;
 
   while (options.count === null || options.count <= 0 || read < options.count) {
-    let line: string | null;
+    let record: { text: string; delimited: boolean } | null;
 
     try {
-      line = await shell.pipeReadLine(fd, options.delimiter);
+      record = await readRecord(shell, fd, options.delimiter);
     } catch {
       break;
     }
 
-    if (line === null) {
+    if (record === null) {
       break;
     }
 
@@ -123,7 +135,15 @@ export const mapfileBuiltin: BuiltinHandler = async (
       continue;
     }
 
-    values[options.origin + read] = options.strip ? line : line + options.delimiter;
+    // A last line the input ended before its delimiter has none to keep
+    const value = options.strip || !record.delimited ? record.text : record.text + options.delimiter;
+
+    if (options.callback !== null && options.quantum > 0 && ++sinceCallback === options.quantum) {
+      sinceCallback = 0;
+      await execute(`${options.callback} ${options.origin + read} ${singleQuoted(value)}`);
+    }
+
+    values[options.origin + read] = value;
     read++;
   }
 

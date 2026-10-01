@@ -641,6 +641,10 @@ export class RealShell implements ShellIf {
    * process sharing the same stdin.
    */
   async pipeReadLine(fd: string, delimiter = '\n'): Promise<string | null> {
+    return (await this.pipeReadRecord(fd, delimiter))?.text ?? null;
+  }
+
+  async pipeReadRecord(fd: string, delimiter = '\n'): Promise<{ text: string; delimited: boolean } | null> {
     const stop = (delimiter === '' ? '\0' : delimiter).charCodeAt(0);
     const bytes: number[] = [];
     const one = new Uint8Array(1);
@@ -665,10 +669,10 @@ export class RealShell implements ShellIf {
       }
 
       if (byte === null) {
-        return bytes.length > 0 ? new TextDecoder().decode(new Uint8Array(bytes)) : null;
+        return bytes.length > 0 ? { text: new TextDecoder().decode(new Uint8Array(bytes)), delimited: false } : null;
       }
       if (byte === stop) {
-        return new TextDecoder().decode(new Uint8Array(bytes));
+        return { text: new TextDecoder().decode(new Uint8Array(bytes)), delimited: true };
       }
 
       bytes.push(byte);

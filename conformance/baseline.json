@@ -499,9 +499,9 @@
       "reference": "pass"
     },
     "run-array": {
-      "upstream": 0.868,
+      "upstream": 0.878,
       "pass": false,
-      "stdout": 0.896,
+      "stdout": 0.904,
       "reference": "pass"
     },
     "run-array2": {
@@ -589,21 +589,21 @@
       "reference": "pass"
     },
     "run-dbg-support": {
-      "upstream": 0.715,
+      "upstream": 0.761,
       "pass": false,
-      "stdout": 0.709,
+      "stdout": 0.755,
       "reference": "pass"
     },
     "run-dbg-support2": {
-      "upstream": 0.143,
+      "upstream": 0.857,
       "pass": false,
-      "stdout": 0.143,
+      "stdout": 0.857,
       "reference": "pass"
     },
     "run-dirstack": {
-      "upstream": 0.395,
-      "pass": false,
-      "stdout": 0.451,
+      "upstream": 1,
+      "pass": true,
+      "stdout": 1,
       "reference": "pass"
     },
     "run-dollars": {
@@ -673,7 +673,7 @@
       "reference": "pass"
     },
     "run-glob-test": {
-      "upstream": 0.936,
+      "upstream": 0.937,
       "pass": false,
       "stdout": 0.958,
       "reference": "env"
@@ -721,9 +721,9 @@
       "reference": "pass"
     },
     "run-input-test": {
-      "upstream": 0.667,
-      "pass": false,
-      "stdout": 0.667,
+      "upstream": 1,
+      "pass": true,
+      "stdout": 1,
       "reference": "pass"
     },
     "run-intl": {
@@ -758,9 +758,9 @@
       "reference": "pass"
     },
     "run-mapfile": {
-      "upstream": 0.692,
+      "upstream": 0.994,
       "pass": false,
-      "stdout": 0.692,
+      "stdout": 0.994,
       "reference": "pass"
     },
     "run-more-exp": {
@@ -770,9 +770,9 @@
       "reference": "pass"
     },
     "run-nameref": {
-      "upstream": 0.882,
+      "upstream": 0.888,
       "pass": false,
-      "stdout": 0.91,
+      "stdout": 0.918,
       "reference": "pass"
     },
     "run-new-exp": {
@@ -806,9 +806,9 @@
       "reference": "pass"
     },
     "run-nquote4": {
-      "upstream": 0.111,
+      "upstream": 0.667,
       "pass": false,
-      "stdout": 0.111,
+      "stdout": 1,
       "reference": "pass"
     },
     "run-nquote5": {
@@ -866,9 +866,9 @@
       "reference": "pass"
     },
     "run-procsub": {
-      "upstream": 0.667,
+      "upstream": 0.716,
       "pass": false,
-      "stdout": 0.697,
+      "stdout": 0.727,
       "reference": "pass"
     },
     "run-quote": {
@@ -878,9 +878,9 @@
       "reference": "pass"
     },
     "run-quotearray": {
-      "upstream": 0.808,
+      "upstream": 0.993,
       "pass": false,
-      "stdout": 0.856,
+      "stdout": 0.996,
       "reference": "pass"
     },
     "run-read": {
@@ -891,9 +891,9 @@
       "timeout": true
     },
     "run-redir": {
-      "upstream": 0.743,
+      "upstream": 0.755,
       "pass": false,
-      "stdout": 0.732,
+      "stdout": 0.74,
       "reference": "pass"
     },
     "run-rhs-exp": {
@@ -940,15 +940,15 @@
       "timeout": true
     },
     "run-tilde": {
-      "upstream": 0.643,
-      "pass": false,
-      "stdout": 0.643,
+      "upstream": 1,
+      "pass": true,
+      "stdout": 1,
       "reference": "pass"
     },
     "run-tilde2": {
-      "upstream": 0.714,
-      "pass": false,
-      "stdout": 0.714,
+      "upstream": 1,
+      "pass": true,
+      "stdout": 1,
       "reference": "pass"
     },
     "run-trap": {
@@ -970,7 +970,7 @@
       "reference": "pass"
     },
     "run-vredir": {
-      "upstream": 0.927,
+      "upstream": 0.931,
       "pass": false,
       "stdout": 0.953,
       "reference": "env"

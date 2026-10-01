@@ -7,6 +7,7 @@
 import { utils } from '@ein/bash-parser';
 import type { ExecContextIf, ShellIf } from '../types.ts';
 import { assignReference, type NameReference, nameReference } from './element.ts';
+import { readRecord } from './read-record.ts';
 import type { BuiltinHandler, BuiltinResult, BuiltinServices } from './types.ts';
 
 const USAGE = 'read: usage: read [-ers] [-a array] [-d delim] [-i text] [-n nchars] [-N nchars] [-p prompt] [-t timeout] [-u fd] [name ...]\n';
@@ -271,22 +272,26 @@ export const readBuiltin: BuiltinHandler = async (
     return { code: 1, stderr: `read: ${options.fd}: invalid file descriptor: Bad file descriptor\n` };
   }
 
-  // Read one line from the FD
+  // Read one line from the FD; one the input ended before its delimiter is
+  // still assigned, and read fails, as bash's does
   let input: string;
+  let delimited = true;
   try {
     if (shell.pipeReadLine) {
-      const line = await shell.pipeReadLine(fd, options.delimiter);
-      if (line === null) {
+      const record = await readRecord(shell, fd, options.delimiter);
+      if (record === null) {
         // At the end of the input the names are still assigned, empty, and read fails
         return await assign(ctx, options, refs, [], 1, services);
       }
-      input = line;
+      input = record.text;
+      delimited = record.delimited;
 
       // Without -r a backslash at the end of a line joins the next one to it
-      while (!options.raw && options.delimiter === '\n' && /(^|[^\\])(\\\\)*\\$/.test(input)) {
-        const next = await shell.pipeReadLine(fd, options.delimiter);
+      while (delimited && !options.raw && options.delimiter === '\n' && /(^|[^\\])(\\\\)*\\$/.test(input)) {
+        const next = await readRecord(shell, fd, options.delimiter);
 
-        input = input.slice(0, -1) + (next ?? '');
+        input = input.slice(0, -1) + (next?.text ?? '');
+        delimited = next?.delimited ?? false;
         if (next === null) break;
       }
     } else {
@@ -307,16 +312,17 @@ export const readBuiltin: BuiltinHandler = async (
     return { code: 1 };
   }
 
-  // Handle -n option (read n characters)
+  // Handle -n option (read n characters): having them is success, newline or not
   if (options.nChars !== null && options.nChars > 0) {
+    if (input.length >= options.nChars) delimited = true;
     input = input.slice(0, options.nChars);
   }
 
   // `IFS= read -r line` is a prefix assignment, so params come first — and an
   // IFS that is set but empty means "do not split", not "use the default"
-  const ifs = ctx.getParams()['IFS'] ?? ctx.getEnv()['IFS'] ?? utils.DEFAULT_IFS;
+  const ifs = ctx.getParam('IFS') ?? utils.DEFAULT_IFS;
 
-  return await assign(ctx, options, refs, split(input, options, ifs), 0, services);
+  return await assign(ctx, options, refs, split(input, options, ifs), delimited ? 0 : 1, services);
 };
 
 /** The words read, into the array or the names; `code` is read's status when they could all be assigned. */

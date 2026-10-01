@@ -272,6 +272,9 @@ export class AstExecutor {
   /** The file each function was defined in, for its BASH_SOURCE. */
   private functionSources = new WeakMap<object, string>();
 
+  /** The source frame each function was defined in, which its line numbers count from. */
+  private functionFrames = new WeakMap<object, { base: number; name?: string }>();
+
   /** The file running now, as BASH_SOURCE names it: `environment` for a string run as it is. */
   private currentFile(ctx: ExecContextIf): string {
     return ctx.getArray('BASH_SOURCE')?.[0] ?? 'environment';
@@ -398,9 +401,15 @@ export class AstExecutor {
    * @param opts.command - The script is a `bash -c` string: an unset parameter
    *                       ends it with 127, where a script read from a file or
    *                       a prompt leaves 1, as bash does
+   * @param opts.line - The line of the script the source starts on, for a
+   *                    script run a piece at a time: LINENO goes on from it
    * @returns {Promise<number>} - The exit code of the executed script.
    */
-  public async execute(source: string, ctx: ExecContextIf, opts: { exited?: { value: boolean }; file?: string; command?: boolean } = {}): Promise<number> {
+  public async execute(
+    source: string,
+    ctx: ExecContextIf,
+    opts: { exited?: { value: boolean }; file?: string; command?: boolean; line?: number } = {},
+  ): Promise<number> {
     this.commandString = opts.command ?? false;
 
     // A script read from a file is `main` at the bottom of the call stack, and
@@ -411,7 +420,10 @@ export class AstExecutor {
       ctx.setArray('BASH_LINENO', ['0']);
     }
 
-    const code = await this.executeSource(source, ctx);
+    // A script run a piece at a time goes on counting its lines from where it is
+    const code = opts.line !== undefined && opts.line > 1
+      ? await this.inSourceFrame({ base: opts.line - 1, name: this.sourceFrame.name }, () => this.executeSource(source, ctx))
+      : await this.executeSource(source, ctx);
 
     if (isExitSignal(code)) {
       if (opts.exited) {
@@ -455,7 +467,8 @@ export class AstExecutor {
       // interactive bash turns on and a script has to ask for
       resolveAlias: async (name: string) => ctx.getShellOption('expand_aliases') ? ctx.getAlias(name) : undefined,
 
-      resolveHomeUser: this.shell.resolveHomeUser ? (async (username: string | null) => this.shell.resolveHomeUser!(ctx, username)) : undefined,
+      // Tildes are expanded as each word runs, with HOME as it is then
+      deferTildeExpansion: true,
     };
 
     try {
@@ -665,6 +678,51 @@ export class AstExecutor {
   }
 
   /**
+   * The line a simple command is on, as bash counts it: the line it ends on,
+   * `echo "a<newline>b" $LINENO` being on the second, though a line it goes
+   * on to after a backslash, or inside a `$( )`, is still the first. The
+   * source tells which, when it is the one the command came from.
+   */
+  private commandRow(node: AstNode): number | undefined {
+    const loc = (node as { loc?: { start?: { row?: number; char?: number }; end?: { row?: number; char?: number } } }).loc;
+    const start = loc?.start;
+    const end = loc?.end;
+
+    if (start?.row === undefined || end?.row === undefined || end.row === start.row) return start?.row;
+
+    const text = start.char !== undefined && end.char !== undefined ? this.currentSource?.slice(start.char, end.char + 1) : undefined;
+
+    // Not this command's text after all: its first line, as before
+    if (text === undefined || (text.match(/\n/g)?.length ?? 0) !== end.row - start.row) return start.row;
+
+    // Newlines in quotes count, those after a backslash or inside `$( )` do not
+    let row = start.row;
+    let depth = 0;
+    let quote = '';
+
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
+
+      if (c === '\\') {
+        i++;
+      } else if (quote === "'") {
+        if (c === "'") quote = '';
+      } else if (c === '$' && text[i + 1] === '(') {
+        depth++;
+        i++;
+      } else if (depth > 0 && c === ')') {
+        depth--;
+      } else if (depth === 0 && (c === '"' || c === "'")) {
+        quote = quote === c ? '' : quote || c;
+      } else if (c === '\n' && depth === 0) {
+        row++;
+      }
+    }
+
+    return row;
+  }
+
+  /**
    * Executes an AST node based on its type.
    * @param {AstNode} node - The AST node to execute.
    * @param {ExecContextIf} ctx - The execution context.
@@ -678,7 +736,7 @@ export class AstExecutor {
 
     // `$LINENO` is the line of what runs now; a `$( )`, parsed without
     // locations, keeps the line of the command it is in
-    const row = (node as { loc?: { start?: { row?: number } } }).loc?.start?.row;
+    const row = node.type === 'Command' ? this.commandRow(node) : (node as { loc?: { start?: { row?: number } } }).loc?.start?.row;
 
     if (row !== undefined && node.type !== 'Script') {
       ctx.setParams({ LINENO: String(this.sourceFrame.base + row) });
@@ -1847,7 +1905,12 @@ export class AstExecutor {
     };
 
     try {
-      result = await this.inCallFrame(fnCtx, fn.name, this.functionSources.get(fn.body) ?? 'environment', run);
+      // Its lines are counted as where it was defined counted them: a function
+      // from an eval, or from an earlier piece of a script read from stdin
+      const frame = this.functionFrames.get(fn.body);
+      const counted = frame ? () => this.inSourceFrame(frame, run) : run;
+
+      result = await this.inCallFrame(fnCtx, fn.name, this.functionSources.get(fn.body) ?? 'environment', counted);
     } finally {
       this.functionDepth--;
       this.loopDepth = loopDepth;
@@ -2329,6 +2392,32 @@ export class AstExecutor {
     return sub;
   }
 
+  /**
+   * What a tilde prefix stands for, or undefined to leave it as written: `~`
+   * is HOME, `~+` PWD, `~-` OLDPWD, `~2`/`~-1` an entry of the directory
+   * stack (`dirs`), `~user` that user's home, as the host knows it.
+   */
+  private async tildeValue(prefix: string, ctx: ExecContextIf): Promise<string | undefined> {
+    if (prefix === '') {
+      return ctx.getParam('HOME') ?? await this.shell.resolveHomeUser?.(ctx, null).catch(() => undefined);
+    }
+
+    if (prefix === '+') return ctx.getParam('PWD') ?? ctx.getCwd();
+    if (prefix === '-') return ctx.getParam('OLDPWD');
+
+    const index = /^([+-]?)(\d+)$/.exec(prefix);
+
+    if (index) {
+      const stack = [ctx.getCwd(), ...ctx.getDirStack()];
+
+      return stack[index[1] === '-' ? stack.length - 1 - Number(index[2]) : Number(index[2])];
+    }
+
+    const home = await this.shell.resolveHomeUser?.(ctx, prefix).catch(() => undefined);
+
+    return home && home !== `~${prefix}` ? home : undefined;
+  }
+
   /** Whether the script running is a `bash -c` string, which an unset parameter ends with 127. */
   private commandString = false;
 
@@ -2587,6 +2676,7 @@ export class AstExecutor {
 
     if (variable in parentCtx.getEnv() && fn) parentCtx.setEnv({ [variable]: await exportedFunctionText(fn) });
     this.functionSources.set(node.body, this.currentFile(parentCtx));
+    this.functionFrames.set(node.body, this.sourceFrame);
 
     return 0;
   }
@@ -3444,7 +3534,8 @@ export class AstExecutor {
 
     const written = text.slice(name.length + 1, -1);
 
-    if (written === '@' || written === '*') return undefined;
+    // An associative array's `@` and `*` are keys like any other, as bash 5.2 has them
+    if (written === '@' || written === '*') return ctx.getAssoc(name) ? { set: written in ctx.getAssoc(name)! } : undefined;
 
     const subscript = await this.subscriptWord(written, ctx);
     const assoc = ctx.getAssoc(name);
@@ -4754,6 +4845,13 @@ export class AstExecutor {
       return null;
     }
 
+    // A name reference to `a[@]` expands as `${a[@]}` does
+    if (typeof xp.parameter === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(xp.parameter) && ctx.getVariable(xp.parameter)?.attributes.includes('n')) {
+      const all = ctx.resolveNameref(xp.parameter).match(/^([A-Za-z_][A-Za-z0-9_]*)\[([@*])\]$/);
+
+      if (all) return { values: this.arrayElements(all[1], ctx, params), join: all[2] === '@' ? 'field' : 'ifs' };
+    }
+
     if (xp.parameter === '@') {
       return { values: this.positionalParams(params), join: 'field' };
     }
@@ -4925,9 +5023,11 @@ export class AstExecutor {
           // Unquoted, an empty element is no word at all — except at either end,
           // where it may be joined to the rest of the word: `x$@` with "" first
           if (separator === utils.FIELD_MARKER && !isDoubleQuotedAt(node.text, xp.loc!.start)) {
-            const alone = node.text.slice(0, xp.loc!.start) + node.text.slice(xp.loc!.end + 1) === '';
+            // …that is, joined to text on its own side: `x$@` with '' '' is the one word `x`
+            const before = node.text.slice(0, xp.loc!.start) !== '';
+            const after = node.text.slice(xp.loc!.end + 1) !== '';
 
-            list.values = list.values.filter((value, i) => value !== '' || (!alone && (i === 0 || i === list.values.length - 1)));
+            list.values = list.values.filter((value, i) => value !== '' || (i === 0 && before) || (i === list.values.length - 1 && after));
           }
 
           // An empty list leaves nothing, not even its quotes: `f "$@"` with no
@@ -4973,12 +5073,12 @@ export class AstExecutor {
 
             // A tilde prefix is expanded, `${u-~}` as `~` is; the parser saw no word there
             let { text, protectedRanges: ranges } = inner;
-            const tilde = /^~([A-Za-z0-9._-]*)(?=\/|$)/.exec(text);
+            const tilde = /^~([+-]?\d+|[+-]|[A-Za-z0-9._][A-Za-z0-9._@-]*)?(?=\/|$)/.exec(text);
 
-            if (tilde && this.shell.resolveHomeUser && !ranges.some((range) => range.start === 0)) {
-              const home = await this.shell.resolveHomeUser(ctx, tilde[1] || null).catch(() => '');
+            if (tilde && !ranges.some((range) => range.start === 0)) {
+              const home = await this.tildeValue(tilde[1] ?? '', ctx);
 
-              if (home) {
+              if (home !== undefined) {
                 const prefix = singleQuoted(home);
                 const shift = prefix.length - tilde[0].length;
 
@@ -5025,8 +5125,14 @@ export class AstExecutor {
                 throw new CommandAbortError(`$${xp.parameter}: cannot assign in this way`, { code: 'E_BAD_ASSIGNMENT' });
               }
 
-              // What it assigns is not split, as no assignment is
+              // What it assigns is not split, as no assignment is; a tilde prefix
+              // at its start is expanded, `${p:=~/bin}`
               resolved = await this.operatorWordValue(xpAny, ctx, dquoted, false, true);
+
+              const tilde = dquoted ? null : /^~([+-]?\d+|[+-]|[A-Za-z0-9._][A-Za-z0-9._@-]*)?(?=[/:]|$)/.exec(String(xpAny.wordSource ?? ''));
+              const home = tilde && resolved.startsWith(tilde[0]) ? await this.tildeValue(tilde[1] ?? '', ctx) : undefined;
+
+              if (home !== undefined) resolved = home + resolved.slice(tilde![0].length);
               await this.applyAssignment({ name, subscript, append: false, values: [resolved], list: false, status: 0 }, ctx, false);
             } else {
               resolved = paramValue;
@@ -5102,6 +5208,12 @@ export class AstExecutor {
         const path = await this.substituteProcess(xp, ctx, subs);
 
         rValue.replace(xp.loc!.start, xp.loc!.end + 1, path);
+      } else if (xp.type === 'TildeExpansion') {
+        const home = await this.tildeValue(xp.value, ctx);
+
+        // What it gives is quoted: neither split nor globbed. One that leads
+        // nowhere, `~nobody-here`, stays as written
+        if (home !== undefined) rValue.replaceWithRanges(xp.loc!.start, xp.loc!.end + 1, `"${home}"`, [{ start: 1, end: home.length + 1 }]);
       }
     }
 

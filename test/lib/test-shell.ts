@@ -278,6 +278,10 @@ export class TestShell implements ShellIf {
   }
 
   async pipeReadLine(fd: string, delimiter = '\n'): Promise<string | null> {
+    return (await this.pipeReadRecord(fd, delimiter))?.text ?? null;
+  }
+
+  async pipeReadRecord(fd: string, delimiter = '\n'): Promise<{ text: string; delimited: boolean } | null> {
     const pipe = this.pipes.get(fd);
     if (!pipe) return null;
 
@@ -287,13 +291,13 @@ export class TestShell implements ShellIf {
       const idx = buffer.indexOf(delimiter);
       if (idx !== -1) {
         this.fdReadBuffers.set(fd, buffer.substring(idx + delimiter.length));
-        return buffer.substring(0, idx);
+        return { text: buffer.substring(0, idx), delimited: true };
       }
 
       const chunk = await pipe.read(4096);
       if (chunk.length === 0) {
         this.fdReadBuffers.delete(fd);
-        return buffer.length > 0 ? buffer : null;
+        return buffer.length > 0 ? { text: buffer, delimited: false } : null;
       }
 
       buffer += this.decoder.decode(chunk);

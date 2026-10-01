@@ -1,5 +1,5 @@
 import { utils } from '@ein/bash-parser';
-import { contextVariables, evaluateArithmeticText } from '../arith.ts';
+import { contextVariables, evaluateArithmeticText, subscriptEnd } from '../arith.ts';
 import { assocEntries } from '../assoc-list.ts';
 import { exportedFunctionText, functionEnvName } from '../print-command.ts';
 import type { ExecContextIf } from '../types.ts';
@@ -100,6 +100,22 @@ export async function exportFunctions(ctx: ExecContextIf, names: string[], remov
 export const exportBuiltin: BuiltinHandler = (ctx, args) => declareCommand('export', ctx, args);
 
 /**
+ * A name unset can take: an identifier, or `name[sub]` as bash's
+ * valid_array_reference reads it — its subscript quotes and all, or, for a
+ * word written so (`unset a["$k"]`), whatever lies between the brackets.
+ */
+const isVariableName = (name: string, arrayRef: boolean): boolean => {
+  const open = name.indexOf('[');
+
+  if (open === -1) return /^[A-Za-z_][A-Za-z0-9_]*$/.test(name);
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name.slice(0, open))) return false;
+
+  const close = arrayRef ? name.length - 1 : subscriptEnd(name, open);
+
+  return close > open + 1 && close === name.length - 1 && name[close] === ']';
+};
+
+/**
  * The unset builtin - remove variables or functions.
  *
  * Usage: unset [-fv] [name ...]
@@ -138,6 +154,18 @@ export const unsetBuiltin: BuiltinHandler = async (ctx, args, _shell, _io, servi
   let stderr = '';
 
   for (const name of names) {
+    // A name that is neither a variable nor an element: an error under -v,
+    // else possibly a function's — `unset -v a[$k]` with k='$(echo foo)' splits
+    if (!unsetFunctions && !isVariableName(name, services?.arrayRefs?.has(name) === true)) {
+      if (variablesOnly || noref) {
+        stderr += `unset: \`${name}': not a valid identifier\n`;
+      } else if (ctx.getFunction(name)) {
+        ctx.unsetFunction(name);
+      }
+
+      continue;
+    }
+
     // A name that is no variable but a function is the function, unless -v says otherwise
     if (unsetFunctions || (!variablesOnly && !noref && !ctx.getVariable(name) && ctx.getFunction(name))) {
       if (ctx.getFunction(name)?.readonly) {
@@ -176,6 +204,14 @@ export const unsetBuiltin: BuiltinHandler = async (ctx, args, _shell, _io, servi
 
       if (kind === 'scalar') {
         stderr += `unset: ${element.name}: not an array variable\n`;
+        continue;
+      }
+
+      // `@` and `*` are keys of an associative array like any other; of an
+      // indexed one, every element, which leaves it empty, as bash 5.2 has it
+      if (element.subscript === '@' || element.subscript === '*') {
+        if (ctx.getAssoc(element.name)) ctx.unsetAssocElement(element.name, element.subscript);
+        else if (ctx.getArray(element.name)) ctx.setArray(element.name, []);
         continue;
       }
 

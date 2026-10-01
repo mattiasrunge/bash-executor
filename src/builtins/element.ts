@@ -9,6 +9,7 @@
  */
 
 import { contextVariables, evaluateArithmeticText, subscriptEnd } from '../arith.ts';
+import { ArithmeticError } from '../errors.ts';
 import type { ExecContextIf } from '../types.ts';
 import type { BuiltinServices } from './types.ts';
 
@@ -46,6 +47,14 @@ export async function assignReference(ctx: ExecContextIf, ref: NameReference, va
 
     ctx.setAssocElement(ref.name, key, value);
     return;
+  }
+
+  // `@` and `*` name every element, which no assignment can
+  if (ref.subscript === '@' || ref.subscript === '*') {
+    const error = new ArithmeticError(`${ref.name}[${ref.subscript}]: bad array subscript`);
+
+    error.nameless = true;
+    throw error;
   }
 
   const expanded = services ? await services.expandSubscript(ref.subscript, false) : ref.subscript;
