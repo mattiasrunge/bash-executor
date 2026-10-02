@@ -2,6 +2,7 @@ import type { AstNodeCompoundList } from '@ein/bash-parser';
 import type { FunctionDefinition } from './print-command.ts';
 import { JobTable } from './jobs.ts';
 import { History } from './history.ts';
+import type { CompSpec } from './completion.ts';
 import {
   type DeclareOptions,
   DEFAULT_SHELL_OPTIONS,
@@ -99,6 +100,7 @@ export class ExecContext implements ExecContextIf {
   private umask = 0o022;
   private resourceLimits: Record<string, { soft: string; hard: string }> = {};
   private history?: History;
+  private completionSpecs?: Map<string, CompSpec>;
   /** What `local -` saved in this function's scope */
   private savedOptions?: Record<string, boolean>;
   private dirStack: string[] = [];
@@ -180,6 +182,7 @@ export class ExecContext implements ExecContextIf {
     ctx.umask = this.getUmask();
     ctx.resourceLimits = { ...this.getResourceLimits() };
     ctx.history = this.root().history?.copy();
+    ctx.completionSpecs = new Map([...this.getCompletionSpecs()].map(([name, spec]) => [name, { ...spec, actions: [...spec.actions], options: [...spec.options] }]));
 
     // A subshell does not run the shell's traps, but what the shell ignores it
     // ignores too, as in bash
@@ -1096,6 +1099,12 @@ export class ExecContext implements ExecContextIf {
 
   setUmask(mask: number): void {
     this.root().umask = mask & 0o777;
+  }
+
+  getCompletionSpecs(): Map<string, CompSpec> {
+    const root = this.root();
+
+    return root.completionSpecs ??= new Map();
   }
 
   getHistory(): History {

@@ -1,55 +1,38 @@
 /**
- * Implementation of the compgen builtin: the words that complete a word, from
- * the lists bash's programmable completion draws on. What needs the system
- * itself — users, groups, hostnames, services — gives nothing here.
+ * The programmable completion builtins, as bash's complete.def has them:
+ * `complete` defines, lists and removes completion specifications, `compgen`
+ * prints the words one would offer, and `compopt` changes their options —
+ * those of the completion a function is generating, when it names none.
+ *
+ * The specifications are the context's (`getCompletionSpecs()`); what they
+ * generate is the executor's (`completeLine`, `generateCompletions`). What
+ * needs the system itself — users, groups, hostnames, services — gives
+ * nothing here.
  */
 
-import { globToRegExp } from '../pattern.ts';
-import { DEFAULT_SHELL_OPTIONS, DEFAULT_SHOPT_OPTIONS, type ExecContextIf, type ShellIf } from '../types.ts';
-import { SIGNALS } from './trap.ts';
-import type { BuiltinHandler, BuiltinRegistry, BuiltinResult } from './types.ts';
+import {
+  actionCompletions,
+  COMPLETE_OPTIONS,
+  compoptText,
+  type CompSpec,
+  DEFAULT_CMD,
+  EMPTY_CMD,
+  INITIAL_WORD,
+  parseSpecArgs,
+  pathWords,
+  specOrder,
+  specText,
+} from '../completion.ts';
+import type { ExecContextIf, ShellIf } from '../types.ts';
+import type { BuiltinHandler, BuiltinRegistry, BuiltinResult, BuiltinServices } from './types.ts';
 
-const USAGE =
+const COMPGEN_USAGE =
   'compgen: usage: compgen [-abcdefgjksuv] [-o option] [-A action] [-G globpat] [-W wordlist] [-F function] [-C command] [-X filterpat] [-P prefix] [-S suffix] [word]\n';
+const COMPLETE_USAGE =
+  'complete: usage: complete [-abcdefgjksuv] [-pr] [-DEI] [-o option] [-A action] [-G globpat] [-W wordlist] [-F function] [-C command] [-X filterpat] [-P prefix] [-S suffix] [name ...]\n';
+const COMPOPT_USAGE = 'compopt: usage: compopt [-o|+o option] [-DEI] [name ...]\n';
 
-/** The actions by their one-letter options. */
-const LETTERS: Record<string, string> = {
-  a: 'alias',
-  b: 'builtin',
-  c: 'command',
-  d: 'directory',
-  e: 'export',
-  f: 'file',
-  g: 'group',
-  j: 'job',
-  k: 'keyword',
-  s: 'service',
-  u: 'user',
-  v: 'variable',
-};
-
-const ACTIONS = new Set([
-  ...Object.values(LETTERS),
-  'arrayvar',
-  'binding',
-  'disabled',
-  'enabled',
-  'function',
-  'helptopic',
-  'hostname',
-  'running',
-  'setopt',
-  'shopt',
-  'signal',
-  'stopped',
-]);
-
-/** bash's reserved words, in its own order. */
-const KEYWORDS = 'if then else elif fi case esac for select while until do done in function time { } ! [[ ]] coproc'.split(' ');
-
-const byteOrder = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
-
-const isName = (name: string) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name);
+const specsOf = (ctx: ExecContextIf): Map<string, CompSpec> => ctx.getCompletionSpecs?.() ?? new Map();
 
 /**
  * Creates the compgen builtin.
@@ -60,174 +43,160 @@ const isName = (name: string) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name);
  * compgen -W "start stop" -- st
  */
 export function createCompgenBuiltin(registry: BuiltinRegistry): BuiltinHandler {
-  return async (ctx: ExecContextIf, args: string[], shell: ShellIf): Promise<BuiltinResult> => {
-    const actions: string[] = [];
-    let wordlist: string | undefined;
-    let globpat: string | undefined;
-    let filter: string | undefined;
-    let prefix = '';
-    let suffix = '';
-    let i = 0;
+  return async (ctx: ExecContextIf, args: string[], shell: ShellIf, _execute, services?: BuiltinServices): Promise<BuiltinResult> => {
+    if (args.length === 0) return { code: 0 };
 
-    for (; i < args.length && args[i].startsWith('-') && args[i].length > 1; i++) {
-      if (args[i] === '--') {
-        i++;
-        break;
-      }
+    const parsed = parseSpecArgs('compgen', args, '', COMPGEN_USAGE);
 
-      for (let j = 1; j < args[i].length; j++) {
-        const flag = args[i][j];
+    if ('code' in parsed) return parsed;
+    if (!parsed.given) return { code: 0 };
 
-        if (flag in LETTERS) {
-          actions.push(LETTERS[flag]);
-          continue;
-        }
+    const { spec } = parsed;
+    const word = parsed.rest[0] ?? '';
+    let stderr = '';
 
-        if (!'oAGWFCXPS'.includes(flag)) return { code: 2, stderr: `compgen: -${flag}: invalid option\n${USAGE}` };
+    if (spec.funcname !== undefined) stderr += 'compgen: warning: -F option may not work as you expect\n';
+    if (spec.command !== undefined) stderr += 'compgen: warning: -C option may not work as you expect\n';
 
-        // The option's argument: the rest of this word, or the next
-        const value = args[i].slice(j + 1) || args[++i];
+    let words = services?.generateCompletions ? await services.generateCompletions(spec, word) : await actionCompletions(ctx, shell, registry, spec.actions, word);
 
-        if (value === undefined) return { code: 2, stderr: `compgen: -${flag}: option requires an argument\n${USAGE}` };
-
-        if (flag === 'A') {
-          if (!ACTIONS.has(value)) return { code: 2, stderr: `compgen: ${value}: invalid action name\n` };
-          actions.push(value);
-        } else if (flag === 'W') {
-          wordlist = value;
-        } else if (flag === 'G') {
-          globpat = value;
-        } else if (flag === 'X') {
-          filter = value;
-        } else if (flag === 'P') {
-          prefix = value;
-        } else if (flag === 'S') {
-          suffix = value;
-        }
-
-        break;
-      }
+    // The shell's own completion and file names, when the specification asks for them and found nothing
+    if (words.length === 0 && (spec.options.includes('bashdefault') || spec.options.includes('default'))) {
+      words = await pathWords(ctx, shell, word, false);
     }
 
-    const word = args[i] ?? '';
-    const matches: string[] = [];
-    const add = (names: Iterable<string>) => {
-      for (const name of names) {
-        if (name.startsWith(word)) matches.push(name);
-      }
-    };
+    if (words.length === 0) return { code: 1, stderr: stderr || undefined };
 
-    for (const action of actions) {
-      add(await actionWords(ctx, shell, registry, action, word));
-    }
-
-    if (globpat !== undefined && shell.resolvePath) {
-      matches.push(...await shell.resolvePath(ctx, globpat));
-    }
-
-    if (wordlist !== undefined) {
-      const ifs = ctx.getParams().IFS ?? ' \t\n';
-
-      add(wordlist.split(new RegExp(`[${ifs.replace(/[\]\\^-]/g, '\\$&')}]+`)).filter(Boolean));
-    }
-
-    // -X drops what matches it; `!pat` keeps only that
-    let words = matches;
-
-    if (filter !== undefined) {
-      const keep = filter.startsWith('!');
-      const pattern = globToRegExp(keep ? filter.slice(1) : filter);
-
-      words = words.filter((w) => pattern.test(w) === keep);
-    }
-
-    if (words.length === 0) return { code: 1 };
-
-    return { code: 0, stdout: words.map((w) => `${prefix}${w}${suffix}\n`).join('') };
+    return { code: 0, stdout: words.map((w) => `${w}\n`).join(''), stderr: stderr || undefined };
   };
 }
 
-/** The words one action offers, before they are matched against the word. */
-async function actionWords(ctx: ExecContextIf, shell: ShellIf, registry: BuiltinRegistry, action: string, word: string): Promise<string[]> {
-  switch (action) {
-    case 'alias':
-      return Object.keys(ctx.getAliases()).sort(byteOrder);
-    case 'arrayvar':
-      return [...Object.keys(ctx.getArrays()), ...Object.keys(ctx.getAssocs())].sort(byteOrder);
-    case 'builtin':
-    case 'enabled':
-      return [...registry.keys()].sort(byteOrder);
-    case 'export':
-      return Object.keys(ctx.getEnv()).filter(isName).sort(byteOrder);
-    case 'function':
-      return Object.keys(ctx.getFunctions()).sort(byteOrder);
-    case 'keyword':
-      return KEYWORDS;
-    case 'setopt':
-      return Object.keys(DEFAULT_SHELL_OPTIONS).sort(byteOrder);
-    case 'shopt':
-      return Object.keys(DEFAULT_SHOPT_OPTIONS);
-    case 'signal':
-      return SIGNALS.map(([, name]) => `SIG${name}`);
-    case 'variable': {
-      const names = new Set([...Object.keys(ctx.getEnv()), ...Object.keys(ctx.getParams()), ...Object.keys(ctx.getArrays()), ...Object.keys(ctx.getAssocs())]);
+/**
+ * complete [-abcdefgjksuv] [-pr] [-DEI] [-o option] [-A action] [-G glob]
+ * [-W words] [-F function] [-C command] [-X filter] [-P prefix] [-S suffix]
+ * [name …]: define how each name's arguments are completed; with -p or no
+ * options list the definitions, with -r remove them.
+ */
+export const completeBuiltin: BuiltinHandler = (ctx: ExecContextIf, args: string[]): Promise<BuiltinResult> => {
+  const specs = specsOf(ctx);
+  const listAll = () => specOrder(specs).map((name) => specText(name, specs.get(name)!)).join('');
 
-      return [...names].filter(isName).sort(byteOrder);
+  if (args.length === 0) return Promise.resolve({ code: 0, stdout: listAll() || undefined });
+
+  const parsed = parseSpecArgs('complete', args, 'prDEI', COMPLETE_USAGE);
+
+  if ('code' in parsed) return Promise.resolve(parsed);
+
+  const names = parsed.special ? [parsed.special] : parsed.rest;
+  const missing = (name: string) => `complete: ${name}: no completion specification\n`;
+
+  if (parsed.print || (parsed.rest.length === 0 && !parsed.given)) {
+    if (names.length === 0) return Promise.resolve({ code: 0, stdout: listAll() || undefined });
+
+    let stdout = '';
+    let stderr = '';
+
+    for (const name of names) {
+      const spec = specs.get(name);
+
+      if (spec) stdout += specText(name, spec);
+      else stderr += missing(name);
     }
-    case 'directory':
-    case 'file':
-      return await pathWords(ctx, shell, word, action === 'directory');
-    case 'command':
-      return [
-        ...Object.keys(ctx.getAliases()),
-        ...[...registry.keys()],
-        ...Object.keys(ctx.getFunctions()),
-        ...KEYWORDS,
-        ...await commandFiles(ctx, shell, word),
-      ];
-    default:
-      // users, groups, hostnames, services, jobs, bindings, help topics: not known here
-      return [];
-  }
-}
 
-/** The files, or only the directories, whose names start with `word`. */
-async function pathWords(ctx: ExecContextIf, shell: ShellIf, word: string, directories: boolean): Promise<string[]> {
-  if (!shell.resolvePath) return [];
-
-  const escaped = word.replace(/[\\*?[\]]/g, '\\$&');
-  const found = await shell.resolvePath(ctx, `${escaped}*`).catch(() => [] as string[]);
-
-  // A glob that matches nothing is itself
-  const paths = found.filter((path) => path !== `${escaped}*`);
-
-  if (!directories) return paths;
-
-  const dirs: string[] = [];
-
-  for (const path of paths) {
-    if (await shell.testPath?.(ctx, path, 'DIRECTORY')) dirs.push(path);
+    return Promise.resolve({ code: stderr ? 1 : 0, stdout: stdout || undefined, stderr: stderr || undefined });
   }
 
-  return dirs;
-}
+  if (parsed.remove) {
+    if (names.length === 0) {
+      specs.clear();
+      return Promise.resolve({ code: 0 });
+    }
 
-/** The commands on PATH whose names start with `word`. */
-async function commandFiles(ctx: ExecContextIf, shell: ShellIf, word: string): Promise<string[]> {
-  if (word.includes('/')) return await pathWords(ctx, shell, word, false);
-  if (!shell.resolvePath) return [];
+    let stderr = '';
 
-  const names = new Set<string>();
+    for (const name of names) {
+      if (!specs.delete(name)) stderr += missing(name);
+    }
 
-  for (const dir of (ctx.getParams().PATH ?? ctx.getEnv().PATH ?? '').split(':')) {
-    const escaped = word.replace(/[\\*?[\]]/g, '\\$&');
+    return Promise.resolve({ code: stderr ? 1 : 0, stderr: stderr || undefined });
+  }
 
-    for (const path of await shell.resolvePath(ctx, `${dir || '.'}/${escaped}*`).catch(() => [] as string[])) {
-      const name = path.slice(path.lastIndexOf('/') + 1);
+  if (names.length === 0) return Promise.resolve({ code: 2, stderr: COMPLETE_USAGE });
 
-      if (name !== `${escaped}*` && (await shell.testPath?.(ctx, path, 'EXECUTABLE') ?? true)) names.add(name);
+  // One specification for every name, as bash shares it: a name defined again keeps its place
+  for (const name of names) specs.set(name, parsed.spec);
+
+  return Promise.resolve({ code: 0 });
+};
+
+/**
+ * compopt [-o|+o option] [-DEI] [name …]: turn options of the names'
+ * specifications on or off, or of the completion being generated when no
+ * name is given; with no option, say which are on.
+ */
+export const compoptBuiltin: BuiltinHandler = (ctx: ExecContextIf, args: string[], _shell, _execute, services?: BuiltinServices): Promise<BuiltinResult> => {
+  const on: string[] = [];
+  const off: string[] = [];
+  let special: string | undefined;
+  let i = 0;
+
+  for (; i < args.length; i++) {
+    const arg = args[i];
+
+    if (arg === '--') {
+      i++;
+      break;
+    }
+
+    if (!/^[-+]./.test(arg)) break;
+
+    for (let j = 1; j < arg.length; j++) {
+      const c = arg[j];
+
+      if (c === 'o') {
+        const value = arg.slice(j + 1) || args[++i];
+
+        if (value === undefined) return Promise.resolve({ code: 2, stderr: `compopt: -o: option requires an argument\n${COMPOPT_USAGE}` });
+        if (!COMPLETE_OPTIONS.includes(value)) return Promise.resolve({ code: 2, stderr: `compopt: ${value}: invalid option name\n` });
+        (arg[0] === '-' ? on : off).push(value);
+        break;
+      }
+
+      if (c === 'D' || c === 'E' || c === 'I') special ??= c === 'D' ? DEFAULT_CMD : c === 'E' ? EMPTY_CMD : INITIAL_WORD;
+      else return Promise.resolve({ code: 2, stderr: `compopt: ${arg[0]}${c}: invalid option\n${COMPOPT_USAGE}` });
     }
   }
 
-  return [...names];
-}
+  const change = (spec: CompSpec) => {
+    spec.options = COMPLETE_OPTIONS.filter((option) => (spec.options.includes(option) || on.includes(option)) && !off.includes(option));
+  };
+  const names = special ? [special] : args.slice(i);
+
+  if (names.length === 0) {
+    const current = services?.currentCompletion?.();
+
+    if (!current) return Promise.resolve({ code: 1, stderr: 'compopt: not currently executing completion function\n' });
+    if (on.length === 0 && off.length === 0) return Promise.resolve({ code: 0, stdout: compoptText(current.cmd, current.spec) });
+
+    change(current.spec);
+    return Promise.resolve({ code: 0 });
+  }
+
+  const specs = specsOf(ctx);
+  let stdout = '';
+  let stderr = '';
+
+  for (const name of names) {
+    const spec = specs.get(name);
+
+    if (!spec) {
+      stderr += `compopt: ${name}: no completion specification\n`;
+    } else if (on.length === 0 && off.length === 0) {
+      stdout += compoptText(name, spec);
+    } else {
+      change(spec);
+    }
+  }
+
+  return Promise.resolve({ code: stderr ? 1 : 0, stdout: stdout || undefined, stderr: stderr || undefined });
+};

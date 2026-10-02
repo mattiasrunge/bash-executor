@@ -7,6 +7,7 @@ import {
   type ExecContextIf,
   type ExecSyncResult,
   type ExecuteAndCaptureOptions,
+  type LineCompletion,
   type ShellIf,
 } from '../../mod.ts';
 import { PipeBuffer } from './pipe-buffer.ts';
@@ -313,6 +314,11 @@ export class TestShell implements ShellIf {
     this.capturedStdout = [];
     this.capturedStderr = [];
     return this.executor.execute(script, this.ctx);
+  }
+
+  /** What a Tab at `point` in `line` completes to, as a prompt asks. */
+  async completeLine(line: string, point?: number): Promise<LineCompletion | undefined> {
+    return await this.executor.completeLine(this.ctx, line, point);
   }
 
   /** Whether text stops inside a command, as a prompt asks. */

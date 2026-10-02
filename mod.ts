@@ -9,3 +9,4 @@ export * from './src/bytes.ts';
 export * from './src/print-command.ts';
 export * from './src/syntax-error.ts';
 export * from './src/history.ts';
+export * from './src/completion.ts';

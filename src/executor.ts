@@ -43,6 +43,20 @@ import { expandPattern, type GlobOptions, globPatterns, isGlobPattern, patternOf
 import { syntaxErrorLines } from './syntax-error.ts';
 import { type History, historyExpand, type HistorySettings, historySettings, mayExpand } from './history.ts';
 import { delimitingChars, type LineState, scanLines, shellComment } from './history-reader.ts';
+import {
+  actionCompletions,
+  commandBounds,
+  type CompSpec,
+  DEFAULT_CMD,
+  DEFAULT_WORDBREAKS,
+  EMPTY_CMD,
+  filterWords,
+  INITIAL_WORD,
+  type LineWord,
+  pathWords,
+  shellQuote,
+  splitAtDelims,
+} from './completion.ts';
 import { cpuTime, timeReport } from './timing.ts';
 import { closingBracket, closingQuote, contextVariables, evaluateArithmeticText, subscriptEnd } from './arith.ts';
 import { bracketExpression, globToRegExp, globToRegexSource, posixRegexToSource, quoteGlob, quoteRegex, unquoteGlob } from './pattern.ts';
@@ -186,6 +200,21 @@ function isDoubleQuotedAt(text: string, pos: number): boolean {
  * became; `>(cmd)` reads that file, so it can only run once the command that
  * writes it has finished. Either way the file is removed afterwards.
  */
+/**
+ * What completing a word gave: the word and where it is in the line, the
+ * words that could replace it, and the `-o` options the specification had
+ * when it was done (a completion function may change them with compopt).
+ */
+export type LineCompletion = { word: string; start: number; end: number; matches: string[]; options: string[] };
+
+/** The command line a completion function is shown: its words and the one at the cursor. */
+type CompletionLine = { text: string; point: number; words: LineWord[]; current: number };
+
+/** A word with its quotes taken away, as the word list is matched against it. */
+function unquoteText(text: string): string {
+  return text.replace(/\\(.)|'([^']*)'?|"((?:[^"\\]|\\.)*)"?/g, (_m, escaped, single, double) => escaped ?? single ?? double.replace(/\\([$`"\\])/g, '$1'));
+}
+
 /** Text run as the shell's own input: kept in the history, and echoed as it is read. */
 type ReadInput = { history?: boolean; echo?: boolean };
 
@@ -720,6 +749,244 @@ export class AstExecutor {
       deferTildeExpansion: true,
       posix: ctx.getShellOption('posix'),
     });
+  }
+
+  /** The completion being generated, which `compopt` with no names changes */
+  private currentCompletion?: { spec: CompSpec; cmd: string };
+
+  /**
+   * Complete the word at `point` in `line` as bash's programmable completion
+   * does: the specification `complete` defined for the command — by its
+   * name, its basename, or the `-D` default — generates the words. In the
+   * command's own place `-E` (an empty line) and `-I` apply. Undefined when no
+   * specification applies, for the host to complete as it would without.
+   */
+  public async completeLine(ctx: ExecContextIf, line: string, point = line.length): Promise<LineCompletion | undefined> {
+    const specs = ctx.getCompletionSpecs?.();
+
+    if (!specs || specs.size === 0) return undefined;
+
+    const bounds = commandBounds(line, point);
+    const text = line.slice(bounds.start, bounds.end);
+    const sentinel = point - bounds.start;
+    const { words, current } = splitAtDelims(text, ctx.getParam('COMP_WORDBREAKS') ?? DEFAULT_WORDBREAKS, sentinel);
+    const at = words[current];
+    // The word up to the cursor; one in an open quote is completed inside it, as readline does
+    let wordStart = at.start;
+
+    if ((text[wordStart] === '"' || text[wordStart] === "'") && !text.slice(wordStart + 1, sentinel).includes(text[wordStart])) wordStart++;
+
+    const word = text.slice(wordStart, Math.max(wordStart, Math.min(sentinel, at.end)));
+    let cmd: string;
+    let names: string[];
+
+    if (current === 0) {
+      if (text.slice(0, sentinel).trim() === '' && specs.has(EMPTY_CMD)) names = [EMPTY_CMD];
+      else if (specs.has(INITIAL_WORD)) names = [INITIAL_WORD];
+      else return undefined;
+      cmd = names[0];
+    } else {
+      cmd = words[0].text;
+      const base = cmd.slice(cmd.lastIndexOf('/') + 1);
+
+      names = [cmd, ...(base && base !== cmd ? [base] : []), DEFAULT_CMD];
+    }
+
+    const shown: CompletionLine = { text, point: sentinel, words, current };
+
+    // A function that returns 124 has changed the specifications: look again
+    for (let attempt = 0; attempt < 5; attempt++) {
+      let retry = false;
+
+      for (const name of names) {
+        const spec = specs.get(name);
+
+        if (!spec) continue;
+
+        const result = await this.compspecCompletions(ctx, spec, cmd, word, shown);
+
+        if (result.retry) {
+          retry = true;
+          break;
+        }
+
+        if (!result.found) continue;
+
+        let matches = result.matches;
+
+        // `-o default`: file names when nothing else was found
+        if (matches.length === 0 && result.options.includes('default')) matches = await pathWords(ctx, this.shell, word, false);
+
+        return { word, start: bounds.start + wordStart, end: point, matches, options: result.options };
+      }
+
+      if (!retry) break;
+    }
+
+    return undefined;
+  }
+
+  /**
+   * gen_compspec_completions: the words a specification offers for `word`
+   * of command `cmd` — its actions, glob, word list, function and command,
+   * filtered with `-X` and given `-P`/`-S`. Not found when its function is
+   * not there; a retry when the function asked for one (124).
+   */
+  private async compspecCompletions(
+    ctx: ExecContextIf,
+    original: CompSpec,
+    cmd: string,
+    word: string,
+    line: CompletionLine = { text: '', point: 0, words: [], current: 0 },
+  ): Promise<{ matches: string[]; options: string[]; found: boolean; retry: boolean }> {
+    // A copy, for compopt to change while the function runs
+    const spec = { ...original, actions: [...original.actions], options: [...original.options] };
+    const previous = this.currentCompletion;
+    let matches = await actionCompletions(ctx, this.shell, this.builtins, spec.actions, word);
+
+    this.currentCompletion = { spec, cmd };
+
+    try {
+      if (spec.globpat !== undefined && this.shell.resolvePath) {
+        const found = await this.shell.resolvePath(ctx, spec.globpat).catch(() => [] as string[]);
+
+        matches.push(...found.filter((path) => path !== spec.globpat));
+      }
+
+      if (spec.words) {
+        const plain = unquoteText(word);
+
+        matches.push(...(await this.completionWordList(ctx, spec.words)).filter((w) => w.startsWith(plain)));
+      }
+
+      if (spec.funcname !== undefined) {
+        const result = await this.completionFunction(ctx, spec.funcname, cmd, word, line);
+
+        if (!result.found || result.retry) return { matches: [], options: spec.options, found: result.found, retry: result.retry };
+        matches.push(...result.matches);
+      }
+
+      if (spec.command !== undefined) matches.push(...await this.completionCommand(ctx, spec.command, cmd, word, line));
+
+      if (spec.filterpat !== undefined) matches = filterWords(matches, spec.filterpat, word, ctx.getShellOption('extglob'));
+      if (spec.prefix !== undefined || spec.suffix !== undefined) matches = matches.map((m) => `${spec.prefix ?? ''}${m}${spec.suffix ?? ''}`);
+
+      if (matches.length === 0 && spec.options.includes('dirnames')) {
+        matches = await pathWords(ctx, this.shell, word, true);
+      } else if (spec.options.includes('plusdirs')) {
+        matches.push(...await pathWords(ctx, this.shell, word, true));
+      }
+
+      return { matches, options: spec.options, found: true, retry: false };
+    } finally {
+      this.currentCompletion = previous;
+    }
+  }
+
+  /** gen_wordlist_matches: `-W`'s words, split at IFS and expanded, without pathname expansion. */
+  private async completionWordList(ctx: ExecContextIf, words: string): Promise<string[]> {
+    const ifs = ctx.getParam('IFS') ?? ' \t\n';
+    const pieces: string[] = [];
+    let current = '';
+    let quote = '';
+
+    for (let i = 0; i < words.length; i++) {
+      const c = words[i];
+
+      if (quote) {
+        current += c;
+        if (c === '\\' && quote === '"' && i + 1 < words.length) current += words[++i];
+        else if (c === quote) quote = '';
+      } else if (c === '\\' && i + 1 < words.length) {
+        current += c + words[++i];
+      } else if (c === "'" || c === '"') {
+        quote = c;
+        current += c;
+      } else if (ifs.includes(c)) {
+        if (current) pieces.push(current);
+        current = '';
+      } else {
+        // What would be an operator in a command is a character of the word
+        current += '|&;<>()'.includes(c) ? `\\${c}` : c;
+      }
+    }
+
+    if (current) pieces.push(current);
+    if (pieces.length === 0) return [];
+
+    const sub = ctx.subContext();
+
+    sub.setShellOption('noglob', true);
+
+    try {
+      await this.executeSource(`__complete_words=(${pieces.join(' ')})`, sub);
+    } catch {
+      return [];
+    }
+
+    return (sub.getArray('__complete_words') ?? []).filter((w) => w !== undefined);
+  }
+
+  /** The variables a completion function or command is given: COMP_LINE, COMP_POINT, COMP_TYPE, COMP_KEY. */
+  private completionVariables(line: CompletionLine): Record<string, string> {
+    return { COMP_LINE: line.text, COMP_POINT: String([...line.text.slice(0, line.point)].length), COMP_TYPE: '9', COMP_KEY: '9' };
+  }
+
+  /**
+   * gen_shell_function_matches: run the `-F` function in the shell, as
+   * `func cmd word previous-word` with COMP_WORDS and COMP_CWORD set, and
+   * take what it left in COMPREPLY.
+   */
+  private async completionFunction(
+    ctx: ExecContextIf,
+    name: string,
+    cmd: string,
+    word: string,
+    line: CompletionLine,
+  ): Promise<{ matches: string[]; found: boolean; retry: boolean }> {
+    if (!ctx.getFunction(name)) {
+      await this.diagnose(ctx, `completion: function \`${name}' not found`);
+      return { matches: [], found: false, retry: false };
+    }
+
+    const variables = this.completionVariables(line);
+    const previousWord = line.words[line.current - 1]?.text ?? '';
+
+    ctx.setParams(variables);
+    ctx.setArray('COMP_WORDS', line.words.map((w) => w.text));
+    ctx.setParams({ COMP_CWORD: String(line.current) });
+
+    let code: number;
+
+    try {
+      code = getExitCode(await this.executeSource([name, cmd, word, previousWord].map(shellQuote).join(' '), ctx));
+    } finally {
+      for (const variable of [...Object.keys(variables), 'COMP_WORDS', 'COMP_CWORD']) ctx.unsetVariable(variable);
+    }
+
+    const reply = ctx.getArray('COMPREPLY') ?? (ctx.getParam('COMPREPLY') !== undefined ? [ctx.getParam('COMPREPLY')!] : []);
+
+    ctx.unsetVariable('COMPREPLY');
+
+    if (code === 124) return { matches: [], found: true, retry: true };
+
+    return { matches: reply.filter((w) => w !== undefined), found: code !== 127, retry: false };
+  }
+
+  /**
+   * gen_command_matches: run the `-C` command as `command cmd word
+   * previous-word`, COMP_LINE and COMP_POINT in its environment, and take
+   * its output a line each.
+   */
+  private async completionCommand(ctx: ExecContextIf, command: string, cmd: string, word: string, line: CompletionLine): Promise<string[]> {
+    const sub = ctx.subContext();
+    const previousWord = line.words[line.current - 1]?.text ?? '';
+
+    sub.setEnv(this.completionVariables(line));
+
+    const { stdout } = await this.executeAndCapture(`${command} ${[cmd, word, previousWord].map(shellQuote).join(' ')}`, sub);
+
+    return stdout.replace(/\\\n/g, '\n').split('\n').filter((w) => w !== '');
   }
 
   /** Whether text ends inside a command: more lines are needed to make it whole. */
@@ -1993,6 +2260,8 @@ export class AstExecutor {
               { base: Number(ctx.getParam('LINENO') ?? 1) - 1, name: this.sourceFrame.name },
               () => this.executeSource(text, ctx, { history: true, echo: opts?.echo }),
             ),
+          generateCompletions: async (spec, word) => (await this.compspecCompletions(ctx, spec, 'compgen', word)).matches,
+          currentCompletion: () => this.currentCompletion,
         });
 
         code = result.code;

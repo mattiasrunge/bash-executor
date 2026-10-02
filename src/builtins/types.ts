@@ -1,5 +1,6 @@
 import type { BashSyntaxError } from '@ein/bash-parser';
 import type { ExecContextIf, ShellIf } from '../types.ts';
+import type { CompSpec } from '../completion.ts';
 
 /**
  * Result from a builtin command execution.
@@ -63,6 +64,10 @@ export type BuiltinServices = {
    * each line said on stderr as it is read — what `fc` runs once edited.
    */
   readInput?: (text: string, opts?: { echo?: boolean }) => Promise<number>;
+  /** The words a completion specification offers for `word`, as `compgen` prints them */
+  generateCompletions?: (spec: CompSpec, word: string) => Promise<string[]>;
+  /** The completion a function is generating now, for `compopt` to change */
+  currentCompletion?: () => { spec: CompSpec; cmd: string } | undefined;
 };
 
 /**

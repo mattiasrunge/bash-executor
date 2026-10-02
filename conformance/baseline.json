@@ -547,9 +547,9 @@
       "reference": "pass"
     },
     "run-complete": {
-      "upstream": 0,
-      "pass": false,
-      "stdout": 0,
+      "upstream": 1,
+      "pass": true,
+      "stdout": 1,
       "reference": "pass"
     },
     "run-comsub": {

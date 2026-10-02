@@ -14,7 +14,7 @@ export { aliasBuiltin, unaliasBuiltin } from './alias.ts';
 export { callerBuiltin } from './caller.ts';
 export { timesBuiltin } from './times.ts';
 export { cdBuiltin } from './cd.ts';
-export { createCompgenBuiltin } from './compgen.ts';
+export { completeBuiltin, compoptBuiltin, createCompgenBuiltin } from './compgen.ts';
 export { clearAttributes, declareBuiltin, isReadonly, typesetBuiltin } from './declare.ts';
 export { clearDirStack, dirsBuiltin, getDirStack, popdBuiltin, pushdBuiltin } from './dirstack.ts';
 export { echoBuiltin } from './echo.ts';
@@ -62,7 +62,7 @@ import { aliasBuiltin, unaliasBuiltin } from './alias.ts';
 import { callerBuiltin } from './caller.ts';
 import { timesBuiltin } from './times.ts';
 import { cdBuiltin } from './cd.ts';
-import { createCompgenBuiltin } from './compgen.ts';
+import { completeBuiltin, compoptBuiltin, createCompgenBuiltin } from './compgen.ts';
 import { declareBuiltin, typesetBuiltin } from './declare.ts';
 import { dirsBuiltin, popdBuiltin, pushdBuiltin } from './dirstack.ts';
 import { echoBuiltin } from './echo.ts';
@@ -154,6 +154,8 @@ export function createBuiltinRegistry(): BuiltinRegistry {
   registry.set('caller', callerBuiltin);
   registry.set('times', timesBuiltin);
   registry.set('compgen', createCompgenBuiltin(registry));
+  registry.set('complete', completeBuiltin);
+  registry.set('compopt', compoptBuiltin);
 
   // Phase 3: Arithmetic
   registry.set('let', letBuiltin);
