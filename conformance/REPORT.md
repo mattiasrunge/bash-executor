@@ -6,8 +6,8 @@ see [README.md](README.md) for what the scores mean.
 | Measure | Result |
 | --- | --- |
 | Test files that parse | 462 / 471 |
-| `run-*` scripts passing | 58 / 83 (real bash here: 74) |
-| Mean upstream score | 94% |
+| `run-*` scripts passing | 59 / 83 (real bash here: 74) |
+| Mean upstream score | 95% |
 | Mean stdout score | 95% |
 
 ## Gaps
@@ -160,7 +160,7 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | heredoc | env | no | 94% | 99% | 103,106d102 ⏎ &lt; cat: /home/mattias/m/git/bash-executor-conformance/conformance/.cache/work/ours/run-heredoc/config.h: No such file or directory ⏎ &lt; cmp: /home/m |
 | herestr | pass | yes | 100% | 100% |  |
 | histexpand | pass | yes | 100% | 100% |  |
-| history | pass | no | 97% | 96% | 190a191,195 ⏎ &gt; (left ⏎ &gt; mid |
+| history | pass | yes | 100% | 100% |  |
 | ifs | pass | yes | 100% | 100% |  |
 | ifs-posix | pass | yes | 100% | 100% |  |
 | input-test | pass | yes | 100% | 100% |  |
@@ -173,7 +173,7 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | more-exp | pass | yes | 100% | 100% |  |
 | nameref | pass | no | 89% | 92% | 80d79 ⏎ &lt; ./nameref4.sub: line 181: unset: x: not an array variable ⏎ 157a157 |
 | new-exp | pass | yes | 100% | 100% |  |
-| nquote | pass | no | 80% | 83% | 7,10c7,10 ⏎ &lt; argv[1] = &lt;$hello,&gt; ⏎ &lt; argv[2] = &lt;$world&gt; |
+| nquote | pass | no | 86% | 88% | 7,10c7,10 ⏎ &lt; argv[1] = &lt;$hello,&gt; ⏎ &lt; argv[2] = &lt;$world&gt; |
 | nquote1 | pass | yes | 100% | 100% |  |
 | nquote2 | pass | yes | 100% | 100% |  |
 | nquote3 | pass | yes | 100% | 100% |  |

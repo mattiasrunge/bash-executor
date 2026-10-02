@@ -703,9 +703,9 @@
       "reference": "pass"
     },
     "run-history": {
-      "upstream": 0.965,
-      "pass": false,
-      "stdout": 0.962,
+      "upstream": 1,
+      "pass": true,
+      "stdout": 1,
       "reference": "pass"
     },
     "run-ifs": {
@@ -782,9 +782,9 @@
       "reference": "pass"
     },
     "run-nquote": {
-      "upstream": 0.795,
+      "upstream": 0.863,
       "pass": false,
-      "stdout": 0.827,
+      "stdout": 0.884,
       "reference": "pass"
     },
     "run-nquote1": {
