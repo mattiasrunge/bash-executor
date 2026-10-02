@@ -41,6 +41,8 @@ import { exportedFunctionName, exportedFunctionText, type FunctionDefinition, fu
 import { singleQuoted } from './quote.ts';
 import { expandPattern, type GlobOptions, globPatterns, isGlobPattern, patternOf } from './glob.ts';
 import { syntaxErrorLines } from './syntax-error.ts';
+import { type History, historyExpand, type HistorySettings, historySettings, mayExpand } from './history.ts';
+import { delimitingChars, type LineState, scanLines, shellComment } from './history-reader.ts';
 import { cpuTime, timeReport } from './timing.ts';
 import { closingBracket, closingQuote, contextVariables, evaluateArithmeticText, subscriptEnd } from './arith.ts';
 import { bracketExpression, globToRegExp, globToRegexSource, posixRegexToSource, quoteGlob, quoteRegex, unquoteGlob } from './pattern.ts';
@@ -184,6 +186,9 @@ function isDoubleQuotedAt(text: string, pos: number): boolean {
  * became; `>(cmd)` reads that file, so it can only run once the command that
  * writes it has finished. Either way the file is removed afterwards.
  */
+/** Text run as the shell's own input: kept in the history, and echoed as it is read. */
+type ReadInput = { history?: boolean; echo?: boolean };
+
 type ProcessSubstitutions = {
   paths: string[];
   deferred: { path: string; ast: AstNode }[];
@@ -247,6 +252,9 @@ export class AstExecutor {
    */
   private sourceFrame: { base: number; name?: string } = { base: 0 };
 
+  /** The script whose lines were echoed as they were read, which `set -v` does not echo again */
+  private echoedScript?: AstNodeScript;
+
   constructor(shell: ShellIf, options?: AstExecutorOptions) {
     this.shell = shell;
     this.builtins = options?.builtins;
@@ -258,11 +266,11 @@ export class AstExecutor {
    * Say something went wrong, on the shell's stderr: with `lineNumbers`, as
    * `$0: line N: message`, each line of it.
    */
-  protected async diagnose(ctx: ExecContextIf, message: string): Promise<void> {
+  protected async diagnose(ctx: ExecContextIf, message: string, line?: number): Promise<void> {
     // Said already, where it happened: an abort that carries no message
     if (!message) return;
 
-    const prefix = this.lineNumbers ? `${this.sourceFrame.name ?? ctx.getParam('0') ?? 'bash'}: line ${ctx.getParam('LINENO') ?? 0}: ` : '';
+    const prefix = this.lineNumbers ? `${this.sourceFrame.name ?? ctx.getParam('0') ?? 'bash'}: line ${line ?? ctx.getParam('LINENO') ?? 0}: ` : '';
     const text = message.endsWith('\n') ? message : `${message}\n`;
 
     // A usage message is said without the place, as bash does
@@ -408,7 +416,7 @@ export class AstExecutor {
   public async execute(
     source: string,
     ctx: ExecContextIf,
-    opts: { exited?: { value: boolean }; file?: string; command?: boolean; line?: number } = {},
+    opts: { exited?: { value: boolean }; file?: string; command?: boolean; line?: number; history?: boolean } = {},
   ): Promise<number> {
     this.commandString = opts.command ?? false;
 
@@ -421,9 +429,10 @@ export class AstExecutor {
     }
 
     // A script run a piece at a time goes on counting its lines from where it is
+    const input = { history: opts.history };
     const code = opts.line !== undefined && opts.line > 1
-      ? await this.inSourceFrame({ base: opts.line - 1, name: this.sourceFrame.name }, () => this.executeSource(source, ctx))
-      : await this.executeSource(source, ctx);
+      ? await this.inSourceFrame({ base: opts.line - 1, name: this.sourceFrame.name }, () => this.executeSource(source, ctx, input))
+      : await this.executeSource(source, ctx, input);
 
     if (isExitSignal(code)) {
       if (opts.exited) {
@@ -440,7 +449,7 @@ export class AstExecutor {
    * `execute`, with an `exit` still an exit: what `eval`, `source` and a trap
    * run goes through here, so that an `exit` in it ends the shell around it.
    */
-  protected async executeSource(source: string, ctx: ExecContextIf): Promise<number> {
+  protected async executeSource(source: string, ctx: ExecContextIf, input: ReadInput = {}): Promise<number> {
     // Without the host's job control the job builtins are not there at all —
     // not for `type` and `command` either. Done here rather than in the
     // constructor, since a host may set up `jobs` after making its executor.
@@ -472,7 +481,7 @@ export class AstExecutor {
     };
 
     try {
-      return await this.readAndRun(source, ctx, options);
+      return await this.readAndRun(source, ctx, options, input);
     } catch (err) {
       // Enhance BashSyntaxError with full source context
       if (err instanceof BashSyntaxError) {
@@ -490,7 +499,7 @@ export class AstExecutor {
    * double-quoted `${…}` is.
    */
   private parseState(ctx: ExecContextIf): string {
-    return JSON.stringify([ctx.getShellOption('posix'), ctx.getShellOption('expand_aliases') && ctx.getAliases()]);
+    return JSON.stringify([ctx.getShellOption('posix'), ctx.getShellOption('expand_aliases') && ctx.getAliases(), ctx.getShellOption('history')]);
   }
 
   /**
@@ -505,13 +514,41 @@ export class AstExecutor {
    * run, and nothing runs from the error's own line; those commands may change
    * how the rest parses, so it is parsed again after them.
    */
-  private async readAndRun(source: string, ctx: ExecContextIf, options: Parameters<typeof parse>[1]): Promise<number> {
+  private async readAndRun(source: string, ctx: ExecContextIf, options: Parameters<typeof parse>[1], input: ReadInput = {}): Promise<number> {
     const lines = source.split('\n');
     // The line to read from next, 0-based
     let from = 0;
     let code = 0;
 
     while (from < lines.length) {
+      // The shell's own input, with `set -o history`: read a line at a time,
+      // each expanded and kept as it is read, and run once a command is complete
+      if (input.history && ctx.getShellOption('history') && ctx.getHistory) {
+        // The newline at the end of the text ends its last line rather than starting one
+        if (from === lines.length - 1 && lines[from] === '') break;
+
+        const to = await this.readCommandLines(lines, from, ctx, options, input.echo ?? false);
+        const text = lines.map((line, i) => i < from ? ' '.repeat(line.length) : line).slice(0, to).join('\n');
+        const ast = await parse(text, { ...options, posix: ctx.getShellOption('posix') }) as AstNodeScript;
+        const echoed = this.echoedScript;
+
+        // Echoed as read already
+        this.echoedScript = ast;
+
+        try {
+          code = await this.executeScript(ast, ctx, { state: this.parseState(ctx) });
+        } finally {
+          this.echoedScript = echoed;
+        }
+
+        if (isExitSignal(code) || isReturnSignal(code)) {
+          return code;
+        }
+
+        from = to;
+        continue;
+      }
+
       const text = lines.map((line, i) => i < from ? ' '.repeat(line.length) : line).join('\n');
       const reparse: { state: string; resume?: number } = { state: this.parseState(ctx) };
 
@@ -598,6 +635,131 @@ export class AstExecutor {
     }
 
     return { end: start, first };
+  }
+
+  /**
+   * Read the lines of the next command from `lines[from]` on, as bash's
+   * shell_getc does with `set -o history`: each line history-expanded under
+   * `set -H` (and the expansion said on stderr), then kept in the history,
+   * lines of one command joined into one entry under cmdhist. Lines are read
+   * until what has been read parses as complete commands. The lines are
+   * replaced by what they expanded to; the index after the last is returned.
+   */
+  private async readCommandLines(lines: string[], from: number, ctx: ExecContextIf, options: Parameters<typeof parse>[1], echo: boolean): Promise<number> {
+    const history = ctx.getHistory!();
+    const settings = historySettings((name) => ctx.getParam(name));
+    const strict = { ...options, posix: ctx.getShellOption('posix'), unterminatedHereDocuments: 'error' as const };
+    const say = (text: string) => this.shell.pipeWrite(ctx.getStderr(), `${text}\n`).catch(() => {});
+    let text = '';
+    let to = from;
+
+    history.commandLineCount = 0;
+
+    while (to < lines.length) {
+      const state = scanLines(text);
+      let line = lines[to];
+
+      history.commandLineCount++;
+
+      if (line !== '' && ctx.getShellOption('histexpand') && !state.hereDocument && mayExpand(line, settings)) {
+        // A later line of a command refers to the entries before the command's own
+        const length = history.length > 0 && ctx.getShellOption('cmdhist') && history.firstLineSaved && history.commandLineCount > 1 ? history.length - 1 : history.length;
+        const result = historyExpand(line, history, {
+          settings,
+          quoting: state.delimiter === "'" || state.delimiter === '"' ? state.delimiter : undefined,
+          posix: ctx.getShellOption('posix'),
+          extglob: ctx.getShellOption('extglob'),
+          length,
+        });
+
+        if (result.status < 0) {
+          await this.diagnose(ctx, result.text, this.sourceFrame.base + to + 1);
+          line = '';
+        } else if (result.status === 2) {
+          // `:p`: said and kept, not run
+          await say(result.text);
+          if (result.text !== '') this.keepLine(history, result.text, state, settings, ctx);
+          line = '';
+        } else if (result.status === 1) {
+          await say(result.text);
+          line = result.text;
+        }
+      }
+
+      if (echo || ctx.getShellOption('verbose')) await say(line);
+
+      if (state.hereDocument) {
+        this.keepLine(history, `${line}\n`, state, settings, ctx);
+      } else if (line !== '') {
+        this.keepLine(history, line, state, settings, ctx);
+      } else if (history.commandLineCount > 1 && (state.delimiter !== '' || delimitingChars(line, state, history.commandLineCount)[0] === ';')) {
+        // A blank line inside a command: kept where it separates
+        this.keepLine(history, line, state, settings, ctx);
+      }
+
+      lines[to] = line;
+      text += `${line}\n`;
+      to++;
+
+      if (!await this.unfinished(text, strict)) break;
+    }
+
+    return to;
+  }
+
+  /**
+   * Whether `source` stops inside a command — an open quote, `if` or
+   * here-document — so that a prompt should ask for another line (PS2)
+   * before running it. Read with the shell's aliases and POSIX mode.
+   */
+  public async isUnfinished(source: string, ctx: ExecContextIf): Promise<boolean> {
+    return await this.unfinished(source, {
+      insertLOC: true,
+      unterminatedHereDocuments: 'error',
+      resolveAlias: async (name: string) => ctx.getShellOption('expand_aliases') ? ctx.getAlias(name) : undefined,
+      deferTildeExpansion: true,
+      posix: ctx.getShellOption('posix'),
+    });
+  }
+
+  /** Whether text ends inside a command: more lines are needed to make it whole. */
+  private async unfinished(text: string, options: Parameters<typeof parse>[1]): Promise<boolean> {
+    try {
+      await parse(text, options);
+      return false;
+    } catch (err) {
+      if (!(err instanceof BashSyntaxError)) throw err;
+
+      return /Unclosed|'EOF'|CONTINUE|end of/i.test(err.message);
+    }
+  }
+
+  /**
+   * maybe_add_history: a command's first line is kept if HISTCONTROL and
+   * HISTIGNORE let it be; its later lines go on the same entry if the first
+   * was kept — a comment line only inside a quote or here-document, since it
+   * would comment out what is joined after it.
+   */
+  private keepLine(history: History, line: string, state: LineState, settings: HistorySettings, ctx: ExecContextIf): void {
+    const comment = shellComment(line, state);
+    const literal = ctx.getShellOption('lithist');
+    const delimiter = ctx.getShellOption('cmdhist')
+      ? { chars: () => literal ? '\n' : delimitingChars(line, state, history.commandLineCount), quoted: state.delimiter !== '' }
+      : undefined;
+
+    history.lastLineAdded = false;
+
+    if (history.commandLineCount > 1) {
+      if (history.firstLineSaved && (state.hereDocument || literal || state.delimiter !== '' || comment !== 1)) {
+        history.addLine(line, delimiter);
+      }
+
+      history.lineComment = comment ? history.commandLineCount : -2;
+      return;
+    }
+
+    history.lineComment = comment ? history.commandLineCount : -2;
+    history.firstLineSaved = history.checkAdd(line, settings, false, delimiter);
   }
 
   /**
@@ -1481,7 +1643,7 @@ export class AstExecutor {
 
       skipRow = undefined;
 
-      await this.echoSource(command, ctx);
+      if (node !== this.echoedScript) await this.echoSource(command, ctx);
 
       // `set -n` reads the rest without running it. There is no turning it back
       // off from inside the script — bash cannot either, for the same reason.
@@ -1826,6 +1988,11 @@ export class AstExecutor {
           expandSubscript: (subscript, keyed) => this.arithmeticSubscript(subscript, keyed, ctx),
           arrayRefs,
           reportSyntaxError: (err, where, source) => this.reportSyntaxError(ctx, err, where, source),
+          readInput: (text, opts) =>
+            this.inSourceFrame(
+              { base: Number(ctx.getParam('LINENO') ?? 1) - 1, name: this.sourceFrame.name },
+              () => this.executeSource(text, ctx, { history: true, echo: opts?.echo }),
+            ),
         });
 
         code = result.code;

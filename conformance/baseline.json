@@ -697,15 +697,15 @@
       "reference": "pass"
     },
     "run-histexpand": {
-      "upstream": 0.332,
-      "pass": false,
-      "stdout": 0.441,
+      "upstream": 1,
+      "pass": true,
+      "stdout": 1,
       "reference": "pass"
     },
     "run-history": {
-      "upstream": 0.291,
+      "upstream": 0.965,
       "pass": false,
-      "stdout": 0.385,
+      "stdout": 0.962,
       "reference": "pass"
     },
     "run-ifs": {

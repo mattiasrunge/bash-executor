@@ -242,7 +242,13 @@ async function main(): Promise<number> {
 
     try {
       const code = getExitCode(
-        await executor.execute(source, ctx, { file: inv.command === undefined ? inv.file : undefined, command: inv.command !== undefined, line, exited }),
+        await executor.execute(source, ctx, {
+          file: inv.command === undefined ? inv.file : undefined,
+          command: inv.command !== undefined,
+          line,
+          exited,
+          history: inv.command === undefined,
+        }),
       );
 
       return { code, exited: exited.value };

@@ -57,6 +57,12 @@ export type BuiltinServices = {
    * for a sourced file.
    */
   reportSyntaxError: (err: BashSyntaxError, where: { eval: true } | { file: string }, source: string) => Promise<void>;
+  /**
+   * Run text as the shell's own input, a line at a time: kept in the history
+   * and history-expanded as bash does with what it reads, and with `echo`
+   * each line said on stderr as it is read — what `fc` runs once edited.
+   */
+  readInput?: (text: string, opts?: { echo?: boolean }) => Promise<number>;
 };
 
 /**

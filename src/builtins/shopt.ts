@@ -9,6 +9,7 @@
 
 import { DEFAULT_SHELL_OPTIONS, DEFAULT_SHOPT_OPTIONS, type ExecContextIf, type ShellIf } from '../types.ts';
 import type { BuiltinHandler, BuiltinResult } from './types.ts';
+import { setShellOption } from './history.ts';
 
 /**
  * The shopt builtin command.
@@ -23,7 +24,7 @@ import type { BuiltinHandler, BuiltinResult } from './types.ts';
 export const shoptBuiltin: BuiltinHandler = async (
   ctx: ExecContextIf,
   args: string[],
-  _shell: ShellIf,
+  shell: ShellIf,
 ): Promise<BuiltinResult> => {
   let mode: 's' | 'u' | undefined;
   let quiet = false;
@@ -69,7 +70,7 @@ export const shoptBuiltin: BuiltinHandler = async (
 
   if (mode && names.length > 0) {
     for (const name of names) {
-      ctx.setShellOption(name, mode === 's');
+      await setShellOption(ctx, shell, name, mode === 's');
     }
 
     return { code: 0 };

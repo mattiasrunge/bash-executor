@@ -9,6 +9,7 @@ import { functionText } from '../print-command.ts';
 import { quotedIfNeeded } from '../quote.ts';
 import type { BuiltinHandler, BuiltinResult } from './types.ts';
 import { compoundValue } from './variable-listing.ts';
+import { setShellOption } from './history.ts';
 
 /**
  * The set builtin command.
@@ -35,7 +36,7 @@ import { compoundValue } from './variable-listing.ts';
 export const setBuiltin: BuiltinHandler = async (
   ctx: ExecContextIf,
   args: string[],
-  _shell: ShellIf,
+  shell: ShellIf,
 ): Promise<BuiltinResult> => {
   // No arguments: display all variables
   if (args.length === 0) {
@@ -108,7 +109,7 @@ export const setBuiltin: BuiltinHandler = async (
         };
       }
 
-      ctx.setShellOption(optName, enable);
+      await setShellOption(ctx, shell, optName, enable);
       i++;
       continue;
     }
@@ -133,12 +134,12 @@ export const setBuiltin: BuiltinHandler = async (
             };
           }
 
-          ctx.setShellOption(optName, enable);
+          await setShellOption(ctx, shell, optName, enable);
           continue;
         }
 
         if (flag in SHELL_OPTION_FLAG_MAP) {
-          ctx.setShellOption(SHELL_OPTION_FLAG_MAP[flag], enable);
+          await setShellOption(ctx, shell, SHELL_OPTION_FLAG_MAP[flag], enable);
         } else {
           return {
             code: 2,

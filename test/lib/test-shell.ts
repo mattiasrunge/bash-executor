@@ -315,10 +315,15 @@ export class TestShell implements ShellIf {
     return this.executor.execute(script, this.ctx);
   }
 
+  /** Whether text stops inside a command, as a prompt asks. */
+  async isUnfinished(text: string): Promise<boolean> {
+    return await this.executor.isUnfinished(text, this.ctx);
+  }
+
   /**
    * Run a script and capture all output for assertions
    */
-  async runAndCapture(script: string, opts: { exited?: { value: boolean }; file?: string; command?: boolean } = {}): Promise<TestRunResult> {
+  async runAndCapture(script: string, opts: { exited?: { value: boolean }; file?: string; command?: boolean; history?: boolean } = {}): Promise<TestRunResult> {
     this.capturedStdout = [];
     this.capturedStderr = [];
 

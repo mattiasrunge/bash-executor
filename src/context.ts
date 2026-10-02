@@ -1,6 +1,7 @@
 import type { AstNodeCompoundList } from '@ein/bash-parser';
 import type { FunctionDefinition } from './print-command.ts';
 import { JobTable } from './jobs.ts';
+import { History } from './history.ts';
 import {
   type DeclareOptions,
   DEFAULT_SHELL_OPTIONS,
@@ -97,6 +98,7 @@ export class ExecContext implements ExecContextIf {
   private getoptsState?: GetoptsState;
   private umask = 0o022;
   private resourceLimits: Record<string, { soft: string; hard: string }> = {};
+  private history?: History;
   /** What `local -` saved in this function's scope */
   private savedOptions?: Record<string, boolean>;
   private dirStack: string[] = [];
@@ -177,6 +179,7 @@ export class ExecContext implements ExecContextIf {
     ctx.getoptsState = this.getGetoptsState();
     ctx.umask = this.getUmask();
     ctx.resourceLimits = { ...this.getResourceLimits() };
+    ctx.history = this.root().history?.copy();
 
     // A subshell does not run the shell's traps, but what the shell ignores it
     // ignores too, as in bash
@@ -817,6 +820,8 @@ export class ExecContext implements ExecContextIf {
 
     if (!found) return;
 
+    if (name === 'HISTSIZE') this.historySize(null);
+
     // A local unset in its own function stays local: assigning it again sets the
     // function's own, as in bash. One a calling function made goes, and what it
     // hid shows again, unless localvar_unset says otherwise
@@ -1066,7 +1071,7 @@ export class ExecContext implements ExecContextIf {
    * What assigning a variable does besides: a new OPTIND starts getopts over,
    * as bash's sv_optind does, a new PATH empties the table of hashed
    * commands, as its sv_path does, POSIXLY_CORRECT turns posix mode on while
-   * it is set, as sv_strict_posix does, and IGNOREEOF ignoreeof.
+   * it is set, as sv_strict_posix does, IGNOREEOF ignoreeof, and HISTSIZE how long the history is.
    */
   private assigningSpecial(values: Record<string, string | null>): void {
     if ('OPTIND' in values) this.setGetoptsState(undefined);
@@ -1074,6 +1079,15 @@ export class ExecContext implements ExecContextIf {
     // IGNOREEOF set is ignoreeof on, as sv_ignoreeof has it
     if ('IGNOREEOF' in values) this.root().options.ignoreeof = values.IGNOREEOF !== null;
     if ('PATH' in values) this.root().setLocalAssoc('BASH_CMDS', {});
+    if ('HISTSIZE' in values) this.historySize(values.HISTSIZE);
+  }
+
+  /** sv_histsize: HISTSIZE keeps the history to so many entries, unset or negative any number. */
+  private historySize(value: string | null): void {
+    const n = value && /^[ \t\n]*[-+]?\d+[ \t\n]*$/.test(value) ? Number(value.trim()) : undefined;
+
+    if (value === null || value === '' || (n !== undefined && n < 0)) this.getHistory().unstifle();
+    else if (n !== undefined) this.getHistory().stifle(n);
   }
 
   getUmask(): number {
@@ -1082,6 +1096,12 @@ export class ExecContext implements ExecContextIf {
 
   setUmask(mask: number): void {
     this.root().umask = mask & 0o777;
+  }
+
+  getHistory(): History {
+    const root = this.root();
+
+    return root.history ??= new History();
   }
 
   getResourceLimits(): Record<string, { soft: string; hard: string }> {

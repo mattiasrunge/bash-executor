@@ -52,6 +52,7 @@ export { bgBuiltin, disownBuiltin, fgBuiltin, JOB_BUILTINS, jobsBuiltin, killBui
 export { dotBuiltin, sourceBuiltin } from './source.ts';
 export { umaskBuiltin } from './umask.ts';
 export { ulimitBuiltin } from './ulimit.ts';
+export { fcBuiltin, historyBuiltin, loadHistory } from './history.ts';
 export { bracketBuiltin, testBuiltin } from './test.ts';
 export { colonBuiltin, falseBuiltin, trueBuiltin } from './trivial.ts';
 export { exportBuiltin, localBuiltin, unsetBuiltin } from './variables.ts';
@@ -85,6 +86,7 @@ import { bgBuiltin, disownBuiltin, fgBuiltin, jobsBuiltin, killBuiltin, waitBuil
 import { dotBuiltin, sourceBuiltin } from './source.ts';
 import { umaskBuiltin } from './umask.ts';
 import { ulimitBuiltin } from './ulimit.ts';
+import { fcBuiltin, historyBuiltin } from './history.ts';
 import { bracketBuiltin, testBuiltin } from './test.ts';
 import { colonBuiltin, falseBuiltin, trueBuiltin } from './trivial.ts';
 import type { BuiltinHandler, BuiltinRegistry } from './types.ts';
@@ -170,6 +172,10 @@ export function createBuiltinRegistry(): BuiltinRegistry {
   registry.set('dirs', dirsBuiltin);
   registry.set('pushd', pushdBuiltin);
   registry.set('popd', popdBuiltin);
+
+  // The command history
+  registry.set('history', historyBuiltin);
+  registry.set('fc', fcBuiltin);
 
   // Phase 4: Shell options
   registry.set('set', setBuiltin);

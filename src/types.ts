@@ -1,6 +1,7 @@
 import type { JobHostIf, JobTable } from './jobs.ts';
 import type { AstNodeCompoundList } from '@ein/bash-parser';
 import type { FunctionDefinition } from './print-command.ts';
+import type { History } from './history.ts';
 
 /**
  * Represents a function definition in the execution context.
@@ -812,6 +813,8 @@ export interface ExecContextIf {
   restoreLocalOptions?(): void;
 
   getResourceLimits?(): Record<string, { soft: string; hard: string }>;
+  /** The shell's command history; a subshell has a copy of it */
+  getHistory?(): History;
   setResourceLimit?(letter: string, limit: { soft: string; hard: string }): void;
 
   /**
