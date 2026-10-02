@@ -435,6 +435,9 @@ export class TestShell implements ShellIf {
 
     if (op === 'DIRECTORY') return await directory;
 
+    // Every virtual file and directory may be read and written
+    if (op === 'READABLE' || op === 'WRITABLE') return await (this.files.has(path) || directory || path === '.' || !path.includes('/'));
+
     return await (op === 'EXISTS' ? this.files.has(path) || directory : false);
   }
 

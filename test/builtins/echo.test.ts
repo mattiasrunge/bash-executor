@@ -77,11 +77,11 @@ Deno.test('echo builtin', async (t) => {
       assertEquals(result.stdout, 'hello\rworld\n');
     });
 
-    await t.step('\\c stops output', async () => {
+    await t.step('\\c stops output, the newline too', async () => {
       const ctx = new ExecContext();
       const result = await echoBuiltin(ctx, ['-e', 'hello\\cworld'], mockShell, noopExecute);
       assertEquals(result.code, 0);
-      assertEquals(result.stdout, 'hello\n');
+      assertEquals(result.stdout, 'hello');
     });
 
     await t.step('interprets \\0nnn as octal', async () => {
@@ -131,12 +131,18 @@ Deno.test('echo builtin', async (t) => {
     });
   });
 
-  await t.step('-- ends option parsing', async (t) => {
-    await t.step('treats -n as argument after --', async () => {
+  await t.step('-- is no option to echo: bash prints it', async (t) => {
+    await t.step('-- -n prints both', async () => {
       const ctx = new ExecContext();
       const result = await echoBuiltin(ctx, ['--', '-n'], mockShell, noopExecute);
       assertEquals(result.code, 0);
-      assertEquals(result.stdout, '-n\n');
+      assertEquals(result.stdout, '-- -n\n');
+    });
+
+    await t.step('options mix in one word, -neE', async () => {
+      const ctx = new ExecContext();
+      const result = await echoBuiltin(ctx, ['-neE', 'a\\tb'], mockShell, noopExecute);
+      assertEquals(result.stdout, 'a\\tb');
     });
   });
 

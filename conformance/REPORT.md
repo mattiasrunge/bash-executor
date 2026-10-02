@@ -84,12 +84,9 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | --- | --- |
 | foo: command not found | alias, heredoc |
 | syntax error near unexpected token 'in' | alias, comsub |
-| [: -eq: unary operator expected | execscript, glob-test |
 | history: command not found | histexpand, history |
 | !!: command not found | histexpand, history |
 | !e: command not found | histexpand, history |
-| ${#:-foo}: bad substitution | more-exp, new-exp |
-| ((: == N : syntax error: operand expected (error token is "== N ") | new-exp, test |
 | [N] N | jobs, trap |
 | /dev/tty: No such device or address (os error N): open '/dev/tty' | read, test |
 | quux: command not found | alias |
@@ -115,13 +112,16 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | : bad array subscript | assoc |
 | source: /: is a directory | execscript |
 | bash-notthere: command not found | execscript |
-| /tmp/notwrite: Permission denied | execscript |
-| readlink: command not found | execscript |
-| dirname: command not found | execscript |
-| exec: deno: not found | execscript |
 | exec: command not found | execscript |
 | bar: command not found | heredoc |
 | !?ch?: command not found | histexpand |
+| !-N: command not found | histexpand |
+| ^N^N: command not found | histexpand |
+| !N: command not found | histexpand |
+| !!:s/foo/bar/: No such file or directory | histexpand |
+| !-N:gs/foo/bar/: No such file or directory | histexpand |
+| !!:gs/bar/x: No such file or directory | histexpand |
+| /: Is a directory | histexpand |
 
 ## Per test
 
@@ -138,7 +138,7 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | assoc | pass | no | 100% | 100% | 243c243 ⏎ &lt; ./assoc11.sub: line 34: : bad array subscript ⏎ --- |
 | attr | pass | yes | 100% | 100% |  |
 | braces | pass | no | 99% | 99% | 23c23 ⏎ &lt; bazx bazy ⏎ --- |
-| builtins | pass | no | 96% | 96% | 1,2c1 ⏎ &lt; core file size              (blocks, -c) 0 ⏎ &lt; 0 |
+| builtins | pass | no | 96% | 97% | 1,2c1 ⏎ &lt; core file size              (blocks, -c) 0 ⏎ &lt; 0 |
 | case | pass | yes | 100% | 100% |  |
 | casemod | pass | yes | 100% | 100% |  |
 | complete | pass | no | 0% | 0% | 1,37c1,63 ⏎ &lt; ./complete.tests: line 19: complete: command not found ⏎ &lt; ./complete.tests: line 22: complete: command not found |
@@ -153,8 +153,8 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | dirstack | pass | yes | 100% | 100% |  |
 | dollars | pass | no | 99% | 99% | 393,400c393,395 ⏎ &lt; argv[1] = &lt;^?&gt; ⏎ &lt; argv[1] = &lt;^?&gt; |
 | dynvar | pass | yes | 100% | 100% |  |
-| errors | pass | no | 98% | 100% | 118c118 ⏎ &lt; ./errors4.sub: line 29: break: x: numeric argument required ⏎ --- |
-| execscript | env | no | 85% | 91% | 1d0 ⏎ &lt; ./execscript: line 4: [: -eq: unary operator expected ⏎ 11c10 |
+| errors | pass | no | 100% | 100% | 118c118 ⏎ &lt; ./errors4.sub: line 29: break: x: numeric argument required ⏎ --- |
+| execscript | env | no | 91% | 95% | 10c10 ⏎ &lt; notthere: notthere: No such file or directory ⏎ --- |
 | exp-tests | pass | no | 98% | 98% | 41c41 ⏎ &lt; argv[1] = &lt;"Hello world!"&gt; ⏎ --- |
 | exportfunc | pass | no | 86% | 93% | 4c4 ⏎ &lt; ./exportfunc.tests: eval: line 43: syntax error: unexpected end of file ⏎ --- |
 | extglob | pass | no | 89% | 91% | 52c52 ⏎ &lt; no ⏎ --- |
@@ -177,9 +177,9 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | jobs | env | timeout | 38% | 48% | timeout |
 | lastpipe | pass | yes | 100% | 100% |  |
 | mapfile | pass | no | 99% | 99% | 154c154 ⏎ &lt; declare -a array=([0]=$'a�b�c�\n') ⏎ --- |
-| more-exp | pass | no | 93% | 97% | 168,171c168,175 ⏎ &lt; ./more-exp.tests: line 372: ${#:foo}: bad substitution ⏎ &lt; ./more-exp.tests: line 374: ${#:-foo}: bad substitution |
+| more-exp | pass | no | 99% | 99% | 193c193 ⏎ &lt; ./more-exp.tests: line 449: %: syntax error: operand expected (error token is "%") ⏎ --- |
 | nameref | pass | no | 89% | 92% | 80d79 ⏎ &lt; ./nameref4.sub: line 181: unset: x: not an array variable ⏎ 157a157 |
-| new-exp | pass | no | 93% | 95% | 1d0 ⏎ &lt; ./new-exp.tests: line 14: ((: == 0 : syntax error: operand expected (error token is "== 0 ") ⏎ 7,8c6,7 |
+| new-exp | pass | no | 97% | 98% | 6,7c6,7 ⏎ &lt; ./new-exp.tests: line 41: }: syntax error: operand expected (error token is "}") ⏎ &lt; oops |
 | nquote | pass | no | 78% | 83% | 7,10c7,10 ⏎ &lt; argv[1] = &lt;$hello,&gt; ⏎ &lt; argv[2] = &lt;$world&gt; |
 | nquote1 | pass | yes | 100% | 100% |  |
 | nquote2 | pass | yes | 100% | 100% |  |
@@ -205,10 +205,10 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | set-x | pass | yes | 100% | 100% |  |
 | shopt | pass | no | 99% | 99% | 306a307,310 ⏎ &gt; 28c28 ⏎ &gt; &lt; globskipdots   	off |
 | strip | pass | yes | 100% | 100% |  |
-| test | env | timeout | 97% | 98% | timeout |
+| test | env | timeout | 98% | 98% | timeout |
 | tilde | pass | yes | 100% | 100% |  |
 | tilde2 | pass | yes | 100% | 100% |  |
-| trap | pass | no | 90% | 93% | 18a19 ⏎ &gt; func[29] funcdebug ⏎ 30,33d30 |
+| trap | pass | no | 92% | 94% | 18a19 ⏎ &gt; func[29] funcdebug ⏎ 30,33d30 |
 | type | pass | no | 98% | 98% | 43,44c43,44 ⏎ &lt; /tmp/bash-ts ⏎ &lt; bash-ts is hashed (/tmp/bash-ts) |
-| varenv | pass | no | 78% | 81% | 2,5c2,3 ⏎ &lt; ./varenv.tests: line 42: c=7: command not found ⏎ &lt; 3 4 3 4 5 |
+| varenv | pass | no | 83% | 85% | 2,5c2,3 ⏎ &lt; ./varenv.tests: line 42: c=7: command not found ⏎ &lt; 3 4 3 4 5 |
 | vredir | env | no | 93% | 95% | 14,17d13 ⏎ &lt; bad foo 1 ⏎ &lt; bad foo 2 |

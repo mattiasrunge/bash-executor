@@ -7,10 +7,11 @@
  */
 
 import { hashedCommand } from '../command-hash.ts';
+import { getExitCode, isExitSignal } from './exit.ts';
 import { functionText } from '../print-command.ts';
 import { singleQuoted } from '../quote.ts';
 import type { ExecContextIf, ShellIf } from '../types.ts';
-import type { BuiltinHandler, BuiltinRegistry, BuiltinResult } from './types.ts';
+import type { BuiltinHandler, BuiltinRegistry, BuiltinResult, BuiltinServices } from './types.ts';
 
 /** bash's reserved words. */
 const KEYWORDS = new Set(
@@ -256,6 +257,7 @@ export function createCommandBuiltin(registry: BuiltinRegistry): BuiltinHandler 
     args: string[],
     shell: ShellIf,
     execute: (script: string) => Promise<number>,
+    services?: BuiltinServices,
   ): Promise<BuiltinResult> => {
     let stdPath = false;
     let verbose: 'short' | 'reusable' | undefined;
@@ -303,7 +305,13 @@ export function createCommandBuiltin(registry: BuiltinRegistry): BuiltinHandler 
     // First check if it's a builtin
     const builtin = registry.get(cmdName);
     if (builtin) {
-      return builtin(ctx, cmdArgs, shell, execute);
+      const result = await builtin(ctx, cmdArgs, shell, execute, services);
+
+      // `command` keeps a special builtin's error from ending a POSIX shell:
+      // `command return` outside a function fails, and the script goes on
+      if (cmdName === 'return' && isExitSignal(result.code)) return { ...result, code: getExitCode(result.code) };
+
+      return result;
     }
 
     // Execute as external command, from the standard PATH with -p

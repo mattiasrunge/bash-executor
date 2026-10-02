@@ -224,8 +224,13 @@ async function main(): Promise<number> {
     OPTERR: '1',
     // Set, as bash sets it at startup, whatever the environment says: `${IFS+x}` is x
     IFS: ' \t\n',
+    UID: String(Deno.uid() ?? 0),
+    EUID: String(Deno.uid() ?? 0),
   });
   ctx.setArray('BASH_VERSINFO', ['5', '2', '21', '1', 'release', 'x86_64-pc-linux-gnu']);
+
+  // bash's own, which no script assigns
+  for (const name of ['UID', 'EUID', 'PPID']) ctx.setReadonlyVar(name, true);
 
   for (const [name, on] of Object.entries(inv.options)) {
     ctx.setShellOption(name, on);

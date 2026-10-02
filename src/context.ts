@@ -19,7 +19,10 @@ import {
  * Execution context for shell commands, managing environment variables, I/O streams, and function definitions.
  */
 /** bash's dynamic variables: made each time they are read. */
-const DYNAMIC_PARAMS = ['SECONDS', 'EPOCHSECONDS', 'EPOCHREALTIME', 'RANDOM', 'SRANDOM', 'BASH_ARGV0', 'BASHPID'];
+const DYNAMIC_PARAMS = ['SECONDS', 'EPOCHSECONDS', 'EPOCHREALTIME', 'RANDOM', 'SRANDOM', 'BASH_ARGV0', 'BASHPID', 'SHELLOPTS', 'BASHOPTS', 'BASH_SUBSHELL'];
+
+/** The dynamic variables bash makes readonly: the lists of options that are on */
+const OPTION_LISTS = new Set(['SHELLOPTS', 'BASHOPTS']);
 
 /** The next subshell's BASHPID: no process of its own, so a number above Linux's pids */
 let nextSubshellPid = 2 ** 22 + 100_000;
@@ -87,11 +90,15 @@ export class ExecContext implements ExecContextIf {
   private vars = new Map<string, Variable>();
   private fns: Record<string, FunctionDef> = {};
   private traps: Record<string, string> = {};
+  /** The shell's traps, as a subshell's `trap` lists them until it sets one of its own */
+  private inheritedTraps?: Record<string, string>;
   // The shell's own, in its root context alone: a spawned one asks the root
   private jobTable!: JobTable;
   private getoptsState?: GetoptsState;
   private umask = 0o022;
   private resourceLimits: Record<string, { soft: string; hard: string }> = {};
+  /** What `local -` saved in this function's scope */
+  private savedOptions?: Record<string, boolean>;
   private dirStack: string[] = [];
   private fds: Record<string, string> = {};
   private options!: Record<string, boolean>;
@@ -138,7 +145,7 @@ export class ExecContext implements ExecContextIf {
     return new ExecContext(this);
   }
 
-  subContext(subshell = false): ExecContextIf {
+  subContext(subshell = false, nested = subshell): ExecContextIf {
     const ctx = new ExecContext();
 
     ctx.setCwd(this.getCwd());
@@ -179,6 +186,9 @@ export class ExecContext implements ExecContextIf {
       }
     }
 
+    // …and `trap` in it lists the shell's, until it sets one of its own
+    ctx.inheritedTraps = this.getListedTraps();
+
     // Copy directory stack
     for (const dir of this.getDirStack().reverse()) {
       ctx.pushDirStack(dir);
@@ -189,6 +199,8 @@ export class ExecContext implements ExecContextIf {
 
     // A process of its own, as far as $BASHPID tells, or still the shell's
     ctx.subshellPid = subshell ? String(nextSubshellPid++) : this.subshellPid;
+    // One level deeper in BASH_SUBSHELL, unless a simple command in a pipeline, which bash forks without
+    ctx.subshellLevel = this.root().subshellLevel + (nested ? 1 : 0);
 
     // A subshell inherits the shell's options and cannot write them back
     ctx.options = { ...this.getShellOptions() };
@@ -287,7 +299,28 @@ export class ExecContext implements ExecContextIf {
       return;
     }
 
+    const before = this.options[name];
+
     this.options[name] = value;
+
+    // `set -o ignoreeof` is IGNOREEOF=10, `set +o ignoreeof` no IGNOREEOF, as in bash
+    if (name === 'ignoreeof' && before !== value) this.setParams({ IGNOREEOF: value ? '10' : null });
+  }
+
+  /** `local -`: the `set` options as they are, for the function to put back when it returns. */
+  saveLocalOptions(): void {
+    this.savedOptions ??= Object.fromEntries(Object.keys(DEFAULT_SHELL_OPTIONS).map((name) => [name, this.getShellOption(name)]));
+  }
+
+  /** The function returns: the options `local -` saved come back. */
+  restoreLocalOptions(): void {
+    if (!this.savedOptions) return;
+
+    for (const [name, value] of Object.entries(this.savedOptions)) {
+      if (this.getShellOption(name) !== value) this.setShellOption(name, value);
+    }
+
+    this.savedOptions = undefined;
   }
 
   getErrexitSuppressed(): boolean {
@@ -310,6 +343,8 @@ export class ExecContext implements ExecContextIf {
   private lastRandom = -1;
   /** A subshell's own BASHPID; the shell's is `$$` */
   private subshellPid?: string;
+  /** How many subshells deep this shell is: BASH_SUBSHELL */
+  private subshellLevel = 0;
 
   private dynamicValue(name: string): string {
     const now = Date.now();
@@ -337,6 +372,13 @@ export class ExecContext implements ExecContextIf {
         return String(crypto.getRandomValues(new Uint32Array(1))[0]);
       case 'BASHPID':
         return this.subshellPid ?? this.special['$'] ?? '';
+      case 'BASH_SUBSHELL':
+        return String(this.subshellLevel);
+      case 'SHELLOPTS':
+        // The `set -o` options that are on, in order, colon-separated; BASHOPTS shopt's
+        return Object.keys(DEFAULT_SHELL_OPTIONS).filter((option) => this.getShellOption(option)).sort().join(':');
+      case 'BASHOPTS':
+        return Object.keys(DEFAULT_SHOPT_OPTIONS).filter((option) => this.getShellOption(option)).sort().join(':');
       default:
         return this.special['0'] ?? '';
     }
@@ -672,7 +714,20 @@ export class ExecContext implements ExecContextIf {
     }
   }
 
+  /** SHELLOPTS or BASHOPTS while still bash's own: readonly, their value the options on now. */
+  private optionList(name: string): VariableInfo | undefined {
+    const root = this.root();
+
+    if (!OPTION_LISTS.has(name) || !root.dynamic?.has(name)) return undefined;
+
+    return { kind: 'scalar', value: root.dynamicValue(name), attributes: 'r', local: false };
+  }
+
   getVariable(name: string): VariableInfo | undefined {
+    const list = this.optionList(name);
+
+    if (list) return list;
+
     const found = this.lookup(name);
 
     return found ? variableInfo(found.variable, found.scope !== this.root()) : undefined;
@@ -684,6 +739,12 @@ export class ExecContext implements ExecContextIf {
 
     for (const scope of this.chain()) {
       for (const [name, variable] of scope.vars) infos[name] = variableInfo(variable, scope !== root);
+    }
+
+    for (const name of OPTION_LISTS) {
+      const list = this.optionList(name);
+
+      if (list) infos[name] = list;
     }
 
     return infos;
@@ -756,8 +817,12 @@ export class ExecContext implements ExecContextIf {
 
     if (!found) return;
 
-    if (found.scope.parent) {
-      // A local stays local once unset: assigning it again sets the function's own, as in bash
+    // A local unset in its own function stays local: assigning it again sets the
+    // function's own, as in bash. One a calling function made goes, and what it
+    // hid shows again, unless localvar_unset says otherwise
+    const own = found.scope === this.getFunctionScope() || this.getShellOption('localvar_unset');
+
+    if (found.scope.parent && own) {
       found.scope.vars.set(name, newVariable('scalar'));
     } else {
       found.scope.vars.delete(name);
@@ -1000,12 +1065,14 @@ export class ExecContext implements ExecContextIf {
   /**
    * What assigning a variable does besides: a new OPTIND starts getopts over,
    * as bash's sv_optind does, a new PATH empties the table of hashed
-   * commands, as its sv_path does, and POSIXLY_CORRECT turns posix mode on
-   * while it is set, as sv_strict_posix does.
+   * commands, as its sv_path does, POSIXLY_CORRECT turns posix mode on while
+   * it is set, as sv_strict_posix does, and IGNOREEOF ignoreeof.
    */
   private assigningSpecial(values: Record<string, string | null>): void {
     if ('OPTIND' in values) this.setGetoptsState(undefined);
     if ('POSIXLY_CORRECT' in values) this.setShellOption('posix', values.POSIXLY_CORRECT !== null);
+    // IGNOREEOF set is ignoreeof on, as sv_ignoreeof has it
+    if ('IGNOREEOF' in values) this.root().options.ignoreeof = values.IGNOREEOF !== null;
     if ('PATH' in values) this.root().setLocalAssoc('BASH_CMDS', {});
   }
 
@@ -1040,7 +1107,12 @@ export class ExecContext implements ExecContextIf {
   setTrap(name: string, action: string | null): void {
     if (this.parent) {
       this.parent.setTrap(name, action);
-    } else if (action === null) {
+      return;
+    }
+
+    this.inheritedTraps = undefined;
+
+    if (action === null) {
       delete this.traps[name];
     } else {
       this.traps[name] = action;
@@ -1049,6 +1121,12 @@ export class ExecContext implements ExecContextIf {
 
   getTraps(): Record<string, string> {
     return this.parent ? this.parent.getTraps() : { ...this.traps };
+  }
+
+  getListedTraps(): Record<string, string> {
+    const root = this.root();
+
+    return root.inheritedTraps ? { ...root.inheritedTraps } : root.getTraps();
   }
 
   getAlias(name: string): string | undefined {
@@ -1063,6 +1141,8 @@ export class ExecContext implements ExecContextIf {
 
   isReadonlyVar(name: string): boolean {
     name = this.ref(name);
+
+    if (this.optionList(name)) return true;
 
     return this.lookup(name)?.variable.attrs.has('r') ?? false;
   }

@@ -108,7 +108,7 @@ export const trapBuiltin: BuiltinHandler = async (
   const operands = args.slice(i);
 
   if (operands.length === 0) {
-    return { code: 0, stdout: listing(ctx.getTraps()) };
+    return { code: 0, stdout: listing(ctx.getListedTraps?.() ?? ctx.getTraps()) };
   }
 
   let stderr = '';
@@ -127,7 +127,7 @@ export const trapBuiltin: BuiltinHandler = async (
   if (print) {
     const names = valid(operands);
 
-    return { code: stderr ? 1 : 0, stdout: listing(ctx.getTraps(), names), stderr: stderr || undefined };
+    return { code: stderr ? 1 : 0, stdout: listing(ctx.getListedTraps?.() ?? ctx.getTraps(), names), stderr: stderr || undefined };
   }
 
   // `trap - SIG…` and `trap SIG` reset; so does a first operand that is a

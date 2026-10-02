@@ -6,8 +6,9 @@
 # exported function is one, BASH_FUNC_name%%. -p keeps bash from defining those
 # functions itself; it hands them on as they are.
 
-# Through a symlink, as execscript's /tmp/bash, it is still itself
-SELF=$(readlink -f "$0")
+# Through a symlink, as execscript's /tmp/bash, it is still itself. A script
+# may have emptied PATH (exec7.sub), so nothing here runs a command by name
+SELF=$(/usr/bin/readlink -f "$0")
 # The name it was run as: bash run as sh starts in posix mode
 BASH_TS_INVOKED=$0
 export BASH_TS_INVOKED
@@ -23,7 +24,7 @@ case "$SELF" in
     ;;
 esac
 
-HERE=$(dirname "$SELF")
+HERE=${SELF%/*}
 BASH_TS_SELF="${HERE}/bash-ts"
 export BASH_TS_SELF
 if [ -x "${HERE}/.cache/bash-ts-bin" ]; then

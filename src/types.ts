@@ -498,9 +498,11 @@ export interface ExecContextIf {
    * @param subshell - A subshell as bash has one, `( )`, `$( )`, a pipeline's
    *                   stage: it gets a `$BASHPID` of its own. Without it the
    *                   context is only kept apart, and is still the same shell.
+   * @param nested - One level deeper in `$BASH_SUBSHELL`; the default is
+   *                 `subshell`, and a simple command in a pipeline is not
    * @returns {ExecContextIf} The new execution context.
    */
-  subContext(subshell?: boolean): ExecContextIf;
+  subContext(subshell?: boolean, nested?: boolean): ExecContextIf;
 
   /** Gets the cancellation signal inherited by work in this context. */
   getAbortSignal(): AbortSignal | undefined;
@@ -773,6 +775,12 @@ export interface ExecContextIf {
 
   getTraps(): Record<string, string>;
 
+  /**
+   * What `trap` lists: a subshell's own traps, or until it sets one, the
+   * shell's it was made from, as bash shows them there though they do not run.
+   */
+  getListedTraps?(): Record<string, string>;
+
   /** The shell's job table: a subshell has one of its own, empty. */
   getJobTable(): JobTable;
 
@@ -798,6 +806,11 @@ export interface ExecContextIf {
    * the host to apply to what it starts, as the umask is; a subshell gets a
    * copy. A letter never set is not there.
    */
+  /** `local -`: save the `set` options in this function's scope, to come back when it returns. */
+  saveLocalOptions?(): void;
+  /** Put back what `local -` saved, as the function returns. */
+  restoreLocalOptions?(): void;
+
   getResourceLimits?(): Record<string, { soft: string; hard: string }>;
   setResourceLimit?(letter: string, limit: { soft: string; hard: string }): void;
 

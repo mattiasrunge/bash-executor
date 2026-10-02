@@ -5,7 +5,8 @@ import type { BuiltinHandler } from './types.ts';
  * Interpret escape sequences in a string.
  * Supports: \n, \t, \r, \\, \a, \b, \f, \v, \0nnn (octal), \xHH (hex)
  */
-function interpretEscapes(str: string): string {
+/** The text with its escapes made; `stopped` when a `\c` ended it there. */
+function interpretEscapes(str: string): { text: string; stopped: boolean } {
   let result = '';
   let i = 0;
 
@@ -46,8 +47,8 @@ function interpretEscapes(str: string): string {
           i += 2;
           break;
         case 'c':
-          // \c stops output
-          return decodeEscapedBytes(result);
+          // \c stops output, the newline included
+          return { text: decodeEscapedBytes(result), stopped: true };
         case '0': {
           // Octal: \0nnn (up to 3 octal digits)
           let octal = '';
@@ -93,7 +94,7 @@ function interpretEscapes(str: string): string {
     }
   }
 
-  return decodeEscapedBytes(result);
+  return { text: decodeEscapedBytes(result), stopped: false };
 }
 
 /**
@@ -117,49 +118,29 @@ function interpretEscapes(str: string): string {
  *   \0nnn octal value (up to 3 digits)
  *   \xHH  hex value (up to 2 digits)
  */
-export const echoBuiltin: BuiltinHandler = async (_ctx, args) => {
+export const echoBuiltin: BuiltinHandler = async (ctx, args) => {
   let noNewline = false;
-  let interpretEscapesFlag = false;
+  // `shopt -s xpg_echo` makes -e the default
+  let interpretEscapesFlag = ctx.getShellOption('xpg_echo');
   let argStart = 0;
 
-  // Parse options
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
-    if (arg === '-n') {
-      noNewline = true;
-      argStart = i + 1;
-    } else if (arg === '-e') {
-      interpretEscapesFlag = true;
-      argStart = i + 1;
-    } else if (arg === '-E') {
-      interpretEscapesFlag = false;
-      argStart = i + 1;
-    } else if (arg === '-ne' || arg === '-en') {
-      noNewline = true;
-      interpretEscapesFlag = true;
-      argStart = i + 1;
-    } else if (arg === '-nE' || arg === '-En') {
-      noNewline = true;
-      interpretEscapesFlag = false;
-      argStart = i + 1;
-    } else if (arg === '--') {
-      argStart = i + 1;
-      break;
-    } else if (arg.startsWith('-')) {
-      // Unknown option, treat as regular argument
-      break;
-    } else {
-      break;
+  // Options are words of n, e and E only, in any mix: `-neE`. Anything else,
+  // `--` too, is the first word to print, as bash's echo has it
+  for (; argStart < args.length && /^-[neE]+$/.test(args[argStart]); argStart++) {
+    for (const letter of args[argStart].slice(1)) {
+      if (letter === 'n') noNewline = true;
+      else interpretEscapesFlag = letter === 'e';
     }
   }
 
   let output = args.slice(argStart).join(' ');
+  let stopped = false;
 
   if (interpretEscapesFlag) {
-    output = interpretEscapes(output);
+    ({ text: output, stopped } = interpretEscapes(output));
   }
 
-  if (!noNewline) {
+  if (!noNewline && !stopped) {
     output += '\n';
   }
 

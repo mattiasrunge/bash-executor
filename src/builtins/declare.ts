@@ -282,6 +282,14 @@ class Declaration {
     const own = local ? target.getOwnVariables()[name] : undefined;
     let info: VariableInfo | undefined = local ? own : target.getVariable(name);
 
+    // No local can stand in for a readonly variable, assigned or not; a list
+    // is refused as its assignment too, first
+    if (local && !own && target.getVariable(name)?.attributes.includes('r')) {
+      if (compound) this.warn(`${name}: readonly variable`);
+      this.error(`${this.command}: ${name}: readonly variable`, assigning);
+      return;
+    }
+
     // A nameref that refers to nothing yet is given what it refers to: that has to be a name
     if (assigning && info?.attributes.includes('n') && !info.value && !/^[A-Za-z_][A-Za-z0-9_]*(\[.*\])?$/s.test(value ?? '')) {
       this.error(`${this.command}: \`${value ?? ''}': not a valid identifier`, true);
@@ -606,7 +614,11 @@ export async function declareCommand(command: Command, ctx: ExecContextIf, args:
   if (opts.print && command !== 'export' && command !== 'readonly') {
     for (const name of names) declaration.showName(name);
   } else {
-    for (const name of names) await declaration.declare(name);
+    for (const name of names) {
+      // `local -`: the shell's options are the function's own until it returns
+      if (command === 'local' && name === '-') fnScope!.saveLocalOptions?.();
+      else await declaration.declare(name);
+    }
   }
 
   return declaration.result();
