@@ -262,6 +262,9 @@ export class ReadonlyVariableError extends CommandAbortError {
  * the one command it was for, which does not run, with status 1.
  */
 export class RedirectionError extends BashExecutorError {
+  /** Where stderr pointed when the redirection was refused, the ones before it applied: `2>&1 >&7` says it into the pipe */
+  stderr?: string;
+
   constructor(message: string, code = 'E_REDIRECTION') {
     super(message, { code });
     this.name = 'RedirectionError';

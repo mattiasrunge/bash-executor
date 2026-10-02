@@ -268,7 +268,7 @@ export const readBuiltin: BuiltinHandler = async (
   // A descriptor the command or the shell opened is the context's to name; one `exec` opened, the host's
   const fd = options.fd ? (ctx.getFd(options.fd) ?? options.fd) : ctx.getStdin();
 
-  if (options.fd && ctx.getFd(options.fd) === undefined && !shell.isPipe(options.fd)) {
+  if (options.fd && ctx.getFd(options.fd) === undefined && (ctx.isFdHidden?.(options.fd) || !shell.isPipe(options.fd))) {
     return { code: 1, stderr: `read: ${options.fd}: invalid file descriptor: Bad file descriptor\n` };
   }
 

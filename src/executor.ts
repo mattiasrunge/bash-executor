@@ -1042,6 +1042,22 @@ export class AstExecutor {
     subs?: ProcessSubstitutions,
     opts: { exec?: boolean } = {},
   ): Promise<string[]> {
+    try {
+      return await this.applyEachRedirection(ctx, redirects, subs, opts);
+    } catch (err) {
+      // The complaint goes where stderr points by then, as bash's does
+      if (err instanceof RedirectionError && err.stderr === undefined) err.stderr = ctx.getStderr();
+
+      throw err;
+    }
+  }
+
+  private async applyEachRedirection(
+    ctx: ExecContextIf,
+    redirects?: AstNodeRedirect[],
+    subs?: ProcessSubstitutions,
+    opts: { exec?: boolean } = {},
+  ): Promise<string[]> {
     const temporary: string[] = [];
 
     for (let r of (redirects || [])) {
@@ -1131,6 +1147,13 @@ export class AstExecutor {
       } else if (r.op.text === '>>') {
         await this.assertOpenable(ctx, target, 'write');
         this.redirectOutput(ctx, fd, target, true, local);
+      } else if (r.op.text === '&>' || r.op.text === '&>>') {
+        // `cmd &> log`: stdout to the file and stderr where stdout goes, `> log 2>&1`
+        if (r.op.text === '&>') await this.assertClobberable(ctx, target);
+
+        await this.assertOpenable(ctx, target, 'write');
+        this.redirectOutput(ctx, '1', target, r.op.text === '&>>', local);
+        ctx.redirectFd('2', ctx.getFd('1')!, local);
       } else if (r.op.text === '>&' || r.op.text === '<&') {
         const sourceFd = fd || (r.op.text === '>&' ? '1' : '0');
 
@@ -1156,6 +1179,12 @@ export class AstExecutor {
 
         if (/^\d+$/.test(target)) {
           // Duplicate: the source becomes whatever the target is now
+          // One never opened, or one the shell moved away though the host still has it, is no descriptor
+          if (ctx.getFd(target) === undefined && (ctx.isFdHidden?.(target) || !this.shell.isPipe(target))) {
+            // Named as written, `$a: Bad file descriptor`, as bash names it
+            throw new RedirectionError(`${r.file?.text ?? target}: Bad file descriptor`);
+          }
+
           ctx.redirectFd(sourceFd, ctx.getFd(target) ?? target, local);
         } else if (r.op.text === '<&') {
           ctx.redirectStdin(target);
@@ -1251,8 +1280,19 @@ export class AstExecutor {
   private async moveDescriptor(ctx: ExecContextIf, fd: string, from: string, local = false): Promise<void> {
     const target = ctx.getFd(from);
 
+    // One `exec 5<file` opened is the host's, under its number: fd takes that
+    // handle, and the shell no longer has 5, though the handle stays open
+    if (target === undefined && !ctx.isFdHidden?.(from) && this.shell.isPipe(from)) {
+      ctx.redirectFd(fd, from, local);
+
+      if (local) ctx.closeFd(from, true);
+      else ctx.hideFd?.(from);
+
+      return;
+    }
+
     if (target === undefined) {
-      throw new CommandAbortError(`${from}: Bad file descriptor`, { code: 'E_BAD_FD' });
+      throw new RedirectionError(`${from}: Bad file descriptor`);
     }
 
     ctx.redirectFd(fd, target, local);
@@ -1281,7 +1321,7 @@ export class AstExecutor {
    *          files, so the caller applies it the ordinary way
    */
   private async openExecRedirection(ctx: ExecContextIf, r: AstNodeRedirect): Promise<boolean> {
-    const modes: Record<string, string> = { '>': 'w+', '>|': 'w+', '>>': 'a+', '<': 'r' };
+    const modes: Record<string, string> = { '>': 'w+', '>|': 'w+', '>>': 'a+', '<': 'r', '&>': 'w+', '&>>': 'a+' };
     const mode = modes[r.op.text];
 
     // `{fd}>file` is left to applyRedirections, which picks the number first
@@ -1292,11 +1332,21 @@ export class AstExecutor {
     const fd = r.numberIo?.text ?? (r.op.text === '<' ? '0' : '1');
     const target = await this.redirectTarget(r, ctx);
 
-    if (r.op.text === '>') {
+    if (r.op.text === '>' || r.op.text === '&>') {
       await this.assertClobberable(ctx, target);
     }
 
     await this.assertOpenable(ctx, target, r.op.text === '<' ? 'read' : 'write');
+
+    // `exec &> log`: one handle for stdout and stderr both
+    if (r.op.text === '&>' || r.op.text === '&>>') {
+      const handle = await this.shell.fdOpen(ctx, target, mode);
+
+      ctx.redirectFd('1', handle);
+      ctx.redirectFd('2', handle);
+
+      return true;
+    }
 
     if (Number(fd) > 2) {
       await this.shell.fdClose?.(fd);
@@ -1531,6 +1581,13 @@ export class AstExecutor {
   }
 
   private async runCommand(node: AstNodeCommand, parentCtx: ExecContextIf): Promise<number> {
+    // `command exec 2>file` is exec, which the executor runs itself rather than as a builtin
+    const first = node.suffix?.find((arg) => arg.type === 'Word') as AstNodeWord | undefined;
+
+    if (node.name?.text === 'command' && !node.name.expansion?.length && first?.text === 'exec' && !first.expansion?.length) {
+      return await this.runCommand({ ...node, name: first, suffix: node.suffix!.filter((arg) => arg !== first) }, parentCtx);
+    }
+
     // Handle exec: apply redirections to parent context, ignore args.
     // Only a literal `exec` counts. Expanding the name here as well as below ran
     // every command substitution in it twice — `$(pick-a-command) arg` executed
@@ -2033,9 +2090,13 @@ export class AstExecutor {
         ctx.redirectStdout(stdoutPipe);
       }
 
-      // Handle stderr redirection to file
+      // Handle stderr redirection to file; the file stdout goes to, `> log 2>&1`
+      // and `&> log`, shares stdout's pipe, so one writer keeps both in order
+      // instead of two overwriting each other
       const stderr = ctx.getStderr();
-      if (!this.shell.isPipe(stderr)) {
+      if (stdoutPipe && stderr === stdout) {
+        ctx.redirectStderr(stdoutPipe);
+      } else if (!this.shell.isPipe(stderr)) {
         stderrPipe = await this.shell.pipeOpen();
         pipes.push(stderrPipe);
         const stderrAppend = ctx.getStderrAppend();
@@ -2586,7 +2647,18 @@ export class AstExecutor {
       throw err;
     }
 
-    await this.diagnose(ctx, err.message);
+    // Said where the redirections before the refused one sent stderr
+    if (err.stderr !== undefined && err.stderr !== ctx.getStderr()) {
+      const said = ctx.spawnContext();
+
+      said.redirectStderr(err.stderr);
+      await this.withFileBridging(said, async () => {
+        await this.diagnose(said, err.message);
+        return 0;
+      });
+    } else {
+      await this.diagnose(ctx, err.message);
+    }
 
     return this.applyErrexit(1, ctx);
   }
@@ -2616,7 +2688,7 @@ export class AstExecutor {
 
     let lastCode = 0;
 
-    try {
+    const runAll = async (): Promise<number> => {
       for (const command of node.commands) {
         await this.echoSource(command, ctx);
 
@@ -2639,6 +2711,12 @@ export class AstExecutor {
       }
 
       return lastCode;
+    };
+
+    try {
+      // `{ a; b; } > file`: the file is opened once for the whole group, as a
+      // loop's is — each command opening it again truncated what the one before wrote
+      return node.redirections?.length ? await this.withFileBridging(ctx, runAll) : await runAll();
     } catch (err) {
       throw node.redirections?.length ? await this.reportedWithin(err, ctx) : err;
     } finally {

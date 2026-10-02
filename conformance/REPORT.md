@@ -8,7 +8,7 @@ see [README.md](README.md) for what the scores mean.
 | Test files that parse | 462 / 471 |
 | `run-*` scripts passing | 36 / 83 (real bash here: 74) |
 | Mean upstream score | 90% |
-| Mean stdout score | 91% |
+| Mean stdout score | 92% |
 
 ## Gaps
 
@@ -34,7 +34,6 @@ Bash builtins that reached the host as external commands.
 | --- | --- | --- |
 | history | histexpand, history | 64 |
 | test | cond, cprint | 7 |
-| exec | execscript, redir | 2 |
 | complete | complete | 37 |
 | fc | history | 28 |
 | help | redir | 1 |
@@ -95,7 +94,6 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | a: command not found | alias |
 | ever: command not found | alias |
 | 'alias long_comment='# for x in '' | alias |
-| myalias: command not found | alias |
 | complete: command not found | complete |
 | 'switch foo in foo) echo ok N;; esac' | comsub |
 | 'comsubN)' | comsub |
@@ -112,7 +110,6 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | : bad array subscript | assoc |
 | source: /: is a directory | execscript |
 | bash-notthere: command not found | execscript |
-| exec: command not found | execscript |
 | bar: command not found | heredoc |
 | !?ch?: command not found | histexpand |
 | !-N: command not found | histexpand |
@@ -122,6 +119,8 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | !-N:gs/foo/bar/: No such file or directory | histexpand |
 | !!:gs/bar/x: No such file or directory | histexpand |
 | /: Is a directory | histexpand |
+| !-N:g: command not found | histexpand |
+| !!:gs+bar+whix+: command not found | histexpand |
 
 ## Per test
 
@@ -129,7 +128,7 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 
 | Test | ref | pass | upstream | stdout | First difference (upstream) |
 | --- | --- | --- | --- | --- | --- |
-| alias | pass | no | 47% | 49% | 3,4c3,4 ⏎ &lt; ./alias.tests: line 1: quux: command not found ⏎ &lt; baz |
+| alias | pass | no | 59% | 64% | 3,4c3,4 ⏎ &lt; ./alias.tests: line 1: quux: command not found ⏎ &lt; baz |
 | appendop | pass | yes | 100% | 100% |  |
 | arith | pass | no | 98% | 97% | 196c196 ⏎ &lt;  ⏎ --- |
 | arith-for | pass | no | 97% | 97% | 67c67,68 ⏎ &lt; bash: -c: line 1: syntax error: for (( … )) takes three expressions separated by ';', got " i=0; "i &lt; 3" " ⏎ --- |
@@ -198,7 +197,7 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | quote | pass | no | 100% | 100% | 77c77 ⏎ &lt; 'weferfds'\\''dsfsdf' ⏎ --- |
 | quotearray | pass | no | 99% | 100% | 97c97 ⏎ &lt; declare -a array=() ⏎ --- |
 | read | env | timeout | 64% | 66% | timeout |
-| redir | pass | no | 76% | 74% | 20c20 ⏎ &lt; BUG: after exec in redir1.sub ⏎ --- |
+| redir | pass | no | 96% | 97% | 1c1 ⏎ &lt; foo ⏎ --- |
 | rhs-exp | pass | no | 95% | 95% | 11c11 ⏎ &lt; argv[1] = &lt;TDEFAULTS = -DSELECT_VECS=\'&m68kcoff_vec\'&gt; ⏎ --- |
 | rsh | pass | no | 17% | 0% | 1,13c1,14 ⏎ &lt; ./rsh1.sub: line 20: set: -r: invalid option ⏎ &lt; set: usage: set [-abefhkmnptuvxBCEHPT] [-o option-name] [--] [-] [arg ...] |
 | set-e | pass | yes | 100% | 100% |  |
@@ -211,4 +210,4 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | trap | pass | no | 92% | 94% | 18a19 ⏎ &gt; func[29] funcdebug ⏎ 30,33d30 |
 | type | pass | no | 98% | 98% | 43,44c43,44 ⏎ &lt; /tmp/bash-ts ⏎ &lt; bash-ts is hashed (/tmp/bash-ts) |
 | varenv | pass | no | 83% | 85% | 2,5c2,3 ⏎ &lt; ./varenv.tests: line 42: c=7: command not found ⏎ &lt; 3 4 3 4 5 |
-| vredir | env | no | 93% | 95% | 14,17d13 ⏎ &lt; bad foo 1 ⏎ &lt; bad foo 2 |
+| vredir | env | no | 95% | 97% | 14d13 ⏎ &lt; cat: /home/mattias/m/git/bash-executor-conformance/conformance/.cache/work/ours/run-vredir/tmp/foo: No such file or directory ⏎ 76c75 |

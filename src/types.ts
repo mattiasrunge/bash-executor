@@ -1025,4 +1025,10 @@ export interface ExecContextIf {
    * @param {boolean} local - Closed for this context alone, `cmd 3>&-`, and open again after it
    */
   closeFd: (fd: string, local?: boolean) => void;
+
+  /** Hide a descriptor the host holds under its number: the shell has moved it away (`exec 0<&5-`). */
+  hideFd?: (fd: string) => void;
+
+  /** Whether the shell has no such descriptor, though the host may hold one by that number. */
+  isFdHidden?: (fd: string) => boolean;
 }

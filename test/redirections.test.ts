@@ -423,3 +423,40 @@ Deno.test('a redirection word expands to one word, or the redirection is ambiguo
     assertEquals(result.stdout, 'a  b\n*\n\n');
   });
 });
+
+Deno.test('several writers to one file', async (t) => {
+  await t.step('a group writes its file once: each command no longer truncates it', async () => {
+    const shell = new TestShell();
+    await shell.runAndCapture('{ echo 1; echo 2; } > /tmp/g; echo 0 > /tmp/h; { echo 1; echo 2; } >> /tmp/h');
+    assertEquals(shell.getFile('/tmp/g'), '1\n2\n');
+    assertEquals(shell.getFile('/tmp/h'), '0\n1\n2\n');
+  });
+
+  await t.step('> file 2>&1 keeps both streams in order', async () => {
+    const shell = new TestShell();
+    await shell.runAndCapture('f() { echo e >&2; echo out; }; f > /tmp/o 2>&1; { echo 1; echo 2 >&2; echo 3; } >> /tmp/o 2>&1');
+    assertEquals(shell.getFile('/tmp/o'), 'e\nout\n1\n2\n3\n');
+  });
+
+  await t.step('&> and &>> send stdout and stderr to the file, and run nothing in the background', async () => {
+    const shell = new TestShell();
+    await shell.runAndCapture('f() { echo e >&2; echo out; }; f &> /tmp/a; f &>> /tmp/a');
+    assertEquals(shell.getFile('/tmp/a'), 'e\nout\ne\nout\n');
+  });
+});
+
+Deno.test('descriptors exec opened, moved and missing', async (t) => {
+  await t.step('exec 0<&5- moves the descriptor; 5 is gone after', async () => {
+    const shell = new TestShell();
+    shell.setFile('/tmp/in', 'l1\nl2\n');
+    const result = await shell.runAndCapture('exec 5</tmp/in; read -u 5 x; exec 6<&5-; read -u 6 y; echo "$x $y"; read -u 5 z; echo "st=$?"');
+    assertEquals(result.stdout, 'l1 l2\nst=1\n');
+    assertEquals(result.stderr, 'read: 5: invalid file descriptor: Bad file descriptor\n');
+  });
+
+  await t.step('a descriptor never opened is a bad one, and the script goes on', async () => {
+    const result = await new TestShell().runAndCapture('echo x >&7; echo "st=$?"');
+    assertEquals(result.stdout, 'st=1\n');
+    assertEquals(result.stderr, '7: Bad file descriptor\n');
+  });
+});

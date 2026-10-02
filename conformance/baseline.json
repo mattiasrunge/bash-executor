@@ -475,9 +475,9 @@
   },
   "tests": {
     "run-alias": {
-      "upstream": 0.468,
+      "upstream": 0.593,
       "pass": false,
-      "stdout": 0.491,
+      "stdout": 0.635,
       "reference": "pass"
     },
     "run-appendop": {
@@ -625,7 +625,7 @@
       "reference": "pass"
     },
     "run-execscript": {
-      "upstream": 0.906,
+      "upstream": 0.909,
       "pass": false,
       "stdout": 0.947,
       "reference": "env"
@@ -891,9 +891,9 @@
       "timeout": true
     },
     "run-redir": {
-      "upstream": 0.755,
+      "upstream": 0.96,
       "pass": false,
-      "stdout": 0.74,
+      "stdout": 0.974,
       "reference": "pass"
     },
     "run-rhs-exp": {
@@ -970,9 +970,9 @@
       "reference": "pass"
     },
     "run-vredir": {
-      "upstream": 0.931,
+      "upstream": 0.945,
       "pass": false,
-      "stdout": 0.953,
+      "stdout": 0.968,
       "reference": "env"
     }
   }

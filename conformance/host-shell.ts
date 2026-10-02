@@ -551,7 +551,28 @@ export class RealShell implements ShellIf {
   }
 
   isPipe(name: string): boolean {
-    return name === '0' || name === '1' || name === '2' || this.pipes.has(name) || this.files.has(name);
+    return name === '0' || name === '1' || name === '2' || this.pipes.has(name) || this.files.has(name) || this.inherited(name);
+  }
+
+  /**
+   * A descriptor this process was started with, `bash-ts 3<&0`: taken up under
+   * its number the first time a script names it, as bash finds it open.
+   */
+  private inherited(name: string): boolean {
+    if (!/^\d+$/.test(name) || Number(name) < 3) return false;
+
+    const path = `/proc/self/fd/${name}`;
+
+    for (const options of [{ read: true, write: true }, { read: true }, { write: true }]) {
+      try {
+        this.files.set(name, { file: Deno.openSync(path, options) });
+        return true;
+      } catch {
+        // Another mode, or not open at all
+      }
+    }
+
+    return false;
   }
 
   async pipeFromFile(ctx: ExecContextIf, path: string, pipe: string): Promise<void> {

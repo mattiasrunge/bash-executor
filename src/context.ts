@@ -1282,6 +1282,18 @@ export class ExecContext implements ExecContextIf {
     return Object.fromEntries(Object.entries(fds).filter(([, target]) => target));
   }
 
+  /** A descriptor the host holds under its number that the shell no longer has: moved away, `exec 0<&5-`. */
+  hideFd(fd: string): void {
+    this.root().fds[fd] = '';
+  }
+
+  /** Whether the shell has no such descriptor though the host may: hidden, or closed for this command. */
+  isFdHidden(fd: string): boolean {
+    if (fd in this.fds) return this.fds[fd] === '';
+
+    return this.parent?.isFdHidden(fd) ?? false;
+  }
+
   closeFd(fd: string, local = false): void {
     // Closed for one command, `cmd 3>&-`: hidden from it, and open again after
     if (local && this.parent) {
