@@ -53,7 +53,7 @@ export { bgBuiltin, disownBuiltin, fgBuiltin, JOB_BUILTINS, jobsBuiltin, killBui
 export { dotBuiltin, sourceBuiltin } from './source.ts';
 export { umaskBuiltin } from './umask.ts';
 export { ulimitBuiltin } from './ulimit.ts';
-export { fcBuiltin, historyBuiltin, loadHistory } from './history.ts';
+export { appendHistory, fcBuiltin, historyBuiltin, loadHistory, saveHistory, truncateHistoryFile } from './history.ts';
 export { bracketBuiltin, testBuiltin } from './test.ts';
 export { colonBuiltin, falseBuiltin, trueBuiltin } from './trivial.ts';
 export { exportBuiltin, localBuiltin, unsetBuiltin } from './variables.ts';

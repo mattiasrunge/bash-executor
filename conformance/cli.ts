@@ -18,6 +18,7 @@ import {
   DEFAULT_SHOPT_OPTIONS,
   ExecContext,
   getExitCode,
+  LineEditor,
   logoutBuiltin,
   SHELL_OPTION_FLAG_MAP,
   SIGNALS,
@@ -283,7 +284,8 @@ async function main(): Promise<number> {
 
         for (const text of lines) console.error(prefix + text);
 
-        return { code: 2, exited: true };
+        // An interactive shell reads on past a syntax error
+        return { code: 2, exited: !inv.interactive };
       }
 
       const message = err instanceof Error ? err.message : String(err);
@@ -302,7 +304,9 @@ async function main(): Promise<number> {
 
   let code = 0;
 
-  if (inv.command === undefined && inv.file === undefined) {
+  if (inv.interactive && inv.command === undefined && inv.file === undefined) {
+    code = await interactive(executor, ctx, run);
+  } else if (inv.command === undefined && inv.file === undefined) {
     // From stdin a command at a time, leaving the rest for what it runs to read
     // `exec 0< file` makes the file the shell's input from the next command on
     const readLine = async (): Promise<string | null> => {
@@ -393,6 +397,107 @@ async function* stdinCommands(readLine: () => Promise<string | null>): AsyncGene
     pending = '';
     start = lines + 1;
   }
+}
+
+/**
+ * `bash -i` with stdin: lines read as readline reads them, key by key through
+ * the executor's LineEditor — `C-r`, `C-p`, `C-o` and the rest work on what
+ * is piped in — each run and kept in the history. The history file is read
+ * at the start, cut to HISTFILESIZE, and written at the end, as bash does.
+ * The prompts and what is typed are said on stderr, readline's stream.
+ */
+async function interactive(
+  executor: AstExecutor,
+  ctx: ExecContext,
+  run: (source: string, line?: number) => Promise<{ code: number; exited: boolean }>,
+): Promise<number> {
+  const say = (text: string) => Deno.stderr.writeSync(new TextEncoder().encode(text));
+
+  // The history as bash starts it, but for a HISTFILE of the user's own: none unless one is given
+  await executor.startHistory(ctx, null);
+
+  const editor = new LineEditor(() => ctx.getHistory?.());
+  const reader = Deno.stdin.readable.getReader();
+  const decoder = new TextDecoder();
+  let ended = false;
+
+  /** The next line, or null at the end of input. */
+  const readLine = async (prompt: string): Promise<string | null> => {
+    editor.start();
+    say(prompt);
+
+    let results = editor.drain();
+
+    for (;;) {
+      for (const result of results) {
+        if (result.kind === 'accept') return result.line;
+        if (result.kind === 'eof') return null;
+        if (result.kind === 'interrupt') {
+          say('^C\n');
+          return '';
+        }
+      }
+
+      // A key that stopped the draining without ending the line, Tab or C-l: on with the rest
+      if (results.length > 0 && editor.pending) {
+        results = editor.drain();
+        continue;
+      }
+
+      if (ended) {
+        // What is left at the end of input is the line, as readline takes it
+        const line = editor.line;
+
+        editor.setLine('');
+        return line === '' ? null : line;
+      }
+
+      const { value, done } = await reader.read();
+
+      if (done) {
+        ended = true;
+        const escape = editor.flushEscape();
+        results = escape ? [escape] : [];
+        continue;
+      }
+
+      results = editor.feedText(decoder.decode(value, { stream: true }));
+    }
+  };
+
+  let code = 0;
+  let buffer = '';
+
+  for (;;) {
+    const params = ctx.getParams();
+    const prompt = await executor.expandPrompt(buffer === '' ? (params.PS1 ?? '\\s-\\v\\$ ') : (params.PS2 ?? '> '), ctx);
+    const line = await readLine(prompt);
+
+    if (line === null) {
+      say('exit\n');
+      break;
+    }
+
+    say(`${line}\n`);
+    buffer = buffer === '' ? line : `${buffer}\n${line}`;
+
+    // An open quote or compound command: PS2 asks for more
+    if (await executor.isUnfinished(buffer, ctx)) continue;
+
+    const result = await run(`${buffer}\n`);
+
+    buffer = '';
+    code = result.code;
+
+    if (result.exited) break;
+  }
+
+  reader.releaseLock();
+
+  // The history kept, as a shell that leaves writes it
+  await executor.saveHistory(ctx).catch(() => {});
+
+  return code;
 }
 
 /**

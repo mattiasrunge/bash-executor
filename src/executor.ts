@@ -34,6 +34,7 @@ import {
 } from '@ein/bash-parser';
 import { getExitCode, getReturnCode, isExitSignal, isReturnSignal, makeExitSignal } from './builtins/exit.ts';
 import { JOB_BUILTINS } from './builtins/jobs.ts';
+import { appendHistory, loadHistory, saveHistory } from './builtins/history.ts';
 import { type BuiltinRegistry, SPECIAL_BUILTINS } from './builtins/types.ts';
 import { assocKeys, attributeLetters, compoundValue, keyQuoted, valueQuoted } from './builtins/variable-listing.ts';
 import { assocEntries, keyedElement, keyedText } from './assoc-list.ts';
@@ -817,6 +818,53 @@ export class AstExecutor {
    * here-document — so that a prompt should ask for another line (PS2)
    * before running it. Read with the shell's aliases and POSIX mode.
    */
+  /**
+   * An interactive shell's history, as bash starts it: HISTFILE, unless set,
+   * `~/.bash_history` (or the `file` the host gives, null for none); history
+   * and `!` expansion on; and the file cut to HISTFILESIZE and read, HISTSIZE
+   * and HISTFILESIZE given their defaults of 500 and HISTSIZE's.
+   */
+  public async startHistory(ctx: ExecContextIf, file?: string | null): Promise<void> {
+    // An interactive shell's, whichever asked
+    ctx.setInteractive?.(true);
+
+    const home = ctx.getParam('HOME');
+
+    if (ctx.getParam('HISTFILE') === undefined) {
+      const path = file === undefined ? (home ? `${home.replace(/\/$/, '')}/.bash_history` : undefined) : file;
+
+      if (path) ctx.setParams({ HISTFILE: path });
+    }
+
+    // HISTSIZE from the environment bounds the list as an assignment would
+    const size = ctx.getParam('HISTSIZE');
+
+    if (size !== undefined) ctx.setParams({ HISTSIZE: size });
+
+    ctx.setShellOption('histexpand', true);
+    ctx.setShellOption('history', true);
+
+    const history = ctx.getHistory?.();
+
+    if (history && history.length === 0 && history.linesThisSession === 0) await loadHistory(ctx, this.shell);
+  }
+
+  /**
+   * What a shell that ends does with its history: written to HISTFILE, or the
+   * lines this session added appended under `shopt -s histappend`, and the
+   * file cut to HISTFILESIZE. A host that wants it kept as it goes can run
+   * `history -a` after each command, as `PROMPT_COMMAND='history -a'` does.
+   */
+  public async saveHistory(ctx: ExecContextIf): Promise<void> {
+    // Only an interactive shell writes its history unasked; a script runs `history -w` itself
+    if (ctx.isInteractive?.()) await saveHistory(ctx, this.shell);
+  }
+
+  /** `history -a` for an interactive shell: the lines it added since the last time, added to the end of HISTFILE. */
+  public async appendHistory(ctx: ExecContextIf): Promise<void> {
+    if (ctx.isInteractive?.()) await appendHistory(ctx, this.shell);
+  }
+
   public async isUnfinished(source: string, ctx: ExecContextIf): Promise<boolean> {
     return await this.unfinished(source, {
       insertLOC: true,

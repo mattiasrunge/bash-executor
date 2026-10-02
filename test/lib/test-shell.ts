@@ -321,6 +321,15 @@ export class TestShell implements ShellIf {
     return await this.executor.completeLine(this.ctx, line, point);
   }
 
+  /** An interactive shell's history started, HISTFILE read; and saved, as it ends. */
+  async startHistory(file?: string | null): Promise<void> {
+    await this.executor.startHistory(this.ctx, file);
+  }
+
+  async saveHistory(): Promise<void> {
+    await this.executor.saveHistory(this.ctx);
+  }
+
   /** Whether text stops inside a command, as a prompt asks. */
   async isUnfinished(text: string): Promise<boolean> {
     return await this.executor.isUnfinished(text, this.ctx);

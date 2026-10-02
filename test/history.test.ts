@@ -86,3 +86,50 @@ Deno.test('what a prompt reads before it runs', async (t) => {
     assertEquals(result.stdout, '4\n');
   });
 });
+
+Deno.test('an interactive shell reads its history file as it starts and writes it as it ends', async (t) => {
+  await t.step('HISTFILE is ~/.bash_history, the file cut to HISTFILESIZE first', async () => {
+    const shell = new TestShell();
+
+    shell.setFile('/home/u/.bash_history', 'one\ntwo\nthree\n');
+    await shell.runAndCapture('HOME=/home/u HISTSIZE=2');
+    await shell.startHistory();
+
+    assertEquals(shell.getFile('/home/u/.bash_history'), 'two\nthree\n');
+    assertEquals((await shell.runAndCapture('history; echo $HISTFILE $HISTFILESIZE')).stdout, '    1  two\n    2  three\n/home/u/.bash_history 2\n');
+  });
+
+  await t.step('the list written at the end, or the new lines added under histappend', async () => {
+    const shell = new TestShell();
+
+    shell.setFile('/h/.bash_history', 'old\n');
+    await shell.runAndCapture('HOME=/h');
+    await shell.startHistory();
+    await shell.runAndCapture('echo new >/dev/null', { history: true });
+    await shell.saveHistory();
+    assertEquals(shell.getFile('/h/.bash_history'), 'old\necho new >/dev/null\n');
+
+    // Appended: what is in the file stays, the list cleared or not
+    await shell.runAndCapture('shopt -s histappend; history -c');
+    await shell.runAndCapture('echo more >/dev/null', { history: true });
+    await shell.saveHistory();
+    assertEquals(shell.getFile('/h/.bash_history'), 'old\necho new >/dev/null\necho more >/dev/null\n');
+  });
+
+  await t.step('a shell that is not interactive writes nothing unasked', async () => {
+    const shell = new TestShell();
+
+    await shell.runAndCapture('HOME=/h HISTFILE=/h/.bash_history; set -o history');
+    await shell.runAndCapture('echo x >/dev/null', { history: true });
+    await shell.saveHistory();
+    assertEquals(shell.getFile('/h/.bash_history'), '');
+  });
+
+  await t.step("no file of the user's own when the host says so", async () => {
+    const shell = new TestShell();
+
+    await shell.runAndCapture('HOME=/h');
+    await shell.startHistory(null);
+    assertEquals((await shell.runAndCapture('echo "[${HISTFILE-unset}]"')).stdout, '[unset]\n');
+  });
+});

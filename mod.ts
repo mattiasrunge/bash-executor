@@ -10,3 +10,5 @@ export * from './src/print-command.ts';
 export * from './src/syntax-error.ts';
 export * from './src/history.ts';
 export * from './src/completion.ts';
+export * from './src/line-editor.ts';
+export * from './src/prompt.ts';

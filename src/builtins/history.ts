@@ -65,7 +65,8 @@ async function readHistory(ctx: ExecContextIf, shell: ShellIf, history: History,
 
 /**
  * load_history: what `set -o history` does first — HISTSIZE and HISTFILESIZE
- * given their defaults, and the history file read.
+ * given their defaults, the history file cut to HISTFILESIZE lines, as bash's
+ * sv_histsize cuts it, and read.
  */
 export async function loadHistory(ctx: ExecContextIf, shell: ShellIf): Promise<void> {
   if (ctx.getParam('HISTSIZE') === undefined) ctx.setParams({ HISTSIZE: '500' });
@@ -73,7 +74,71 @@ export async function loadHistory(ctx: ExecContextIf, shell: ShellIf): Promise<v
 
   const file = ctx.getParam('HISTFILE');
 
-  if (file) await readHistory(ctx, shell, historyOf(ctx), file);
+  if (!file) return;
+
+  await truncateHistoryFile(ctx, shell, file);
+  await readHistory(ctx, shell, historyOf(ctx), file);
+}
+
+/** history_truncate_file: the file cut to its last HISTFILESIZE lines. */
+export async function truncateHistoryFile(ctx: ExecContextIf, shell: ShellIf, file: string): Promise<void> {
+  const size = ctx.getParam('HISTFILESIZE') ?? '';
+
+  if (!/^\d+$/.test(size)) return;
+
+  const text = await readFile(ctx, shell, file);
+
+  if (text === undefined) return;
+
+  const { entries, lines } = parseHistoryFile(text);
+
+  if (lines <= Number(size)) return;
+
+  // Timestamps stay with their lines, and only where the file had them
+  const kept = entries.slice(Math.max(0, entries.length - Number(size)));
+
+  await writeFile(ctx, shell, file, historyFileText(kept, /^#\d+$/m.test(text)), false);
+}
+
+/**
+ * maybe_append_history, `history -a`: the lines this session added since the
+ * last time, added to the end of the file.
+ */
+export async function appendHistory(ctx: ExecContextIf, shell: ShellIf, file: string | undefined = ctx.getParam('HISTFILE')): Promise<void> {
+  const history = historyOf(ctx);
+
+  if (file && history.linesThisSession > 0) {
+    const count = Math.min(history.linesThisSession, history.length);
+    const timestamps = ctx.getParam('HISTTIMEFORMAT') !== undefined;
+
+    await writeFile(ctx, shell, file, historyFileText(history.entries.slice(history.length - count), timestamps), true);
+    history.linesInFile += count;
+  }
+
+  history.linesThisSession = 0;
+}
+
+/**
+ * maybe_save_shell_history: what a shell that ends does with its history —
+ * written to HISTFILE, the lines this session added appended under
+ * `shopt -s histappend`, and the file cut to HISTFILESIZE.
+ */
+export async function saveHistory(ctx: ExecContextIf, shell: ShellIf): Promise<void> {
+  const file = ctx.getParam('HISTFILE');
+  const history = historyOf(ctx);
+
+  if (!file || !ctx.getShellOption('history')) return;
+
+  const timestamps = ctx.getParam('HISTTIMEFORMAT') !== undefined;
+
+  if (ctx.getShellOption('histappend')) {
+    await appendHistory(ctx, shell, file);
+  } else {
+    await writeFile(ctx, shell, file, historyFileText(history.entries, timestamps), false);
+    history.linesThisSession = 0;
+  }
+
+  await truncateHistoryFile(ctx, shell, file);
 }
 
 /**
@@ -224,14 +289,7 @@ export const historyBuiltin: BuiltinHandler = async (ctx: ExecContextIf, args: s
   try {
     if (flags.has('a')) {
       // maybe_append_history: this session's lines, at most as many as the list holds
-      if (history.linesThisSession > 0) {
-        const count = Math.min(history.linesThisSession, history.length);
-
-        await writeFile(ctx, shell, file, historyFileText(history.entries.slice(history.length - count), timestamps), true);
-        history.linesInFile += count;
-      }
-
-      history.linesThisSession = 0;
+      await appendHistory(ctx, shell, file);
     } else if (flags.has('w')) {
       await writeFile(ctx, shell, file, historyFileText(history.entries, timestamps), false);
       history.linesInFile = history.length;
