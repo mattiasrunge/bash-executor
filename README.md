@@ -8,6 +8,7 @@ Execute bash AST nodes given by bash-parser.
 - [Usage](#usage)
 - [Arrays and field splitting](#arrays-and-field-splitting)
 - [Shell options](#shell-options)
+- [An interactive prompt](#an-interactive-prompt)
 - [Contributing](#contributing)
 - [License](#license)
 - [Contact](#contact)
@@ -161,6 +162,29 @@ from the source it was defined in. `export -f name` hands it to the commands the
 shell runs as `BASH_FUNC_name%%`, the variable bash reads it back from; a host
 starting a shell calls `importFunctions(ctx)` to define what its environment
 carries.
+
+## An interactive prompt
+
+A host reading commands at a prompt gets bash's readline from the executor:
+`LineEditor` takes the keys the terminal sends and edits the line with
+readline's emacs keys over the shell's history (`C-r`, `C-o`, `M-.` and the
+rest); the host draws `display(prompt)` and acts on what a key came to — a
+line to run, the end of input, a Tab.
+
+A Tab is `executor.completeTab(ctx, line, point, list)`, readline's completion
+as bash sets it up: the matches come from the `complete` specification that
+applies, or else bash's own — variable names after `$`, command names where a
+command goes, file names — and go into the line as readline puts them there:
+the one match quoted, with a `/` after a directory and a space after anything
+else, or the prefix several share. The host hands the line back to the editor
+with `completed(line, point)`; the Tab after one that changed nothing asks for
+the list, which `matchColumns` lays out as readline does. Which entry is a
+directory is the host's `readDirectory`'s say.
+
+`startHistory(ctx)` reads HISTFILE as an interactive bash starts,
+`appendHistory` adds what was run since to its end (`history -a`) and
+`saveHistory` writes it as the shell ends; none of them touch a file unless the
+context is interactive.
 
 ## Contributing
 

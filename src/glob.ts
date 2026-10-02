@@ -545,13 +545,13 @@ function splitAlternatives(text: string): string[] {
   return [...out, text.slice(start)];
 }
 
-function compareBytes(a: string, b: string): number {
+export function compareBytes(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
 /** A locale's order, as glibc's has it: punctuation weighs nothing, `.dot` sorts among the d's. */
 const collator = new Intl.Collator(undefined, { ignorePunctuation: true });
 
-function collate(a: string, b: string): number {
+export function collate(a: string, b: string): number {
   return collator.compare(a, b) || compareBytes(a, b);
 }

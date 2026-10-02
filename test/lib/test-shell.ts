@@ -9,6 +9,7 @@ import {
   type ExecuteAndCaptureOptions,
   type LineCompletion,
   type ShellIf,
+  type TabCompletion,
 } from '../../mod.ts';
 import { PipeBuffer } from './pipe-buffer.ts';
 
@@ -321,6 +322,11 @@ export class TestShell implements ShellIf {
     return await this.executor.completeLine(this.ctx, line, point);
   }
 
+  /** What a Tab at `point` in `line` does to it, as readline's does; `list` for the Tab that lists. */
+  async completeTab(line: string, point?: number, list?: boolean): Promise<TabCompletion> {
+    return await this.executor.completeTab(this.ctx, line, point, list);
+  }
+
   /** An interactive shell's history started, HISTFILE read; and saved, as it ends. */
   async startHistory(file?: string | null): Promise<void> {
     await this.executor.startHistory(this.ctx, file);
@@ -452,7 +458,7 @@ export class TestShell implements ShellIf {
   async testPath(ctx: ExecContextIf, path: string, op: string): Promise<boolean> {
     // A relative path is the working directory's, as a host takes it; a file
     // named on its own is the mock's under its name as well
-    if (!path.startsWith('/') && path.includes('/') && !this.files.has(path)) path = `${ctx.getCwd().replace(/\/$/, '')}/${path}`;
+    if (!path.startsWith('/') && (path.includes('/') || op === 'DIRECTORY') && !this.files.has(path)) path = `${ctx.getCwd().replace(/\/$/, '')}/${path}`.replace(/\/$/, '');
 
     // A directory is one a file is in, or one every system has
     const directory = path === '/' || path === '/tmp' || path === '/dev' || [...this.files.keys()].some((file) => file.startsWith(`${path}/`));

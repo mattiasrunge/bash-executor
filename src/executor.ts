@@ -41,7 +41,7 @@ import { assocEntries, keyedElement, keyedText } from './assoc-list.ts';
 import type { ErrorPosition } from './errors.ts';
 import { exportedFunctionName, exportedFunctionText, type FunctionDefinition, functionEnvName } from './print-command.ts';
 import { singleQuoted } from './quote.ts';
-import { expandPattern, type GlobOptions, globPatterns, isGlobPattern, patternOf } from './glob.ts';
+import { collate, compareBytes, expandPattern, type GlobOptions, globPatterns, isGlobPattern, patternOf } from './glob.ts';
 import { syntaxErrorLines, syntaxErrorWarnings } from './syntax-error.ts';
 import { type History, historyExpand, type HistorySettings, historySettings, mayExpand } from './history.ts';
 import { delimitingChars, type LineState, scanLines, shellComment } from './history-reader.ts';
@@ -59,6 +59,17 @@ import {
   shellQuote,
   splitAtDelims,
 } from './completion.ts';
+import {
+  commonPrefix,
+  completionPattern,
+  dequoteFilename,
+  findCompletionWord,
+  inCommandPosition,
+  isCompletionGlob,
+  needsQuoting,
+  printablePart,
+  quoteFilename,
+} from './tab-completion.ts';
 import { cpuTime, timeReport } from './timing.ts';
 import { closingBracket, closingQuote, contextVariables, evaluateArithmeticText, subscriptEnd } from './arith.ts';
 import { decodePrompt } from './prompt.ts';
@@ -77,6 +88,7 @@ import {
 } from './errors.ts';
 import {
   CLOSED_FD,
+  type DirectoryEntry,
   type ExecCommandOptions,
   type ExecContextIf,
   type ExecSyncResult,
@@ -281,7 +293,41 @@ function isDoubleQuotedAt(text: string, pos: number): boolean {
  * words that could replace it, and the `-o` options the specification had
  * when it was done (a completion function may change them with compopt).
  */
-export type LineCompletion = { word: string; start: number; end: number; matches: string[]; options: string[] };
+export type LineCompletion = {
+  word: string;
+  start: number;
+  end: number;
+  matches: string[];
+  options: string[];
+  /** Whether the matches are file names: `-o filenames`, or made by the file or directory actions */
+  filenames: boolean;
+};
+
+/**
+ * What a Tab did: the line and the cursor as it leaves them, the matches to
+ * list when it was the Tab that lists them, and whether to ring the bell —
+ * nothing matched, or more than one did.
+ */
+export type TabCompletion = {
+  line: string;
+  point: number;
+  list?: string[];
+  /** How wide the widest match listed is, a directory's `/` not counted, for `matchColumns` */
+  widest?: number;
+  bell: boolean;
+};
+
+/** The matches a Tab found, and how readline is to put them in the line. */
+type TabMatches = {
+  matches: string[];
+  /** File names: quoted, a directory marked with `/`, listed by their last part */
+  filenames: boolean;
+  noQuote?: boolean;
+  noSpace?: boolean;
+  noSort?: boolean;
+  /** What follows a single match instead of a space */
+  append?: string;
+};
 
 /** The command line a completion function is shown: its words and the one at the cursor. */
 type CompletionLine = { text: string; point: number; words: LineWord[]; current: number };
@@ -886,6 +932,273 @@ export class AstExecutor {
    * specification applies, for the host to complete as it would without.
    */
   public async completeLine(ctx: ExecContextIf, line: string, point = line.length): Promise<LineCompletion | undefined> {
+    const found = await this.programmableCompletion(ctx, line, point);
+
+    // `-o default`: file names when nothing else was found
+    if (found && found.matches.length === 0 && found.options.includes('default')) {
+      return { ...found, matches: await pathWords(ctx, this.shell, found.word, false), filenames: true };
+    }
+
+    return found;
+  }
+
+  /**
+   * A Tab at `point` in `line`, as bash's readline does it. The matches are
+   * programmable completion's where a specification applies, otherwise
+   * bash's own: variable names after `$`, command names where a command
+   * goes (directories when none matches), the one file a glob names, and
+   * file names. One match goes into the line — a file name quoted, a `/`
+   * after a directory, the quote it was typed in closed and a space after
+   * anything else; of several, the prefix they share goes in and the bell
+   * rings. `list` is a Tab right after one that changed nothing: the matches
+   * are listed instead, a file name by its last part.
+   */
+  public async completeTab(ctx: ExecContextIf, line: string, point = line.length, list = false): Promise<TabCompletion> {
+    const unchanged: TabCompletion = { line, point, bell: true };
+    const breaks = ctx.getParam('COMP_WORDBREAKS') ?? DEFAULT_WORDBREAKS;
+    const { start, quote } = findCompletionWord(line, point, breaks);
+    const text = line.slice(start, point);
+    const found = await this.tabMatches(ctx, line, point, start, text, quote, list);
+
+    if (!found || found.matches.length === 0) return unchanged;
+
+    const listings = new Map<string, Promise<DirectoryEntry[] | null>>();
+
+    // Sorted as the locale collates, as readline sorts them
+    const matches = found.noSort ? [...new Set(found.matches)] : [...new Set(found.matches)].sort(this.bytewiseLocale(ctx) ? compareBytes : collate);
+
+    if (list) {
+      const names = found.filenames ? matches.map(printablePart) : matches;
+      const shown = found.filenames
+        ? await Promise.all(matches.map(async (match, i) => names[i] + (!match.endsWith('/') && (await this.completionEntry(ctx, match, listings)).directory ? '/' : '')))
+        : matches;
+
+      return { line, point, list: shown, widest: Math.max(...names.map((name) => [...name].length)), bell: false };
+    }
+
+    const lcd = matches.length === 1 ? matches[0] : commonPrefix(matches);
+
+    if (lcd === '') return unchanged;
+
+    // insert_match: quoted as a file name, an opening quote not doubled, a closing one taken over
+    let replacement = lcd;
+    let closer = quote;
+
+    if (found.filenames && !found.noQuote && needsQuoting(lcd)) {
+      ({ text: replacement, quote: closer } = quoteFilename(lcd, matches.length > 1, quote, breaks, ctx.getShellOption('histexpand')));
+    }
+
+    let from = start;
+    let to = point;
+
+    if (closer && from > 0 && line[from - 1] === closer && replacement[0] === closer) from--;
+    else if (closer !== quote && from > 0 && line[from - 1] === quote && replacement[0] !== quote) from--;
+    if (closer && line[point] === closer && replacement.endsWith(closer)) to++;
+
+    let result = line.slice(0, from) + replacement + line.slice(to);
+    const at = from + replacement.length;
+
+    if (matches.length > 1) return { line: result, point: at, bell: true };
+
+    // append_to_match: the closing quote and a space at the end of the line, a `/` after a directory
+    const atEnd = at === result.length;
+    const tail = (closer && result[at - 1] !== closer ? closer : '') + (found.noSpace ? '' : found.append ?? ' ');
+    let cursor = at;
+
+    if (found.filenames) {
+      const nontrivial = lcd !== dequoteFilename(text, quote);
+      const entry = await this.completionEntry(ctx, lcd, listings);
+      const directory = entry.directory;
+      // A link to a directory gets nothing after it unless its whole name was typed
+      const link = nontrivial && entry.link;
+
+      if (directory && !link) {
+        if (!(atEnd && result[at - 1] === '/') && result[at] !== '/') {
+          result = result.slice(0, at) + '/' + result.slice(at);
+          cursor++;
+        }
+      } else if (!directory && atEnd && tail) {
+        result += tail;
+        cursor += tail.length;
+      }
+    } else if (atEnd && tail) {
+      result += tail;
+      cursor += tail.length;
+    }
+
+    return { line: result, point: cursor, bell: false };
+  }
+
+  /**
+   * attempt_shell_completion: the matches for the word, from the
+   * specification that applies — or, when it has none and says
+   * `-o bashdefault`, bash's own, and with `-o default` file names — or,
+   * when none applies, bash's own.
+   */
+  private async tabMatches(ctx: ExecContextIf, line: string, point: number, start: number, text: string, quote: string, list: boolean): Promise<TabMatches | undefined> {
+    const programmable = await this.programmableCompletion(ctx, line, point);
+
+    if (!programmable) return await this.defaultMatches(ctx, line, start, text, quote, list);
+
+    const options = programmable.options;
+    const set = { noQuote: options.includes('noquote'), noSpace: options.includes('nospace'), noSort: options.includes('nosort') };
+
+    if (programmable.matches.length > 0) return { ...set, matches: programmable.matches, filenames: programmable.filenames || options.includes('filenames') };
+
+    if (options.includes('bashdefault')) {
+      const found = await this.defaultMatches(ctx, line, start, text, quote, list);
+
+      if (found && found.matches.length > 0) return { ...found, noQuote: set.noQuote, noSpace: set.noSpace || found.noSpace, noSort: set.noSort };
+    }
+
+    if (options.includes('default')) return { ...set, matches: await this.fileMatches(ctx, text, quote), filenames: true };
+
+    return undefined;
+  }
+
+  /**
+   * bash_default_completion, and readline's file names after it: variable
+   * names after `$`, command names where a command goes, the file a glob
+   * names, and file names — where a command goes, only directories.
+   */
+  private async defaultMatches(ctx: ExecContextIf, line: string, start: number, text: string, quote: string, list: boolean): Promise<TabMatches | undefined> {
+    if (text.startsWith('$') && !(text[1] === '(' && quote !== "'")) {
+      const brace = text.startsWith('${');
+      const names = await actionCompletions(ctx, this.shell, this.builtins, ['variable'], text.slice(brace ? 2 : 1));
+
+      if (names.length > 0) {
+        const value = names.length === 1 ? ctx.getParam(names[0]) : undefined;
+        // A variable naming a directory is followed by a `/`
+        const append = value && await this.shell.testPath?.(ctx, value, 'DIRECTORY').catch(() => false) ? '/' : undefined;
+
+        return { matches: names.map((name) => brace ? `\${${name}}` : `$${name}`), filenames: false, append };
+      }
+    }
+
+    const command = inCommandPosition(line, start);
+    const name = dequoteFilename(text, quote);
+
+    if (command && !name.includes('/') && !isCompletionGlob(text)) {
+      const names = await actionCompletions(ctx, this.shell, this.builtins, ['command'], name);
+
+      if (names.length > 0) {
+        // A single name that is also a directory here could be either: nothing after it
+        const ambiguous = new Set(names).size === 1 ? await this.shell.testPath?.(ctx, names[0], 'DIRECTORY').catch(() => false) : false;
+
+        return { matches: names, filenames: false, noSpace: ambiguous || undefined };
+      }
+    }
+
+    if (isCompletionGlob(text)) {
+      const found = (this.shell.readDirectory
+        ? await this.expandPathnames(ctx, [text], [completionPattern(text)]).catch(() =>
+          [] as string[]
+        )
+        : await this.shell.resolvePath?.(ctx, text).catch(() => [] as string[]) ?? []).filter((path) => path !== text);
+
+      // Of several files Tab takes none; the listing shows them
+      if (found.length === 1 || (found.length > 1 && list)) return { matches: found, filenames: found.length === 1, noSpace: found.length > 1 };
+    }
+
+    if (command) {
+      const matches = await this.fileMatches(ctx, text, quote, name.includes('/') ? 'command' : 'directory');
+
+      return { matches, filenames: true };
+    }
+
+    return { matches: await this.fileMatches(ctx, text, quote), filenames: true };
+  }
+
+  /**
+   * rl_filename_completion_function: the files whose names start with the
+   * word's last part, in the directory its first part names — `~` and `$NAME`
+   * there expanded, the matches keeping them as typed. Hidden files match
+   * as well, as readline's match-hidden-files has it; FIGNORE's suffixes do
+   * not. `keep` narrows them to directories, or to what a command can be.
+   */
+  private async fileMatches(ctx: ExecContextIf, text: string, quote: string, keep?: 'directory' | 'command'): Promise<string[]> {
+    const name = dequoteFilename(text, quote);
+    const slash = name.lastIndexOf('/');
+    const typed = slash >= 0 ? name.slice(0, slash + 1) : '';
+    const base = name.slice(slash + 1);
+    const dir = typed ? await this.completionPath(ctx, typed) : '';
+    let entries: DirectoryEntry[];
+
+    if (this.shell.readDirectory) {
+      entries = await this.shell.readDirectory(ctx, dir === '' ? '.' : dir.length > 1 ? dir.replace(/\/+$/, '') : dir).catch(() => null) ?? [];
+    } else {
+      // Without a directory listing, the files a glob finds
+      const paths = await pathWords(ctx, this.shell, `${dir}${base}`, keep === 'directory');
+
+      entries = await Promise.all(paths.map(async (path) => ({ name: path.slice(dir.length), directory: await this.shell.testPath?.(ctx, path, 'DIRECTORY') ?? false })));
+    }
+
+    // `.` and `..` only when typed
+    if (base === '.' || base === '..') entries = [...entries, { name: '.', directory: true }, { name: '..', directory: true }];
+
+    const ignored = (ctx.getParam('FIGNORE') ?? '').split(':').filter(Boolean);
+    const matches: string[] = [];
+
+    for (const entry of entries) {
+      if (!entry.name.startsWith(base)) continue;
+      if (ignored.some((suffix) => entry.name.length > suffix.length && entry.name.endsWith(suffix))) continue;
+      if (keep === 'directory' && !entry.directory) continue;
+      if (keep === 'command' && !entry.directory && !(await this.shell.testPath?.(ctx, dir + entry.name, 'EXECUTABLE').catch(() => false) ?? true)) continue;
+
+      matches.push(typed + entry.name);
+    }
+
+    return matches;
+  }
+
+  /** A file name as typed, its leading `~` or `~user` and its `$NAME`s expanded, to look it up. */
+  private async completionPath(ctx: ExecContextIf, typed: string): Promise<string> {
+    let path = typed;
+    const tilde = /^~([^/]*)/.exec(path);
+
+    if (tilde) {
+      const home = tilde[1] === ''
+        ? ctx.getParam('HOME') ?? await this.shell.resolveHomeUser?.(ctx, null).catch(() => undefined)
+        : await this.shell.resolveHomeUser?.(ctx, tilde[1]).catch(() => undefined);
+
+      if (home) path = home + path.slice(tilde[0].length);
+    }
+
+    return path.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g, (whole, braced, plain) => ctx.getParam(braced ?? plain) ?? whole);
+  }
+
+  /**
+   * What a file name a Tab completed to is: a directory (or a link to one),
+   * a link. The host's listing of its directory says, as it has the say on
+   * what a directory is; without one, `testPath`. `listings` keeps the
+   * directories read for one Tab.
+   */
+  private async completionEntry(
+    ctx: ExecContextIf,
+    name: string,
+    listings: Map<string, Promise<DirectoryEntry[] | null>>,
+  ): Promise<{ directory: boolean; link: boolean }> {
+    const path = (await this.completionPath(ctx, name)).replace(/(.)\/+$/, '$1');
+    const slash = path.lastIndexOf('/');
+    const base = path.slice(slash + 1);
+
+    if (this.shell.readDirectory && base !== '' && base !== '.' && base !== '..') {
+      const dir = slash < 0 ? '.' : slash === 0 ? '/' : path.slice(0, slash);
+
+      if (!listings.has(dir)) listings.set(dir, this.shell.readDirectory(ctx, dir).catch(() => null));
+
+      const entry = (await listings.get(dir))?.find((e) => e.name === base);
+
+      if (entry) return { directory: entry.directory, link: entry.link ?? false };
+    }
+
+    const directory = await this.shell.testPath?.(ctx, path, 'DIRECTORY').catch(() => false) ?? false;
+
+    return { directory, link: directory && (await this.shell.testPath?.(ctx, path, 'SYMLINK').catch(() => false) ?? false) };
+  }
+
+  /** programmable_completions: what the specification that applies at `point` generates, `-o default` aside. */
+  private async programmableCompletion(ctx: ExecContextIf, line: string, point: number): Promise<LineCompletion | undefined> {
     const specs = ctx.getCompletionSpecs?.();
 
     if (!specs || specs.size === 0) return undefined;
@@ -936,12 +1249,7 @@ export class AstExecutor {
 
         if (!result.found) continue;
 
-        let matches = result.matches;
-
-        // `-o default`: file names when nothing else was found
-        if (matches.length === 0 && result.options.includes('default')) matches = await pathWords(ctx, this.shell, word, false);
-
-        return { word, start: bounds.start + wordStart, end: point, matches, options: result.options };
+        return { word, start: bounds.start + wordStart, end: point, matches: result.matches, options: result.options, filenames: result.filenames };
       }
 
       if (!retry) break;
@@ -962,7 +1270,7 @@ export class AstExecutor {
     cmd: string,
     word: string,
     line: CompletionLine = { text: '', point: 0, words: [], current: 0 },
-  ): Promise<{ matches: string[]; options: string[]; found: boolean; retry: boolean }> {
+  ): Promise<{ matches: string[]; options: string[]; filenames: boolean; found: boolean; retry: boolean }> {
     // A copy, for compopt to change while the function runs
     const spec = { ...original, actions: [...original.actions], options: [...original.options] };
     const previous = this.currentCompletion;
@@ -986,7 +1294,7 @@ export class AstExecutor {
       if (spec.funcname !== undefined) {
         const result = await this.completionFunction(ctx, spec.funcname, cmd, word, line);
 
-        if (!result.found || result.retry) return { matches: [], options: spec.options, found: result.found, retry: result.retry };
+        if (!result.found || result.retry) return { matches: [], options: spec.options, filenames: false, found: result.found, retry: result.retry };
         matches.push(...result.matches);
       }
 
@@ -995,13 +1303,20 @@ export class AstExecutor {
       if (spec.filterpat !== undefined) matches = filterWords(matches, spec.filterpat, word, ctx.getShellOption('extglob'));
       if (spec.prefix !== undefined || spec.suffix !== undefined) matches = matches.map((m) => `${spec.prefix ?? ''}${m}${spec.suffix ?? ''}`);
 
+      // File names are what the file and directory actions make, and the directories added
+      let filenames = spec.options.includes('filenames') || spec.actions.includes('file') || spec.actions.includes('directory');
+
       if (matches.length === 0 && spec.options.includes('dirnames')) {
         matches = await pathWords(ctx, this.shell, word, true);
+        filenames ||= matches.length > 0;
       } else if (spec.options.includes('plusdirs')) {
-        matches.push(...await pathWords(ctx, this.shell, word, true));
+        const dirs = await pathWords(ctx, this.shell, word, true);
+
+        matches.push(...dirs);
+        filenames ||= dirs.length > 0;
       }
 
-      return { matches, options: spec.options, found: true, retry: false };
+      return { matches, options: spec.options, filenames, found: true, retry: false };
     } finally {
       this.currentCompletion = previous;
     }
@@ -6438,9 +6753,15 @@ export class AstExecutor {
    * when none does — unless `nullglob` drops it or `failglob` makes that an
    * error.
    */
+  /** Whether the locale orders by bytes: bash's default, C, does, as does POSIX. */
+  private bytewiseLocale(ctx: ExecContextIf): boolean {
+    const params = this.paramView(ctx);
+
+    return /^(C|POSIX)([._@]|$)/.test(params.LC_ALL || params.LC_COLLATE || params.LANG || 'C');
+  }
+
   private async expandPathnames(ctx: ExecContextIf, values: string[], patterns: string[]): Promise<string[]> {
     const params = this.paramView(ctx);
-    const locale = params.LC_ALL || params.LC_COLLATE || params.LANG || 'C';
     const globignore = params.GLOBIGNORE ?? '';
     const options: GlobOptions = {
       dotglob: ctx.getShellOption('dotglob'),
@@ -6448,8 +6769,7 @@ export class AstExecutor {
       globstar: ctx.getShellOption('globstar'),
       extglob: ctx.getShellOption('extglob'),
       ignore: splitIgnoreSpec(globignore),
-      // bash's default locale is C, which sorts by bytes, as does POSIX
-      bytewise: /^(C|POSIX)([._@]|$)/.test(locale),
+      bytewise: this.bytewiseLocale(ctx),
       globskipdots: ctx.getShellOption('globskipdots'),
     };
     const out: string[] = [];

@@ -134,3 +134,17 @@ Deno.test('the history', async (t) => {
     assertEquals(type(editor, '\x12stat\r'), { kind: 'accept', line: 'git status' });
   });
 });
+
+Deno.test('Tab', async (t) => {
+  await t.step('a Tab lists the matches when the one before it changed nothing, as readline has it', () => {
+    const { editor } = editorWith();
+
+    assertEquals(type(editor, 'ls s\t'), { kind: 'complete', list: false });
+    // The prefix the matches share went in
+    editor.completed('ls sr');
+    assertEquals(type(editor, '\t'), { kind: 'complete', list: false });
+    // Nothing more to add
+    editor.completed('ls sr');
+    assertEquals(type(editor, '\t'), { kind: 'complete', list: true });
+  });
+});

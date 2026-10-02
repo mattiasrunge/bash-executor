@@ -20,6 +20,7 @@ import {
   getExitCode,
   LineEditor,
   logoutBuiltin,
+  matchColumns,
   SHELL_OPTION_FLAG_MAP,
   SIGNALS,
   syntaxErrorLines,
@@ -435,6 +436,13 @@ async function interactive(
         if (result.kind === 'interrupt') {
           say('^C\n');
           return '';
+        }
+        if (result.kind === 'complete') {
+          const tab = await executor.completeTab(ctx, editor.line, editor.point, result.list);
+
+          editor.completed(tab.line, tab.point);
+          // The matches under the line so far, and the prompt again for the rest of it
+          if (tab.list) say(`${editor.line}\n${matchColumns(tab.list, Number(ctx.getParam('COLUMNS')) || 80, tab.widest)}${prompt}`);
         }
       }
 

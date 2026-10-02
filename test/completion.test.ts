@@ -60,7 +60,7 @@ Deno.test('completing a line', async (t) => {
 
     await shell.runAndCapture('complete -W "start stop status" svc');
 
-    assertEquals(await shell.completeLine('ls; svc st'), { word: 'st', start: 8, end: 10, matches: ['start', 'stop', 'status'], options: [] });
+    assertEquals(await shell.completeLine('ls; svc st'), { word: 'st', start: 8, end: 10, matches: ['start', 'stop', 'status'], options: [], filenames: false });
   });
 
   await t.step('-D for any command, a path by its basename first', async () => {
@@ -106,5 +106,93 @@ Deno.test('completing a line', async (t) => {
     await shell.completeLine('cmd x');
 
     assertEquals((await shell.runAndCapture('echo "${COMP_WORDS[*]}${COMP_LINE}${COMPREPLY[*]}|"')).stdout, '|\n');
+  });
+});
+
+/** A shell in /w, among files a Tab completes. */
+const filesShell = () => {
+  const shell = new TestShell();
+
+  for (const file of ['alpha.txt', 'src/a.ts', 'src/b.ts', 'srv/x', 'my dir/f', 'my file', "it's", 'x=y']) shell.setFile(`/w/${file}`, '');
+  shell.setCwd('/w');
+  shell.setParams({ HOME: '/w', LANG: 'C' });
+
+  return shell;
+};
+
+/** The line and the cursor as a Tab leaves them, the cursor shown as `|`. */
+const tab = async (shell: TestShell, line: string, point?: number) => {
+  const result = await shell.completeTab(line, point);
+
+  return `${result.line.slice(0, result.point)}|${result.line.slice(result.point)}`;
+};
+
+// What each Tab leaves was read from an interactive bash 5.2 given the same files and keys
+Deno.test('a Tab, as readline does it', async (t) => {
+  await t.step('one file goes in with a space after it, a directory with a slash', async () => {
+    const shell = filesShell();
+
+    assertEquals(await tab(shell, 'ls al'), 'ls alpha.txt |');
+    assertEquals(await tab(shell, 'ls src'), 'ls src/|');
+  });
+
+  await t.step('of several, the prefix they share, and the bell', async () => {
+    const result = await filesShell().completeTab('ls s');
+
+    assertEquals(result, { line: 'ls sr', point: 5, bell: true });
+  });
+
+  await t.step('a file name is quoted after backslashes, or in the quote it was begun in', async () => {
+    const shell = filesShell();
+
+    assertEquals(await tab(shell, 'ls my\\ f'), 'ls my\\ file |');
+    assertEquals(await tab(shell, 'ls "my f'), 'ls "my file" |');
+    assertEquals(await tab(shell, "ls 'my d"), "ls 'my dir'/|");
+    assertEquals(await tab(shell, 'ls x'), 'ls x\\=y |');
+    assertEquals(await tab(shell, 'ls it'), "ls it\\'s |");
+  });
+
+  await t.step('the Tab that lists shows each file by its last part, a directory with its slash', async () => {
+    const shell = filesShell();
+
+    assertEquals(await shell.completeTab('ls s', undefined, true), { line: 'ls s', point: 4, list: ['src/', 'srv/'], widest: 3, bell: false });
+    assertEquals((await shell.completeTab('ls src/', undefined, true)).list, ['a.ts', 'b.ts']);
+  });
+
+  await t.step('in the middle of the line nothing goes after the match', async () => {
+    const shell = filesShell();
+
+    await shell.runAndCapture('complete -W "alpha beta" foo');
+
+    assertEquals(await tab(shell, 'foo al', 5), 'foo alpha|l');
+  });
+
+  await t.step('a variable name after $, a slash after one naming a directory', async () => {
+    assertEquals(await tab(filesShell(), 'echo "$HOM'), 'echo "$HOME"/|');
+  });
+
+  await t.step('a command name where a command goes, a directory where none matches', async () => {
+    const shell = filesShell();
+
+    await shell.runAndCapture('pet() { :; }');
+
+    assertEquals(await tab(shell, 'pe'), 'pet |');
+    assertEquals(await tab(shell, 'x; ech'), 'x; echo |');
+    assertEquals(await tab(shell, 'my'), 'my\\ dir/|');
+  });
+
+  await t.step('a glob that names one file is replaced by it', async () => {
+    assertEquals(await tab(filesShell(), 'ls *.txt'), 'ls alpha.txt |');
+  });
+
+  await t.step('a specification: its words, -o nospace, -o filenames, -o default when it has none', async () => {
+    const shell = filesShell();
+
+    await shell.runAndCapture('complete -o nospace -W "alpha beta" ns; complete -o filenames -W "src my\\ dir" fn; complete -o default -W "alpha" df; complete -W "alpha" nd');
+
+    assertEquals(await tab(shell, 'ns a'), 'ns alpha|');
+    assertEquals(await tab(shell, 'fn s'), 'fn src/|');
+    assertEquals(await tab(shell, 'df m'), 'df my\\ |');
+    assertEquals(await shell.completeTab('nd m'), { line: 'nd m', point: 4, bell: true });
   });
 });

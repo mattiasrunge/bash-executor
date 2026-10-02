@@ -22,8 +22,12 @@ export type EditorResult =
   | { kind: 'eof' }
   /** `C-c`: the line is dropped */
   | { kind: 'interrupt' }
-  /** Tab: the host completes the word, `again` when the key before was Tab too */
-  | { kind: 'complete'; again: boolean }
+  /**
+   * Tab: the host completes the word (`AstExecutor.completeTab`) and hands the
+   * line back with `completed`; `list` when the key before was a Tab that
+   * changed nothing, which lists the matches instead, as readline does
+   */
+  | { kind: 'complete'; list: boolean }
   /** `C-l`: the screen cleared, the line shown again on it */
   | { kind: 'clear' }
   /** Nothing to do for it: the start of the history, a search that failed */
@@ -138,6 +142,8 @@ export class LineEditor {
   private killed = '';
   private lastKilled = false;
   private lastKey = '';
+  /** Whether the last Tab's completion changed the line */
+  private completionChanged = false;
   /** C-v: the next key goes in as it is */
   private quoting = false;
   /** C-o: the number of the entry to bring back once the line has run */
@@ -181,10 +187,16 @@ export class LineEditor {
     }
   }
 
-  /** Put a line in, the cursor where it says or at its end: a completion made. */
+  /** Put a line in, the cursor where it says or at its end. */
   setLine(line: string, point: number = line.length): void {
     this.line = line;
     this.point = Math.max(0, Math.min(point, line.length));
+  }
+
+  /** The line as a Tab's completion leaves it; one that changed nothing lets the next Tab list. */
+  completed(line: string, point: number = line.length): void {
+    this.completionChanged = line !== this.line;
+    this.setLine(line, point);
   }
 
   /** What to show for `prompt`: it, or the search's own while one goes on. */
@@ -355,8 +367,13 @@ export class LineEditor {
         return { kind: 'bell' };
       case '\x0c':
         return { kind: 'clear' };
-      case '\t':
-        return { kind: 'complete', again: previous === '\t' };
+      case '\t': {
+        const list = previous === '\t' && !this.completionChanged;
+
+        this.completionChanged = false;
+
+        return { kind: 'complete', list };
+      }
       default:
         // Another control character or sequence is no key bound here
         if (key.startsWith('\x1b') || (key.length === 1 && key.charCodeAt(0) < 0x20)) return { kind: 'bell' };
