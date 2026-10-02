@@ -19,6 +19,8 @@ export type FunctionDef = {
   definition?: FunctionDefinition;
   /** `readonly -f name`: it can be neither defined again nor unset. */
   readonly?: boolean;
+  /** `declare -ft name`: traced, it inherits the DEBUG and RETURN traps as `set -T` makes every function do. */
+  traced?: boolean;
 };
 
 /**
@@ -42,6 +44,13 @@ export type GetoptsState = { curopt: number; charindex: number };
  * A Unicode noncharacter, which no text holds.
  */
 export const QUOTED_LIST_MARK = '\uFDD2';
+
+/**
+ * What a closed stdin, stdout or stderr points at, `cmd >&-`: no pipe and no
+ * file. Writing to it fails, as bash's `write error: Bad file descriptor`; a
+ * host that is handed it for a command's stdio gives it nothing there.
+ */
+export const CLOSED_FD = '\uFDD6';
 
 /** What a variable holds: a string, an indexed array or an associative one. */
 export type VariableKind = 'scalar' | 'array' | 'assoc';
@@ -998,6 +1007,16 @@ export interface ExecContextIf {
    * put a variable — or undefined outside any function.
    */
   getFunctionScope: () => ExecContextIf | undefined;
+  /** A command's temporary assignment to `name` handed on to the variable it hid, as a POSIX special builtin's is. */
+  propagateTemporary?: (name: string) => void;
+  /** Make the shell interactive, or not: `$-` has `i`, and `&` under job control says `[1] pid`. */
+  setInteractive?: (on: boolean) => void;
+  /** Whether the shell is an interactive one. */
+  isInteractive?: () => boolean;
+  /** The signals the shell was started ignoring, by trap name (`SIGUSR2`): they stay ignored, whatever `trap` says. */
+  setIgnoredOnEntry?: (names: string[]) => void;
+  /** What a command's temporary assignment gives `name`, `x=1 f`, where that is the x seen; else undefined. */
+  temporaryValue?: (name: string) => string | undefined;
 
   /**
    * Set a variable as a plain `name=value` does: in the environment when it is

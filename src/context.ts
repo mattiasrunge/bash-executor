@@ -194,6 +194,8 @@ export class ExecContext implements ExecContextIf {
 
     // …and `trap` in it lists the shell's, until it sets one of its own
     ctx.inheritedTraps = this.getListedTraps();
+    ctx.ignoredOnEntry = this.root().ignoredOnEntry;
+    ctx.interactive = this.root().interactive;
 
     // Copy directory stack
     for (const dir of this.getDirStack().reverse()) {
@@ -1139,6 +1141,9 @@ export class ExecContext implements ExecContextIf {
       return;
     }
 
+    // One the shell was started ignoring stays ignored, as bash keeps it
+    if (this.ignoredOnEntry?.has(name)) return;
+
     this.inheritedTraps = undefined;
 
     if (action === null) {
@@ -1146,6 +1151,29 @@ export class ExecContext implements ExecContextIf {
     } else {
       this.traps[name] = action;
     }
+  }
+
+  /** Whether this is an interactive shell, as `$-`'s `i` says. */
+  private interactive = false;
+
+  /** Make the shell an interactive one, or not: `$-` has `i`, and `&` with job control says `[1] pid`. */
+  setInteractive(on: boolean): void {
+    this.root().interactive = on;
+  }
+
+  isInteractive(): boolean {
+    return this.root().interactive;
+  }
+
+  /** Signals ignored when the shell started: a non-interactive shell can neither trap nor reset them. */
+  private ignoredOnEntry?: Set<string>;
+
+  /** The shell was started with these signals ignored, by their trap names, `SIGUSR2`: they stay ignored. */
+  setIgnoredOnEntry(names: string[]): void {
+    const root = this.root();
+
+    for (const name of names) root.traps[name] = '';
+    root.ignoredOnEntry = new Set(names);
   }
 
   getTraps(): Record<string, string> {
@@ -1354,5 +1382,32 @@ export class ExecContext implements ExecContextIf {
     }
 
     return '#' in this.special ? this : this.parent.getFunctionScope();
+  }
+
+  /**
+   * `x=1 f`, and in f a POSIX special builtin assigning x, `x=2 return`: the
+   * value goes on to the x the command's temporary one stood in front of, and
+   * outlasts the call. A function's `local x` keeps it.
+   */
+  /** The value a command's temporary assignment gives `name`, `x=1 f`, when that is what it sees; else undefined. */
+  temporaryValue(name: string): string | undefined {
+    const found = this.lookup(this.ref(name));
+
+    if (!found?.scope.parent || '#' in found.scope.special || found.variable.kind !== 'scalar') return undefined;
+
+    return found.variable.value === undefined ? undefined : String(found.variable.value);
+  }
+
+  propagateTemporary(name: string): void {
+    const target = this.ref(name);
+    const found = this.lookup(target);
+
+    if (!found?.scope.parent || '#' in found.scope.special) return;
+
+    // The variable as it stands, attributes and all, where the name lives without it
+    const { variable } = found;
+    const value = Array.isArray(variable.value) ? [...variable.value] : typeof variable.value === 'object' ? { ...variable.value } : variable.value;
+
+    found.scope.parent.ownerOf(target).vars.set(target, { ...variable, value, attrs: new Set(variable.attrs) });
   }
 }

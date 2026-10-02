@@ -236,7 +236,9 @@ function groupEnd(pattern: string, open: number): number {
     } else if (c === '[') {
       const bracket = bracketExpression(pattern, i);
 
-      if (bracket) i = bracket.end;
+      // A `[` that no `]` closes reads on to the end, as bash's patscan has it: the group never closes
+      if (!bracket) return -1;
+      i = bracket.end;
     } else if (c === '(') {
       depth++;
     } else if (c === ')' && --depth === 0) {
@@ -502,6 +504,81 @@ export function posixRegexToSource(regex: string): string {
     } else {
       out += c;
     }
+  }
+
+  return out;
+}
+
+/** The characters special in a POSIX extended regular expression, which a quoted one is escaped from. */
+const ERE_CHARS = '.[\\()*+?{|^$';
+
+/**
+ * The text of `[[ =~ ]]`'s right side as the expression it is, the way bash's
+ * quote_string_for_globbing makes it: a quoted character that is special to
+ * a regular expression is escaped with a backslash, any other one is itself —
+ * and inside a bracket expression a quoted character is copied as it is, no
+ * backslash, there being none that means anything there: `['a]']` is `[a]]`.
+ */
+export function quoteRegexWord(chars: { char: string; quoted: boolean }[]): string {
+  let out = '';
+
+  for (let i = 0; i < chars.length; i++) {
+    const { char, quoted } = chars[i];
+
+    if (quoted) {
+      out += ERE_CHARS.includes(char) ? `\\${char}` : char;
+      continue;
+    }
+
+    if (char !== '[') {
+      out += char;
+      continue;
+    }
+
+    // A bracket expression, up to the first unquoted `]` that is not its first member
+    const plain = (k: number, c: string) => k < chars.length && !chars[k].quoted && chars[k].char === c;
+    let body = '[';
+    let k = i + 1;
+
+    if (plain(k, '^')) body += chars[k++].char;
+    if (plain(k, ']')) body += chars[k++].char;
+
+    let closed = false;
+    let inner: string | undefined;
+
+    for (; k < chars.length; k++) {
+      const c = chars[k];
+
+      if (!c.quoted && inner === undefined && c.char === ']') {
+        closed = true;
+        break;
+      }
+
+      // `[:alpha:]`, `[=a=]`, `[.a.]` keep their `]`
+      if (!c.quoted && c.char === '[' && k + 1 < chars.length && ':=.'.includes(chars[k + 1].char) && !chars[k + 1].quoted) {
+        inner = chars[k + 1].char;
+        body += c.char + chars[++k].char;
+        if (inner !== ':' && plain(k + 1, ']')) body += chars[++k].char;
+        continue;
+      }
+
+      if (inner !== undefined && !c.quoted && c.char === inner && plain(k + 1, ']')) {
+        body += c.char + chars[++k].char;
+        inner = undefined;
+        continue;
+      }
+
+      body += c.char;
+    }
+
+    // With no `]` to close it the `[` is no bracket expression, and the rest is read as anything else
+    if (!closed) {
+      out += '[';
+      continue;
+    }
+
+    out += `${body}]`;
+    i = k;
   }
 
   return out;

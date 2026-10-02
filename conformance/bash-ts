@@ -25,6 +25,16 @@ case "$SELF" in
 esac
 
 HERE=${SELF%/*}
+
+# The descriptors above 2 this shell was started with, `bash-ts 3<&0`: the
+# only ones a script may find open without opening them. Deno has its own,
+# which a script's `>&9` must not reach. Tested, not listed: a listing would
+# open a descriptor of its own
+BASH_TS_FDS=
+for fd in 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+  [ -e "/proc/$$/fd/$fd" ] && BASH_TS_FDS="$BASH_TS_FDS $fd"
+done
+export BASH_TS_FDS
 BASH_TS_SELF="${HERE}/bash-ts"
 export BASH_TS_SELF
 if [ -x "${HERE}/.cache/bash-ts-bin" ]; then

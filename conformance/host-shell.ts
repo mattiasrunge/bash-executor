@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { isAbsolute, join, resolve } from '@std/path';
+import { isAbsolute, join } from '@std/path';
 import type { CpuTimes, DirectoryEntry, ExecCommandOptions, ExecContextIf, JobHandle, JobHostIf, PathTestOperation, ShellIf } from '../mod.ts';
-import { encodeShellText } from '../mod.ts';
+import { CLOSED_FD, encodeShellText } from '../mod.ts';
 import { globToRegexSource } from '../src/pattern.ts';
 import { PipeBuffer } from '../test/lib/pipe-buffer.ts';
 
@@ -217,8 +217,9 @@ export class RealShell implements ShellIf {
     this.background.add(tracked);
   }
 
+  /** A path the script names, against its working directory: as written, `dir/.` going through dir as the kernel does. */
   private path(ctx: ExecContextIf, path: string): string {
-    return isAbsolute(path) ? path : resolve(ctx.getCwd(), path);
+    return isAbsolute(path) ? path : `${ctx.getCwd().replace(/\/$/, '')}/${path}`;
   }
 
   private async error(message: string): Promise<void> {
@@ -267,7 +268,7 @@ export class RealShell implements ShellIf {
       try {
         const stat = await Deno.stat(candidate);
 
-        if (stat.isFile && ((stat.mode ?? 0) & 0o111)) {
+        if (stat.isFile && executable(stat)) {
           found.push(candidate);
         }
       } catch {
@@ -288,7 +289,9 @@ export class RealShell implements ShellIf {
     const path = await this.which(ctx, name);
 
     if (!path) {
-      const missing = name.includes('/') ? 'No such file or directory' : 'command not found';
+      // An empty PATH is the current directory, and bash says what it says of a path
+      const empty = (ctx.getEnv().PATH ?? ctx.getParams().PATH) === '';
+      const missing = name.includes('/') || empty ? 'No such file or directory' : 'command not found';
 
       await this.writeTo(ctx.getStderr(), `${this.where(ctx)}${name}: ${missing}\n`);
 
@@ -333,12 +336,41 @@ export class RealShell implements ShellIf {
       return await this.spawn(ctx, name, path, args, true, opts);
     }
 
-    const [program, argv] = viaSelf
+    let [program, argv] = viaSelf
       // Its $0 is the name as written, `./script`, or the path PATH found it at
       ? [this.opts.selfCommand[0], [...this.opts.selfCommand.slice(1), name.includes('/') ? name : path, ...args]]
       : launch === 'binary'
       ? [this.opts.execAs!, [opts.argv0 ?? name, path, ...args]]
       : [path, args];
+
+    // What Deno cannot do for the child, exec-as does: a closed stdin, stdout
+    // or stderr closed, and a descriptor above 2 that is one of those three,
+    // `bash-ts 3<&0`, made a copy of it
+    const fdPlan: string[] = [];
+    const std = [stdin, stdout, stderr];
+
+    std.forEach((target, fd) => {
+      if (target === CLOSED_FD) fdPlan.push(`-${fd}`);
+    });
+
+    for (let fd = 3; fd < 10; fd++) {
+      const target = ctx.getFd(String(fd));
+      const same = target === undefined || target === CLOSED_FD ? -1 : std.indexOf(target);
+
+      if (same !== -1) fdPlan.push(`${fd}=${same}`);
+    }
+
+    // What the shell ignores, `trap '' USR2`, its children start ignoring
+    for (const [name, action] of Object.entries(ctx.getTraps())) {
+      const number = action === '' ? SIGNALS[name] : undefined;
+
+      if (number !== undefined) fdPlan.push(`!${number}`);
+    }
+
+    if (fdPlan.length > 0 && this.opts.execAs && program !== this.opts.execAs) {
+      argv = [program, program, ...argv];
+      program = this.opts.execAs;
+    }
 
     try {
       Deno.umask(ctx.getUmask());
@@ -346,11 +378,19 @@ export class RealShell implements ShellIf {
         args: argv,
         cwd: ctx.getCwd(),
         // Deno cannot set a child's argv[0]; bash-ts takes it from the environment
-        env: { ...(opts.clearEnv ? {} : ctx.getEnv()), ...this.opts.hostEnv, ...(opts.argv0 === undefined ? {} : { BASH_TS_ARGV0: opts.argv0 }) },
+        env: {
+          ...(opts.clearEnv ? {} : ctx.getEnv()),
+          ...this.opts.hostEnv,
+          ...(opts.argv0 === undefined ? {} : { BASH_TS_ARGV0: opts.argv0 }),
+          ...(fdPlan.length > 0 ? { BASH_TS_FDPLAN: fdPlan.join(' ') } : {}),
+          // A script with no `#!` line is bash again, its shopt options reset — but
+          // for globskipdots, which bash's reset leaves as the shell had it
+          ...(viaSelf && !ctx.getShellOption('globskipdots') ? { BASH_TS_GLOBSKIPDOTS: 'off' } : {}),
+        },
         clearEnv: true,
-        stdin: stdin === '0' ? 'inherit' : 'piped',
-        stdout: stdout === '1' ? 'inherit' : 'piped',
-        stderr: stderr === '2' ? 'inherit' : 'piped',
+        stdin: stdin === CLOSED_FD ? 'null' : stdin === '0' ? 'inherit' : 'piped',
+        stdout: stdout === CLOSED_FD ? 'null' : stdout === '1' ? 'inherit' : 'piped',
+        stderr: stderr === CLOSED_FD ? 'null' : stderr === '2' ? 'inherit' : 'piped',
         signal: ctx.getAbortSignal(),
       }).spawn();
     } catch (err) {
@@ -382,13 +422,13 @@ export class RealShell implements ShellIf {
     // with a coprocess's, leaves the rest in the pipe for whoever reads next
     const exited = new AbortController();
 
-    if (stdin !== '0') {
+    if (stdin !== '0' && stdin !== CLOSED_FD) {
       pumps.push(this.pumpIn(stdin, child.stdin, exited.signal));
     }
-    if (stdout !== '1') {
+    if (stdout !== '1' && stdout !== CLOSED_FD) {
       pumps.push(this.pumpOut(child.stdout, stdout));
     }
-    if (stderr !== '2') {
+    if (stderr !== '2' && stderr !== CLOSED_FD) {
       pumps.push(this.pumpOut(child.stderr, stderr));
     }
 
@@ -561,9 +601,26 @@ export class RealShell implements ShellIf {
   private inherited(name: string): boolean {
     if (!/^\d+$/.test(name) || Number(name) < 3) return false;
 
-    const path = `/proc/self/fd/${name}`;
+    // Only one the wrapper found open, BASH_TS_FDS: deno's own are none of the script's
+    const started = Deno.env.get('BASH_TS_FDS');
 
-    for (const options of [{ read: true, write: true }, { read: true }, { write: true }]) {
+    if (started !== undefined && !started.split(' ').includes(name)) return false;
+
+    const path = `/proc/self/fd/${name}`;
+    // Opened again as it is open already: a pipe's read end opened read-write as
+    // well would be a writer of its own, and the pipe would never end
+    let info: string;
+
+    try {
+      info = Deno.readTextFileSync(`/proc/self/fdinfo/${name}`);
+    } catch {
+      return false;
+    }
+
+    const access = Number.parseInt(info.match(/^flags:\s*([0-7]+)/m)?.[1] ?? '2', 8) & 3;
+    const modes = access === 0 ? [{ read: true }] : access === 1 ? [{ write: true }] : [{ read: true, write: true }, { read: true }, { write: true }];
+
+    for (const options of modes) {
       try {
         this.files.set(name, { file: Deno.openSync(path, options) });
         return true;
@@ -936,4 +993,16 @@ export function globSegmentToRegex(segment: string): RegExp | null {
   } catch {
     return null;
   }
+}
+
+/** Whether this user may run the file: the owner's x bit for the owner, the group's or others' for the rest. */
+function executable(stat: Deno.FileInfo): boolean {
+  const mode = stat.mode ?? 0;
+  const uid = Deno.uid();
+
+  if (uid === 0) return (mode & 0o111) !== 0;
+  if (stat.uid === uid) return (mode & 0o100) !== 0;
+  if (stat.gid === Deno.gid()) return (mode & 0o010) !== 0;
+
+  return (mode & 0o001) !== 0;
 }

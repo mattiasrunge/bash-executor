@@ -56,22 +56,29 @@ async function sourceAs(
 
   // Not on PATH is the end of a POSIX shell, as any error in a special builtin
   if (name === undefined) {
-    return { code: makeExitSignal(1), stderr: `.: ${filename}: file not found\n` };
+    return { code: makeExitSignal(1), stderr: `.: ${filename}: file not found\n`, specialError: true };
   }
 
   let content: string;
 
-  try {
-    if (!shell.readFile) {
-      throw new Error(`'could not read file, readFile is not defined in shell`);
-    }
+  // `. /dev/stdin` reads what the shell's stdin holds, a pipe as like as a file
+  const descriptor = name === '/dev/stdin' ? '0' : name.match(/^\/dev\/fd\/(\d+)$/)?.[1];
 
-    content = await shell.readFile(ctx, name);
+  try {
+    if (descriptor !== undefined) {
+      content = await shell.pipeRead(descriptor === '0' ? ctx.getStdin() : ctx.getFd(descriptor) ?? descriptor);
+    } else {
+      if (!shell.readFile) {
+        throw new Error(`'could not read file, readFile is not defined in shell`);
+      }
+
+      content = await shell.readFile(ctx, name);
+    }
   } catch (error) {
     // A file that cannot be read is said the way bash says it, and ends a POSIX shell
     const status = ctx.getShellOption('posix') ? makeExitSignal(1) : 1;
 
-    if (error instanceof Deno.errors.IsADirectory) return { code: status, stderr: `source: ${filename}: is a directory\n` };
+    if (error instanceof Deno.errors.IsADirectory) return { code: status, stderr: `${command}: ${filename}: is a directory\n`, specialError: true };
 
     const reason = error instanceof Deno.errors.NotFound
       ? 'No such file or directory'
@@ -81,7 +88,7 @@ async function sourceAs(
       ? error.message.split('\n')[0]
       : String(error);
 
-    return { code: status, stderr: `${filename}: ${reason}\n` };
+    return { code: status, stderr: `${filename}: ${reason}\n`, specialError: true };
   }
 
   // Arguments are the file's positional parameters while it runs; without
@@ -109,7 +116,8 @@ async function sourceAs(
 
     throw error;
   } finally {
-    if (saved) setPositional(ctx, saved);
+    // …unless the file set them itself, `set -- x` or `shift`, which then stand
+    if (saved && positional(ctx).join('\0') === params.join('\0') && positional(ctx).length === params.length) setPositional(ctx, saved);
   }
 }
 

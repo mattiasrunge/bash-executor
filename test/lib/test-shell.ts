@@ -440,7 +440,11 @@ export class TestShell implements ShellIf {
   /**
    * Only EXISTS is answered, which is all `set -C` asks about.
    */
-  async testPath(_ctx: ExecContextIf, path: string, op: string): Promise<boolean> {
+  async testPath(ctx: ExecContextIf, path: string, op: string): Promise<boolean> {
+    // A relative path is the working directory's, as a host takes it; a file
+    // named on its own is the mock's under its name as well
+    if (!path.startsWith('/') && path.includes('/') && !this.files.has(path)) path = `${ctx.getCwd().replace(/\/$/, '')}/${path}`;
+
     // A directory is one a file is in, or one every system has
     const directory = path === '/' || path === '/tmp' || path === '/dev' || [...this.files.keys()].some((file) => file.startsWith(`${path}/`));
 

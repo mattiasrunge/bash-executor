@@ -36,5 +36,19 @@ export function syntaxErrorLines(err: BashSyntaxError, source: string): { line: 
     return { line, lines: [`unexpected EOF while looking for matching \`${detail.closer}'`] };
   }
 
+  if (detail?.kind === 'arithmeticFor') {
+    return { line: row, lines: [`syntax error: ${detail.problem}`, `syntax error: \`${detail.text}'`] };
+  }
+
   return { line: row, lines: [`syntax error: ${err.message.split('\n')[0]}`] };
+}
+
+/**
+ * What bash warns of before such an error: each here-document the input
+ * ended inside of, said on the line the input ended on.
+ */
+export function syntaxErrorWarnings(err: BashSyntaxError): { line: number; text: string }[] {
+  const documents = (err as BashSyntaxError & { unterminatedHereDocuments?: { delimiter: string; line: number; endLine: number }[] }).unterminatedHereDocuments ?? [];
+
+  return documents.map((doc) => ({ line: doc.endLine, text: `warning: here-document at line ${doc.line} delimited by end-of-file (wanted \`${doc.delimiter}')` }));
 }

@@ -230,6 +230,12 @@ class Evaluation {
   private previous: Token = { kind: 'eof' };
   /** Inside the branch `&&`, `||` or `?:` does not take: parsed, not run */
   private noeval = 0;
+  /**
+   * The subscript an element's value was read with, which storing to it uses
+   * again, as bash's lvalue keeps it: `a[RANDOM]++` is one element. A plain
+   * `a[n]=…` reads nothing, and its subscript is worked out after the value.
+   */
+  private readSubscripts = new WeakMap<Token, string | undefined>();
 
   constructor(private readonly text: string, private readonly vars: ArithVariables, private readonly depth: number) {}
 
@@ -609,6 +615,8 @@ class Evaluation {
     const subscript = await this.subscriptOf(token);
     const text = await this.vars.get(token.name, subscript);
 
+    this.readSubscripts.set(token, subscript);
+
     if (text === undefined) {
       if (this.vars.nounset()) throw new UnboundVariableError(subscript === undefined ? token.name : `${token.name}[${subscript}]`);
       return 0n;
@@ -625,7 +633,9 @@ class Evaluation {
 
     if (this.vars.readonly(token.name)) throw new ReadonlyVariableError(token.name);
 
-    await this.vars.set(token.name, await this.subscriptOf(token), String(value));
+    const subscript = this.readSubscripts.has(token) ? this.readSubscripts.get(token) : await this.subscriptOf(token);
+
+    await this.vars.set(token.name, subscript, String(value));
   }
 
   /** An indexed array's subscript is arithmetic, evaluated here; an associative one is its key. Either is expanded first. */

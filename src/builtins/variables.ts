@@ -208,9 +208,13 @@ export const unsetBuiltin: BuiltinHandler = async (ctx, args, _shell, _io, servi
       }
 
       // `@` and `*` are keys of an associative array like any other; of an
-      // indexed one, every element, which leaves it empty, as bash 5.2 has it
+      // indexed one, every element, which leaves it empty, as bash 5.2 has it.
+      // Up to BASH_COMPAT=51 they unset the array itself
       if (element.subscript === '@' || element.subscript === '*') {
-        if (ctx.getAssoc(element.name)) ctx.unsetAssocElement(element.name, element.subscript);
+        const compat = String(ctx.getParams().BASH_COMPAT ?? '').replace('.', '');
+
+        if (/^[1-9][0-9]$/.test(compat) && Number(compat) <= 51) ctx.unsetVariable(element.name);
+        else if (ctx.getAssoc(element.name)) ctx.unsetAssocElement(element.name, element.subscript);
         else if (ctx.getArray(element.name)) ctx.setArray(element.name, []);
         continue;
       }

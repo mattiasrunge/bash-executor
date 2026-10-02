@@ -45,11 +45,19 @@ export function makeExitSignal(code: number): number {
 export const exitBuiltin: BuiltinHandler = async (ctx, args) => {
   let exitCode = 0;
 
+  if (args[0] === '--') args = args.slice(1);
+
+  // A bad argument ends the shell all the same, as bash's get_exitstat: 2 for
+  // one that is no number, 1 for more than one
+  if (args.length > 1) {
+    return { code: makeExitSignal(1), stderr: 'exit: too many arguments\n' };
+  }
+
   if (args.length > 0) {
-    const parsed = Number.parseInt(args[0], 10);
+    const parsed = /^\s*[-+]?\d+\s*$/.test(args[0]) ? Number.parseInt(args[0], 10) : NaN;
     if (Number.isNaN(parsed)) {
       return {
-        code: 2,
+        code: makeExitSignal(2),
         stderr: `exit: ${args[0]}: numeric argument required\n`,
       };
     }

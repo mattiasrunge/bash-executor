@@ -56,22 +56,26 @@ export const ulimitBuiltin: BuiltinHandler = (ctx: ExecContextIf, args: string[]
   let all = false;
   const wanted: { resource: Resource; value?: string }[] = [];
 
-  for (let i = 0; i < args.length; i++) {
+  // A limit with no resource named is the file size one; one after the options, the last one named's
+  const limitFor = (value: string) => {
+    if (wanted.length === 0) wanted.push({ resource: RESOURCES.find((r) => r.letter === 'f')! });
+    wanted[wanted.length - 1].value = value;
+  };
+  let i = 0;
+
+  for (; i < args.length; i++) {
     const arg = args[i];
 
     if (arg === '--') {
-      if (i + 1 < args.length) wanted.push({ resource: RESOURCES.find((r) => r.letter === 'f')!, value: args[i + 1] });
+      i++;
       break;
     }
 
-    if (!arg.startsWith('-') || arg === '-') {
-      // A limit with no resource named is the file size one
-      if (wanted.length === 0) wanted.push({ resource: RESOURCES.find((r) => r.letter === 'f')! });
-      wanted[wanted.length - 1].value = arg;
-      continue;
-    }
+    if (!arg.startsWith('-') || arg === '-') break;
 
-    for (const letter of arg.slice(1)) {
+    for (let j = 1; j < arg.length; j++) {
+      const letter = arg[j];
+
       if (letter === 'H') hard = true;
       else if (letter === 'S') soft = true;
       else if (letter === 'a') all = true;
@@ -80,10 +84,26 @@ export const ulimitBuiltin: BuiltinHandler = (ctx: ExecContextIf, args: string[]
 
         if (!resource) return Promise.resolve({ code: 2, stderr: `ulimit: -${letter}: invalid option\n${USAGE}` });
 
-        wanted.push({ resource });
+        // Its limit, as getopt's optional argument: the rest of the word, or the next word unless an option
+        const rest = arg.slice(j + 1);
+        const next = args[i + 1];
+
+        if (rest !== '') {
+          wanted.push({ resource, value: rest });
+          break;
+        }
+
+        if (next !== undefined && !next.startsWith('-')) {
+          wanted.push({ resource, value: next });
+          i++;
+        } else {
+          wanted.push({ resource });
+        }
       }
     }
   }
+
+  if (i < args.length) limitFor(args[i]);
 
   const shown = (resource: Resource) => {
     const limit = limitOf(ctx, resource);

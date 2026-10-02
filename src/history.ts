@@ -126,7 +126,7 @@ export class History {
   }
 
   /** add_history: a new entry at the end, the oldest dropped past the limit. */
-  add(line: string, time = Math.floor(Date.now() / 1000)): void {
+  add(line: string, time: number = Math.floor(Date.now() / 1000)): void {
     if (this.max !== undefined && this.max <= 0) return;
 
     if (this.max !== undefined && this.entries.length >= this.max) {

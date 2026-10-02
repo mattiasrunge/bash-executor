@@ -332,6 +332,9 @@ class Declaration {
       return;
     }
 
+    // `x=4 f`, and in f `local x`: the local starts with the value the call gave x, as bash's does
+    const temporary = local && !own && !assigning && subscript === undefined ? target.temporaryValue?.(name) : undefined;
+
     // Make it, of the kind asked for, and set its attributes
     const kind = on.has('A') ? 'assoc' : on.has('a') || subscript !== undefined ? (info?.kind === 'assoc' ? 'assoc' : 'array') : undefined;
 
@@ -343,6 +346,11 @@ class Declaration {
     });
 
     info = local ? target.getOwnVariables()[name] : target.getVariable(name);
+
+    if (temporary !== undefined && info?.kind === 'scalar') {
+      await this.assign(target, name, info, { subscript, value: temporary, append: false, compound: false, quotedList: false, creatingArray, arrayExists });
+      return;
+    }
 
     if (!assigning) return;
 
@@ -638,7 +646,8 @@ async function functionsListing(ctx: ExecContextIf): Promise<string> {
 
 /**
  * `-f` prints functions as bash would read them back, `-F` only their names:
- * the ones named, or all of them sorted. A name that is no function fails quietly.
+ * the ones named, or all of them sorted. A name that is no function fails, quietly but
+ * under -p.
  */
 async function declareFunctions(command: Command, ctx: ExecContextIf, opts: Options, names: string[]): Promise<BuiltinResult> {
   // A function takes only -r, -t and -x of the attributes
@@ -665,6 +674,18 @@ async function declareFunctions(command: Command, ctx: ExecContextIf, opts: Opti
     if (stderr || !(opts.on.has('x') || opts.off.has('x'))) return stderr ? { code: 1, stderr } : { code: 0 };
   }
 
+  // `declare -ft name`: traced, it inherits the DEBUG and RETURN traps
+  if (names.length && (opts.on.has('t') || opts.off.has('t'))) {
+    let stderr = '';
+
+    for (const name of names) {
+      if (!functions[name]) stderr += `${command}: ${name}: not found\n`;
+      else functions[name].traced = opts.on.has('t');
+    }
+
+    if (stderr || !(opts.on.has('x') || opts.off.has('x'))) return stderr ? { code: 1, stderr } : { code: 0 };
+  }
+
   const exporting = opts.on.has('x') || opts.off.has('x');
 
   // `declare -fx name` exports it, as `export -f name` does
@@ -672,11 +693,12 @@ async function declareFunctions(command: Command, ctx: ExecContextIf, opts: Opti
 
   const env = ctx.getEnv();
   const exported = (name: string) => functionEnvName(name) in env;
-  const attributes = (name: string) => `f${functions[name]?.readonly ? 'r' : ''}${exported(name) ? 'x' : ''}`;
+  const attributes = (name: string) => `f${functions[name]?.readonly ? 'r' : ''}${functions[name]?.traced ? 't' : ''}${exported(name) ? 'x' : ''}`;
   // `declare -xF` lists the exported ones only, `declare -Fr` and `readonly -f` the readonly ones
   const listing = names.length === 0;
   const chosen = listing ? Object.keys(functions).sort().filter((name) => (!opts.on.has('x') || exported(name)) && (!opts.on.has('r') || functions[name].readonly)) : names;
   let output = '';
+  let stderr = '';
   let code = 0;
 
   for (const name of chosen) {
@@ -684,7 +706,9 @@ async function declareFunctions(command: Command, ctx: ExecContextIf, opts: Opti
     const declaration = `declare -${attributes(name)} ${name}\n`;
 
     if (!fn) {
+      // Quietly but under -p, which says so
       code = 1;
+      if (opts.print) stderr += `${command}: ${name}: not found\n`;
     } else if (opts.on.has('F')) {
       output += listing ? declaration : `${name}\n`;
     } else {
@@ -693,7 +717,7 @@ async function declareFunctions(command: Command, ctx: ExecContextIf, opts: Opti
     }
   }
 
-  return { code, stdout: output };
+  return { code, stdout: output, stderr: stderr || undefined };
 }
 
 export const declareBuiltin: BuiltinHandler = (ctx, args, _shell, _execute, services) => declareCommand('declare', ctx, args, services);

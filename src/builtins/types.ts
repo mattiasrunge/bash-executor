@@ -18,6 +18,11 @@ export type BuiltinResult = {
    * Written before `stdout` and `stderr`.
    */
   output?: { stdout?: string; stderr?: string }[];
+  /**
+   * The code is a special builtin's error ending a POSIX shell, not an `exit`
+   * it ran: `command` keeps it from doing so, `command . notthere`.
+   */
+  specialError?: boolean;
 };
 
 /**

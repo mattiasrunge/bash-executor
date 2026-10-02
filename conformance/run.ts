@@ -23,6 +23,11 @@ const ROOT = join(HERE, '..');
 const CACHE = join(HERE, '.cache');
 const WORK = join(CACHE, 'work');
 const BASH_TS = join(HERE, 'bash-ts');
+/**
+ * What the scripts are given as THIS_SH: bash-ts under the name `bash`, as the
+ * tests expect of a shell they print the name of — `type`'s `hash -p /tmp/bash`
+ */
+const THIS_SH = join(CACHE, 'bin', 'bash');
 const REAL_BASH = '/bin/bash';
 
 type Config = {
@@ -264,7 +269,7 @@ async function stdoutTier(info: RunInfo, dir: string): Promise<StdoutTier> {
   }
 
   for (const test of info.tests) {
-    for (const [label, shell] of [['bash', REAL_BASH], ['ours', BASH_TS]] as const) {
+    for (const [label, shell] of [['bash', REAL_BASH], ['ours', THIS_SH]] as const) {
       const [cmd, args] = test.stdin ? timed('sh', ['-c', 'exec "$0" < "$1"', shell, `./${test.file}`]) : timed(shell, [`./${test.file}`]);
       const out = await run(cmd, args, { cwd: tests, env: suiteEnv(dir, shell) });
       const stdout = out.stdout + (isTimeout(out.code) ? '\n[timeout]\n' : '');
@@ -548,6 +553,9 @@ async function main(): Promise<number> {
     await Deno.remove(join(CACHE, 'bin-tmp'), { recursive: true }).catch(() => {});
     await Deno.mkdir(join(CACHE, 'bin-tmp'));
     await run(BASH_TS, ['-c', ':']);
+    await Deno.mkdir(join(CACHE, 'bin'), { recursive: true });
+    await Deno.remove(THIS_SH).catch(() => {});
+    await Deno.symlink(BASH_TS, THIS_SH);
 
     const runs = await listRuns(flags.only);
     const referencePath = join(CACHE, 'reference.json');
@@ -572,7 +580,7 @@ async function main(): Promise<number> {
       }
 
       const dir = await workspace('ours', info.name);
-      const ours = await upstream(info, dir, BASH_TS, { BASH_TS_GAPLOG: join(dir, 'gaps.jsonl'), BASH_TS_TEST: info.name });
+      const ours = await upstream(info, dir, THIS_SH, { BASH_TS_GAPLOG: join(dir, 'gaps.jsonl'), BASH_TS_TEST: info.name });
 
       gaps.push(...(await readGaps(dir)));
 

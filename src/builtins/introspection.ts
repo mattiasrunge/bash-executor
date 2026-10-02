@@ -309,14 +309,18 @@ export function createCommandBuiltin(registry: BuiltinRegistry): BuiltinHandler 
 
       // `command` keeps a special builtin's error from ending a POSIX shell:
       // `command return` outside a function fails, and the script goes on
-      if (cmdName === 'return' && isExitSignal(result.code)) return { ...result, code: getExitCode(result.code) };
+      if ((cmdName === 'return' || result.specialError) && isExitSignal(result.code)) return { ...result, code: getExitCode(result.code) };
 
       return result;
     }
 
     // Execute as external command, from the standard PATH with -p
     const path = stdPath && !cmdName.includes('/') ? (await lookupCommand(ctx, shell, cmdName, STANDARD_PATH))[0] : undefined;
-    const code = await shell.execute(ctx, path ?? cmdName, cmdArgs, {});
+
+    // Not on the standard PATH either, whatever PATH holds
+    if (stdPath && !cmdName.includes('/') && !path && shell.lookupCommand) return { code: 127, stderr: `${cmdName}: command not found\n` };
+    // Found on the standard PATH, it is still run by the name it was given: `$0` is `sh`
+    const code = await shell.execute(ctx, path ?? cmdName, cmdArgs, path ? { argv0: cmdName } : {});
     return { code };
   };
 }

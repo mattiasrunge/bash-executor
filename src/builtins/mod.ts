@@ -36,6 +36,7 @@ export {
   returnBuiltin,
 } from './exit.ts';
 export { createBuiltinBuiltin, createCommandBuiltin, createTypeBuiltin, lookupCommand } from './introspection.ts';
+export { createHelpBuiltin } from './help.ts';
 export { getoptsBuiltin } from './getopts.ts';
 export { createHashBuiltin } from './hash.ts';
 export { letBuiltin } from './let.ts';
@@ -70,6 +71,7 @@ import { createEnableBuiltin } from './enable.ts';
 import { evalBuiltin } from './eval.ts';
 import { exitBuiltin, returnBuiltin } from './exit.ts';
 import { createBuiltinBuiltin, createCommandBuiltin, createTypeBuiltin } from './introspection.ts';
+import { createHelpBuiltin } from './help.ts';
 import { getoptsBuiltin } from './getopts.ts';
 import { createHashBuiltin } from './hash.ts';
 import { letBuiltin } from './let.ts';
@@ -177,6 +179,7 @@ export function createBuiltinRegistry(): BuiltinRegistry {
 
   // The command history
   registry.set('history', historyBuiltin);
+  registry.set('help', createHelpBuiltin(registry));
   registry.set('fc', fcBuiltin);
 
   // Phase 4: Shell options

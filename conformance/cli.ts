@@ -22,6 +22,7 @@ import {
   SHELL_OPTION_FLAG_MAP,
   SIGNALS,
   syntaxErrorLines,
+  syntaxErrorWarnings,
 } from '../mod.ts';
 import { parse } from '@ein/bash-parser';
 import { logGap, RealShell } from './host-shell.ts';
@@ -37,6 +38,8 @@ type Invocation = {
   file?: string;
   name: string;
   args: string[];
+  /** `-i`: an interactive shell, which expands aliases and reads no BASH_ENV */
+  interactive?: boolean;
 };
 
 function parseArgs(argv: string[]): Invocation {
@@ -94,6 +97,8 @@ function parseArgs(argv: string[]): Invocation {
         } else {
           logGap({ kind: 'host-limit', name: `shopt ${name}` });
         }
+      } else if (letter === 'i') {
+        inv.interactive = on;
       } else if (letter in SHELL_OPTION_FLAG_MAP) {
         setOption(SHELL_OPTION_FLAG_MAP[letter], on);
       } else if (!'ils'.includes(letter)) {
@@ -232,6 +237,17 @@ async function main(): Promise<number> {
   // bash's own, which no script assigns
   for (const name of ['UID', 'EUID', 'PPID']) ctx.setReadonlyVar(name, true);
 
+  // Signals this process was started ignoring stay ignored in a non-interactive
+  // shell, as bash's do. SIGPIPE says nothing: the runtime ignores it itself
+  if (!inv.interactive) ctx.setIgnoredOnEntry(ignoredSignals());
+
+  // An interactive shell expands aliases, unless told otherwise
+  if (inv.interactive && !('expand_aliases' in inv.options)) ctx.setShellOption('expand_aliases', true);
+  if (inv.interactive) ctx.setInteractive(true);
+
+  // Started by a shell for a script with no `#!` line, which keeps its globskipdots
+  if (Deno.env.get('BASH_TS_GLOBSKIPDOTS') === 'off') ctx.setShellOption('globskipdots', false);
+
   for (const [name, on] of Object.entries(inv.options)) {
     ctx.setShellOption(name, on);
   }
@@ -261,6 +277,10 @@ async function main(): Promise<number> {
 
         logGap({ kind: 'syntax-error', name: firstLine(err.message) });
 
+        for (const warning of syntaxErrorWarnings(err)) {
+          console.error(`${inv.name}: ${inv.command !== undefined ? '-c: ' : ''}line ${warning.line + line - 1}: ${warning.text}`);
+        }
+
         for (const text of lines) console.error(prefix + text);
 
         return { code: 2, exited: true };
@@ -284,7 +304,18 @@ async function main(): Promise<number> {
 
   if (inv.command === undefined && inv.file === undefined) {
     // From stdin a command at a time, leaving the rest for what it runs to read
-    for await (const { text, line } of stdinCommands()) {
+    // `exec 0< file` makes the file the shell's input from the next command on
+    const readLine = async (): Promise<string | null> => {
+      const stdin = ctx.getStdin();
+
+      if (stdin === '0' || !shell.pipeReadRecord) return await stdinLine();
+
+      const record = await shell.pipeReadRecord(stdin, '\n');
+
+      return record === null ? null : record.text + (record.delimited ? '\n' : '');
+    };
+
+    for await (const { text, line } of stdinCommands(readLine)) {
       const result = await run(text, line);
 
       code = result.code;
@@ -302,12 +333,19 @@ async function main(): Promise<number> {
         ? ['cannot execute binary file', 126]
         : ['No such file or directory', 127];
 
-      console.error(`${inv.name}: ${inv.file}: ${message}`);
+      // One not there is said by the shell, under the name it was run by,
+      // `/tmp/bash: notthere: …`; one that is, by the script, `/: /: Is a directory`
+      const who = status === 127 ? Deno.env.get('BASH_TS_INVOKED') ?? 'bash' : inv.name;
+
+      console.error(`${who}: ${inv.file}: ${message}`);
 
       return status as number;
     }
 
-    code = (await run(source)).code;
+    // A shell run for a script or a command reads BASH_ENV first, its value expanded, as bash does
+    const startup = !inv.interactive && !ctx.getShellOption('posix') && ctx.getEnv().BASH_ENV ? await run('. "${BASH_ENV}"') : undefined;
+
+    code = startup?.exited ? startup.code : (await run(source)).code;
   }
 
   // The shell ends: its EXIT trap runs, and may change the status
@@ -332,32 +370,21 @@ class BinaryScriptError extends Error {}
  * line, and handed on once what has been read is complete commands. Nothing
  * past them is read, so a command the script starts reads the lines after it.
  */
-async function* stdinCommands(): AsyncGenerator<{ text: string; line: number }> {
-  const byte = new Uint8Array(1);
-  const decoder = new TextDecoder();
+async function* stdinCommands(readLine: () => Promise<string | null>): AsyncGenerator<{ text: string; line: number }> {
   let pending = '';
   let start = 1;
   let lines = 0;
   let eof = false;
 
   while (!eof) {
-    const bytes: number[] = [];
+    const text = await readLine();
 
-    for (;;) {
-      const n = await Deno.stdin.read(byte);
-
-      if (n === null || n === 0) {
-        eof = true;
-        break;
-      }
-
-      bytes.push(byte[0]);
-      if (byte[0] === 10) break;
-    }
-
-    if (bytes.length > 0) {
-      pending += decoder.decode(Uint8Array.from(bytes));
+    if (text === null || text === '') {
+      eof = true;
+    } else {
+      pending += text;
       lines++;
+      if (!text.endsWith('\n')) eof = true;
     }
 
     if (pending === '' || (!eof && !(await complete(pending)))) continue;
@@ -365,6 +392,38 @@ async function* stdinCommands(): AsyncGenerator<{ text: string; line: number }> 
     yield { text: pending, line: start };
     pending = '';
     start = lines + 1;
+  }
+}
+
+/**
+ * A line of this process's stdin, newline and all, or null at its end: read a
+ * byte at a time, as bash reads a script from stdin, so a command reading
+ * stdin after it gets the rest.
+ */
+async function stdinLine(): Promise<string | null> {
+  const byte = new Uint8Array(1);
+  const bytes: number[] = [];
+
+  for (;;) {
+    const n = await Deno.stdin.read(byte);
+
+    if (n === null || n === 0) break;
+
+    bytes.push(byte[0]);
+    if (byte[0] === 10) break;
+  }
+
+  return bytes.length === 0 ? null : new TextDecoder().decode(Uint8Array.from(bytes));
+}
+
+/** The signals this process was started ignoring, by name, from /proc's SigIgn mask. */
+function ignoredSignals(): string[] {
+  try {
+    const mask = BigInt(`0x${Deno.readTextFileSync('/proc/self/status').match(/^SigIgn:\s*([0-9a-f]+)/m)?.[1] ?? '0'}`);
+
+    return SIGNALS.filter(([number, name]) => name !== 'PIPE' && (mask >> BigInt(number - 1)) & 1n).map(([, name]) => `SIG${name}`);
+  } catch {
+    return [];
   }
 }
 

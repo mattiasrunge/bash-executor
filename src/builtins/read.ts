@@ -5,7 +5,7 @@
  */
 
 import { utils } from '@ein/bash-parser';
-import type { ExecContextIf, ShellIf } from '../types.ts';
+import { CLOSED_FD, type ExecContextIf, type ShellIf } from '../types.ts';
 import { assignReference, type NameReference, nameReference } from './element.ts';
 import { readRecord } from './read-record.ts';
 import type { BuiltinHandler, BuiltinResult, BuiltinServices } from './types.ts';
@@ -270,6 +270,11 @@ export const readBuiltin: BuiltinHandler = async (
 
   if (options.fd && ctx.getFd(options.fd) === undefined && (ctx.isFdHidden?.(options.fd) || !shell.isPipe(options.fd))) {
     return { code: 1, stderr: `read: ${options.fd}: invalid file descriptor: Bad file descriptor\n` };
+  }
+
+  // A closed one, `exec 0<&-`, cannot be read
+  if (fd === CLOSED_FD) {
+    return { code: 1, stderr: options.fd ? `read: ${options.fd}: invalid file descriptor: Bad file descriptor\n` : 'read: read error: 0: Bad file descriptor\n' };
   }
 
   // Read one line from the FD; one the input ended before its delimiter is

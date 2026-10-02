@@ -98,6 +98,24 @@ export const cdBuiltin: BuiltinHandler = async (ctx, args, shell) => {
     }
   }
 
+  // A relative name not starting `.` or `..` is looked for in each CDPATH
+  // directory first, an empty one the current; one found through a directory
+  // named there is said, as bash says where it went
+  let said = false;
+  const cdpath = env['CDPATH'];
+
+  if (cdpath && !isAbsolute(targetDir) && !/^\.\.?(\/|$)/.test(targetDir)) {
+    for (const entry of cdpath.split(':')) {
+      const candidate = resolvePath(currentDir, join(entry || '.', targetDir));
+
+      if (!(await notADirectory(ctx, shell, candidate))) {
+        targetDir = candidate;
+        said = entry !== '';
+        break;
+      }
+    }
+  }
+
   // Resolve the target directory
   targetDir = resolvePath(currentDir, targetDir);
 
@@ -109,7 +127,7 @@ export const cdBuiltin: BuiltinHandler = async (ctx, args, shell) => {
   ctx.setCwd(targetDir);
   ctx.setEnv({ OLDPWD: currentDir, PWD: targetDir });
 
-  return { code: 0 };
+  return { code: 0, stdout: said ? `${targetDir}\n` : undefined };
 };
 
 /** Why a path is no directory to change to, as the system says it, or undefined when it is one. */

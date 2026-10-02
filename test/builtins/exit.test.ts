@@ -53,11 +53,18 @@ Deno.test('exit builtin', async (t) => {
     assertEquals(getExitCode(result.code), 255);
   });
 
-  await t.step('returns error for non-numeric argument', async () => {
+  await t.step('a non-numeric argument ends the shell all the same, with 2', async () => {
     const ctx = new ExecContext();
     const result = await exitBuiltin(ctx, ['abc'], mockShell, noopExecute);
-    assertEquals(result.code, 2);
+    assertEquals(isExitSignal(result.code), true);
+    assertEquals(getExitCode(result.code), 2);
     assertEquals(result.stderr, 'exit: abc: numeric argument required\n');
+  });
+
+  await t.step('more than one argument ends it with 1', async () => {
+    const result = await exitBuiltin(new ExecContext(), ['1', '2'], mockShell, noopExecute);
+    assertEquals(getExitCode(result.code), 1);
+    assertEquals(result.stderr, 'exit: too many arguments\n');
   });
 
   await t.step('uses last exit code from context when no argument', async () => {

@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { hashedCommand } from './command-hash.ts';
 import {
   type AstConditionalBinaryExpression,
@@ -40,7 +41,7 @@ import type { ErrorPosition } from './errors.ts';
 import { exportedFunctionName, exportedFunctionText, type FunctionDefinition, functionEnvName } from './print-command.ts';
 import { singleQuoted } from './quote.ts';
 import { expandPattern, type GlobOptions, globPatterns, isGlobPattern, patternOf } from './glob.ts';
-import { syntaxErrorLines } from './syntax-error.ts';
+import { syntaxErrorLines, syntaxErrorWarnings } from './syntax-error.ts';
 import { type History, historyExpand, type HistorySettings, historySettings, mayExpand } from './history.ts';
 import { delimitingChars, type LineState, scanLines, shellComment } from './history-reader.ts';
 import {
@@ -59,7 +60,8 @@ import {
 } from './completion.ts';
 import { cpuTime, timeReport } from './timing.ts';
 import { closingBracket, closingQuote, contextVariables, evaluateArithmeticText, subscriptEnd } from './arith.ts';
-import { bracketExpression, globToRegExp, globToRegexSource, posixRegexToSource, quoteGlob, quoteRegex, unquoteGlob } from './pattern.ts';
+import { decodePrompt } from './prompt.ts';
+import { bracketExpression, globToRegExp, globToRegexSource, posixRegexToSource, quoteGlob, quoteRegexWord, unquoteGlob } from './pattern.ts';
 import {
   ArithmeticError,
   ArithmeticSyntaxError,
@@ -73,6 +75,7 @@ import {
   UnsupportedOperatorError,
 } from './errors.ts';
 import {
+  CLOSED_FD,
   type ExecCommandOptions,
   type ExecContextIf,
   type ExecSyncResult,
@@ -121,8 +124,80 @@ const DISTRIBUTING_OPS = new Set([
   'transformation',
 ]);
 
+/** The descriptor a special file names, `/dev/stdin` 0 and `/dev/fd/3` 3, or undefined. */
+const specialDescriptor = (path: string): string | undefined =>
+  ({ '/dev/stdin': '0', '/dev/stdout': '1', '/dev/stderr': '2' } as Record<string, string>)[path] ?? path.match(/^\/dev\/fd\/(\d+)$/)?.[1];
+
+/**
+ * An unquoted expansion's value in the string of `${x/p/string}`, quoted as a
+ * pattern's text is: with patsub_replacement an `&` is the match, `\&` an `&`
+ * and `\\` a backslash; any other backslash is itself.
+ */
+const replacementText = (value: string, ampersand: boolean): string => {
+  if (!ampersand) return quoteGlob(value);
+
+  let out = '';
+
+  for (let i = 0; i < value.length; i++) {
+    const c = value[i];
+
+    if (c === '\\' && (value[i + 1] === '&' || value[i + 1] === '\\')) out += quoteGlob(value[++i]);
+    else out += c === '&' ? MATCH_MARK : quoteGlob(c);
+  }
+
+  return out;
+};
+
+/**
+ * GLOBIGNORE's patterns, split at its colons but for one inside a bracket
+ * expression or an extended pattern's parentheses: `+([^[:alnum:]]):x` is two.
+ */
+function splitIgnoreSpec(spec: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let bracket = false;
+  let start = 0;
+
+  for (let i = 0; i < spec.length; i++) {
+    const c = spec[i];
+
+    if (c === '\\') i++;
+    else if (bracket) {
+      if (c === '[' && ':.='.includes(spec[i + 1] ?? '')) {
+        const close = spec.indexOf(`${spec[i + 1]}]`, i + 2);
+
+        if (close !== -1) i = close + 1;
+      } else if (c === ']') bracket = false;
+    } else if (c === '[') {
+      bracket = true;
+      if (spec[i + 1] === '!' || spec[i + 1] === '^') i++;
+      if (spec[i + 1] === ']') i++;
+    } else if (c === '(') depth++;
+    else if (c === ')') depth--;
+    else if (c === ':' && depth <= 0) {
+      out.push(spec.slice(start, i));
+      start = i + 1;
+    }
+  }
+
+  return [...out, spec.slice(start)].filter((glob) => glob !== '');
+}
+
+/** The operators with a word to take or not, `${x-w}`, `${x:+w}` and their kin. */
+const LIST_WORD_OPS = new Set([
+  'useDefaultValue',
+  'useDefaultValueIfUnset',
+  'useAlternativeValue',
+  'useAlternativeValueIfUnset',
+  'assignDefaultValue',
+  'assignDefaultValueIfUnset',
+]);
+
 /** Where what matched goes in the replacement of `${x/p/s}`: an unquoted `&`. A noncharacter, which no text holds. */
 const MATCH_MARK = '\uFDD3';
+
+/** The words of an array literal's source, as written: quotes kept, blanks between. */
+const ARRAY_WORDS = /(?:[^\s"'\\]|\\.|"(?:[^"\\]|\\.)*"|'[^']*')+/gs;
 
 /** Builtins that take `name[sub]` arguments, bash's ARRAYREF_BUILTIN ones */
 const ARRAYREF_BUILTINS = new Set(['declare', 'let', 'local', 'printf', 'read', 'test', '[', 'typeset', 'unset', 'wait']);
@@ -156,7 +231,7 @@ const DECLARATION_COMMANDS = new Set(['declare', 'typeset', 'local', 'export', '
  */
 /** Private-use characters that stand for quoted characters in a `=~` expression while it is read. */
 const REGEX_LITERAL_BASE = 0xe000;
-const REGEX_LITERALS = /[\ue000-\uf8ff]/g;
+const REGEX_LITERALS = /^[\ue000-\uf8ff]$/;
 
 /** Whether a word, after quote removal, could still be a pattern. */
 function hasGlobCharacters(text: string): boolean {
@@ -421,8 +496,9 @@ export class AstExecutor {
 
     const enhanced = new BashSyntaxError(err.message, fullSource, location, err.cause);
 
-    // What went wrong, for the message bash would give
+    // What went wrong, for the message bash would give, and the here-documents it warns of first
     enhanced.detail = err.detail;
+    enhanced.unterminatedHereDocuments = err.unterminatedHereDocuments;
 
     return enhanced;
   }
@@ -1405,11 +1481,32 @@ export class AstExecutor {
 
     ctx.setParams({ '!': handle.pid });
 
-    if (ctx.getShellOption('monitor')) {
+    // Its end is a SIGCHLD to the shell, whose trap runs when the shell gets to it
+    handle.done.then(() => this.childrenEnded++, () => this.childrenEnded++);
+
+    if (ctx.getShellOption('monitor') && ctx.isInteractive?.()) {
       await this.shell.pipeWrite(ctx.getStderr(), `[${job.id}] ${handle.pid}\n`).catch(() => {});
     }
 
     return 0;
+  }
+
+  /** Background jobs that have ended since the SIGCHLD trap last ran for them. */
+  private childrenEnded = 0;
+
+  /** The SIGCHLD trap, once for each job that ended, between commands as bash runs it. */
+  private async childTraps(ctx: ExecContextIf): Promise<number | undefined> {
+    while (this.childrenEnded > 0 && ctx.getTrap('SIGCHLD')) {
+      this.childrenEnded--;
+
+      const code = await this.runTrap('SIGCHLD', ctx, Number(ctx.getParam('?') ?? 0));
+
+      if (isExitSignal(code)) return code;
+    }
+
+    if (!ctx.getTrap('SIGCHLD')) this.childrenEnded = 0;
+
+    return undefined;
   }
 
   /**
@@ -1506,7 +1603,25 @@ export class AstExecutor {
         continue;
       }
 
-      const target = await this.redirectTarget(r, ctx, subs);
+      let target = await this.redirectTarget(r, ctx, subs);
+
+      // /dev/stdin, /dev/stdout, /dev/stderr and /dev/fd/N are the shell's own
+      // descriptors, as bash has them: `cat </dev/stdin` reads a here-string
+      const special = r.heredoc || !['<', '>', '>|', '>>', '<>', '&>', '&>>'].includes(r.op.text) ? undefined : specialDescriptor(target);
+
+      if (special !== undefined) {
+        if (r.op.text === '&>' || r.op.text === '&>>') {
+          r = { ...r, op: { ...r.op, text: '>&' }, numberIo: undefined };
+        } else {
+          r = {
+            ...r,
+            op: { ...r.op, text: r.op.text === '<' ? '<&' : '>&' },
+            numberIo: r.numberIo ?? { type: 'IoNumber', text: r.op.text === '<' || r.op.text === '<>' ? '0' : '1' },
+          } as AstNodeRedirect;
+        }
+
+        target = special;
+      }
 
       // `N<file`, `N>file` and the like, N above 2: a descriptor of its own, not a path
       // to reopen at every write, closed with the command
@@ -1516,7 +1631,7 @@ export class AstExecutor {
           await this.assertOpenable(ctx, target, r.op.text === '<' ? 'read' : 'write');
 
           const modes: Record<string, string> = { '<': 'r', '>': 'w+', '>|': 'w+', '>>': 'a+', '<>': 'r+' };
-          const handle = await this.shell.fdOpen(ctx, target, modes[r.op.text]);
+          const handle = await this.openFile(ctx, target, modes[r.op.text]);
 
           this.redirectHandles.add(handle);
           temporary.push(handle);
@@ -1594,8 +1709,15 @@ export class AstExecutor {
             continue;
           }
 
+          // stdin, stdout and stderr stay the host's: closed is a mark on the context
+          if (Number(sourceFd) <= 2) {
+            ctx.redirectFd(sourceFd, CLOSED_FD, local);
+            continue;
+          }
+
           await this.shell.fdClose?.(sourceFd);
           ctx.closeFd(sourceFd);
+          this.namedFds.delete(Number(sourceFd));
           await this.descriptorClosed(ctx, sourceFd);
           continue;
         }
@@ -1609,23 +1731,34 @@ export class AstExecutor {
         if (/^\d+$/.test(target)) {
           // Duplicate: the source becomes whatever the target is now
           // One never opened, or one the shell moved away though the host still has it, is no descriptor
-          if (ctx.getFd(target) === undefined && (ctx.isFdHidden?.(target) || !this.shell.isPipe(target))) {
+          if (ctx.getFd(target) === CLOSED_FD || (ctx.getFd(target) === undefined && (ctx.isFdHidden?.(target) || !this.shell.isPipe(target)))) {
             // Named as written, `$a: Bad file descriptor`, as bash names it
             throw new RedirectionError(`${r.file?.text ?? target}: Bad file descriptor`);
           }
 
           ctx.redirectFd(sourceFd, ctx.getFd(target) ?? target, local);
-        } else if (r.op.text === '<&') {
-          ctx.redirectStdin(target);
-        } else if (sourceFd === '2') {
-          // `>&file`, a file name rather than a descriptor: stdout and stderr both, as `&>`
-          ctx.redirectStderr(target);
+        } else if (r.op.text === '<&' || sourceFd !== '1') {
+          // `<&file` and `2>&file` name no descriptor
+          throw new RedirectionError(`${r.file?.text ?? target}: ambiguous redirect`);
         } else {
-          ctx.redirectStdout(target);
+          // `>&file`, a file name rather than a descriptor: stdout and stderr both, as `&>`;
+          // the shell's own, `exec >&file`, through one handle as `exec &>` has it
+          await this.assertClobberable(ctx, target);
+          await this.assertOpenable(ctx, target, 'write');
+
+          if (!local && this.shell.fdOpen) {
+            const handle = await this.openFile(ctx, target, 'w+');
+
+            ctx.redirectFd('1', handle);
+            ctx.redirectFd('2', handle);
+          } else {
+            this.redirectOutput(ctx, '1', target, false, local);
+            ctx.redirectFd('2', ctx.getFd('1')!, local);
+          }
         }
       } else if (r.op.text === '<>') {
         if (this.shell.fdOpen) {
-          await this.shell.fdOpen(ctx, target, 'r+', fd || '0');
+          await this.openFile(ctx, target, 'r+', fd || '0');
         }
       }
     }
@@ -1692,6 +1825,15 @@ export class AstExecutor {
     }
 
     if (ctx.getVariable(name)?.attributes.includes('r')) {
+      // The file is opened before the number has nowhere to go: `{v}>file` makes it all the same
+      const mode = ({ '>': 'w+', '>|': 'w+', '>>': 'a+', '<>': 'r+' } as Record<string, string>)[r.op.text];
+
+      if (mode && this.shell.fdOpen) {
+        const handle = await this.openFile(ctx, await this.redirectTarget(r, ctx), mode).catch(() => undefined);
+
+        if (handle !== undefined) await this.shell.fdClose?.(handle);
+      }
+
       throw new RedirectionError(`${name}: readonly variable\n${name}: cannot assign fd to variable`);
     }
 
@@ -1699,15 +1841,53 @@ export class AstExecutor {
 
     while (this.namedFds.has(n) || ctx.getFd(String(n)) !== undefined) n++;
 
+    // Past `ulimit -n` there is no descriptor to give, and bash says so twice
+    const limit = Number(ctx.getResourceLimits?.()['n']?.soft);
+
+    if (Number.isInteger(limit) && n >= limit) {
+      const params = ctx.getParams();
+
+      await this.shell.pipeWrite(ctx.getStderr(), `${this.sourceFrame.name ?? params['0'] ?? 'bash'}: redirection error: cannot duplicate fd: Invalid argument\n`).catch(
+        () => {},
+      );
+
+      throw new RedirectionError(`${r.file?.text ?? ''}: Invalid argument`);
+    }
+
     this.namedFds.add(n);
     ctx.setParams({ [name]: String(n) });
 
     return numbered(String(n));
   }
 
+  /**
+   * The host's fdOpen, a failure said as a redirection's, `/dev/tty: No such
+   * device or address`, rather than ending the script.
+   */
+  private async openFile(ctx: ExecContextIf, target: string, mode: string, fd?: string): Promise<string> {
+    try {
+      return await this.shell.fdOpen!(ctx, target, mode, fd);
+    } catch (err) {
+      if (err instanceof RedirectionError || !(err instanceof Error)) throw err;
+
+      const reason = err instanceof Deno.errors.NotFound
+        ? 'No such file or directory'
+        : err instanceof Deno.errors.PermissionDenied
+        ? 'Permission denied'
+        : err instanceof Deno.errors.IsADirectory
+        ? 'Is a directory'
+        : err.message.replace(/ \(os error \d+\).*$/s, '');
+
+      throw new RedirectionError(`${target}: ${reason}`);
+    }
+  }
+
   /** `N<&M-`, `N>&M-`: N becomes what M was, and M is closed — for the command alone when `local`. */
   private async moveDescriptor(ctx: ExecContextIf, fd: string, from: string, local = false): Promise<void> {
     const target = ctx.getFd(from);
+
+    // The shell's own moved away is free again for `{var}` to take
+    if (!local) this.namedFds.delete(Number(from));
 
     // One `exec 5<file` opened is the host's, under its number: fd takes that
     // handle, and the shell no longer has 5, though the handle stays open
@@ -1769,7 +1949,7 @@ export class AstExecutor {
 
     // `exec &> log`: one handle for stdout and stderr both
     if (r.op.text === '&>' || r.op.text === '&>>') {
-      const handle = await this.shell.fdOpen(ctx, target, mode);
+      const handle = await this.openFile(ctx, target, mode);
 
       ctx.redirectFd('1', handle);
       ctx.redirectFd('2', handle);
@@ -1779,10 +1959,10 @@ export class AstExecutor {
 
     if (Number(fd) > 2) {
       await this.shell.fdClose?.(fd);
-      await this.shell.fdOpen(ctx, target, mode, fd);
+      await this.openFile(ctx, target, mode, fd);
       ctx.closeFd(fd);
     } else {
-      ctx.redirectFd(fd, await this.shell.fdOpen(ctx, target, mode));
+      ctx.redirectFd(fd, await this.openFile(ctx, target, mode));
     }
 
     return true;
@@ -1814,7 +1994,7 @@ export class AstExecutor {
     // No name is no file, `> ""`, whatever the host would make of it
     if (target === '') throw new RedirectionError(': No such file or directory');
 
-    if (!this.shell.testPath || this.shell.isPipe(target) || /^\d+$/.test(target) || target.startsWith('/dev/')) return;
+    if (!this.shell.testPath || this.shell.isPipe(target) || target.startsWith('/dev/')) return;
 
     const exists = (path: string) => this.shell.testPath!(ctx, path, 'EXISTS').catch(() => true);
     const allows = (path: string, op: 'READABLE' | 'WRITABLE') => this.shell.testPath!(ctx, path, op).catch(() => true);
@@ -1929,11 +2109,36 @@ export class AstExecutor {
         lastCode = await this.abortStatus(err, ctx);
         skipRow = command.loc?.start?.row ?? -1;
 
-        // A POSIX shell that fails an assignment, or an expansion, ends there
-        if (ctx.getShellOption('posix')) {
-          if (err instanceof ReadonlyVariableError) lastCode = makeExitSignal(1);
-          if (err.code === 'E_BAD_SUBSTITUTION') lastCode = makeExitSignal(UNBOUND_VARIABLE_CODE);
+        // bash's line count stays where the error was, not at the end of what it
+        // had read: a group or loop of several lines it ended leaves every line
+        // after it that many lines early
+        const errorRow = Number(ctx.getParam('LINENO')) - this.sourceFrame.base;
+        const endRow = command.loc?.end?.row;
+
+        const inFunction = (err as { inFunction?: boolean }).inFunction;
+
+        if (this.functionDepth === 0 && !inFunction && endRow !== undefined && Number.isInteger(errorRow) && errorRow < endRow) {
+          this.sourceFrame.base -= endRow - errorRow;
         }
+
+        // A POSIX shell that fails an assignment, or an expansion, ends there —
+        // bar an indirection to nothing and a substring's offset, as bash has it
+        if (ctx.getShellOption('posix')) {
+          const arithmetic = err instanceof ArithmeticError || err instanceof ArithmeticSyntaxError;
+
+          if (err instanceof ReadonlyVariableError) lastCode = makeExitSignal(UNBOUND_VARIABLE_CODE);
+          if (err.code === 'E_BAD_SUBSTITUTION' && !err.message.endsWith('invalid indirect expansion')) lastCode = makeExitSignal(UNBOUND_VARIABLE_CODE);
+          if (arithmetic && !(err as { substring?: boolean }).substring) {
+            lastCode = makeExitSignal(err instanceof ArithmeticError && err.nameless ? 1 : UNBOUND_VARIABLE_CODE);
+          }
+        }
+      }
+
+      // Jobs that ended set off the SIGCHLD trap, now, between commands
+      if (this.childrenEnded > 0 && !isExitSignal(lastCode) && !this.runningTraps.has('SIGCHLD')) {
+        const trapped = await this.childTraps(ctx);
+
+        if (trapped !== undefined) lastCode = trapped;
       }
 
       // `exit` stops the script, and the signal goes up to whatever ends the shell
@@ -1983,7 +2188,11 @@ export class AstExecutor {
       ctx.setParams({ BASH_COMMAND: this.nodeSource(node) });
     }
 
-    if (ctx.getTrap('DEBUG') && (this.functionDepth === 0 || ctx.getShellOption('functrace'))) {
+    // In a function only if it inherits the trap, or set it itself since it was called
+    const call = this.traceStack[this.traceStack.length - 1];
+    const inFunction = this.functionDepth > 0 && call !== undefined;
+
+    if (ctx.getTrap('DEBUG') && (!inFunction || call.traced || ctx.getTrap('DEBUG') !== call.debugAtEntry)) {
       // The trap's own lines are its own: what runs after it is still on this one
       const line = ctx.getParam('LINENO');
       const trapped = await this.runTrap('DEBUG', ctx, Number(ctx.getParam('?') ?? 0));
@@ -1995,6 +2204,13 @@ export class AstExecutor {
     return undefined;
   }
 
+  /**
+   * Each function call's say over the DEBUG trap: whether it inherits it, under
+   * `set -T` or `declare -ft`, and the trap as it was when the call began, so a
+   * trap the function sets itself goes off for what follows in it.
+   */
+  private traceStack: { traced: boolean; debugAtEntry: string | undefined }[] = [];
+
   protected async executeCommand(node: AstNodeCommand, parentCtx: ExecContextIf): Promise<number> {
     const trapped = await this.debugTrap(node, parentCtx);
 
@@ -2004,8 +2220,9 @@ export class AstExecutor {
       return await this.runCommand(node, parentCtx);
     } catch (err) {
       // `set -C` refusing a redirection fails this command and nothing else —
-      // the shell carries on, and errexit gets its say like any other failure
-      return await this.noClobberStatus(err, parentCtx);
+      // the shell carries on, and errexit gets its say like any other failure.
+      // `!` turns that failure round too: `! ls >unwritable` is 0
+      return await this.noClobberStatus(err, parentCtx, node.bang);
     }
   }
 
@@ -2030,7 +2247,8 @@ export class AstExecutor {
         return isExitSignal(code) ? getExitCode(code) : code;
       }
 
-      const redirects = node.suffix?.filter((arg) => arg.type === 'Redirect') as AstNodeRedirect[] | undefined;
+      // A redirection may come before the name as well: `{fd}</dev/null exec`
+      const redirects = [...(node.prefix ?? []), ...(node.suffix ?? [])].filter((arg) => arg.type === 'Redirect') as AstNodeRedirect[];
       const words = (node.suffix?.filter((arg) => arg.type === 'Word') ?? []) as AstNodeWord[];
 
       // `-a name` runs the command as `name`, `-l` as a login shell's `-name`, `-c` with no environment
@@ -2068,7 +2286,18 @@ export class AstExecutor {
       if (words.length > 0) {
         if (login) options.argv0 = `-${options.argv0 ?? words[0].text}`;
 
-        const command = { ...node, name: words[0], suffix: [...words.slice(1), ...(redirects ?? [])], execOptions: options };
+        // A name PATH does not find is exec's to say, `exec: name: not found`
+        const name = words[0].expansion?.length ? undefined : words[0].text;
+
+        if (name && !name.includes('/') && this.shell.lookupCommand && !this.builtin(name) && !parentCtx.getFunction(name)) {
+          if ((await this.shell.lookupCommand(parentCtx, name)).length === 0) {
+            await this.diagnose(parentCtx, `exec: ${name}: not found`);
+
+            return parentCtx.getShellOption('execfail') ? 127 : makeExitSignal(127);
+          }
+        }
+
+        const command = { ...node, name: words[0], suffix: [...words.slice(1), ...redirects], execOptions: options };
         const code = await this.runCommand(command, parentCtx);
 
         // A command that could not be run leaves the shell standing only under `shopt -s execfail`
@@ -2080,7 +2309,7 @@ export class AstExecutor {
       }
 
       try {
-        for (const redirect of redirects ?? []) {
+        for (const redirect of redirects) {
           if (!(await this.openExecRedirection(parentCtx, redirect))) {
             await this.applyRedirections(parentCtx, [redirect], undefined, { exec: true });
           }
@@ -2142,6 +2371,8 @@ export class AstExecutor {
         assignStatus = assignment.status;
         await this.trace(parentCtx, this.traceAssignment(assignment));
         refused = !(await this.applyAssignment(assignment, special ? parentCtx : ctx, asCommand && !special)) || refused;
+
+        if (special && asCommand) parentCtx.propagateTemporary?.(assignment.name);
       }
     };
 
@@ -2247,10 +2478,11 @@ export class AstExecutor {
       const builtin = this.builtin(cmdName);
       if (builtin) {
         // A sourced file counts its own lines; an eval's string goes on from its line
+        // An eval's string is an indirection level down, for set -x
         const execute = (script: string, opts: { file?: string } = {}) =>
           opts.file !== undefined
             ? this.inCallFrame(ctx, 'source', opts.file, () => this.inSourceFrame({ base: 0, name: opts.file }, () => this.executeSource(script, ctx)))
-            : this.inSourceFrame({ base: Number(ctx.getParam('LINENO') ?? 1) - 1, name: this.sourceFrame.name }, () => this.executeSource(script, ctx));
+            : this.indirect(() => this.inSourceFrame({ base: Number(ctx.getParam('LINENO') ?? 1) - 1, name: this.sourceFrame.name }, () => this.executeSource(script, ctx)));
         const result = await builtin(ctx, args || [], this.shell, execute, {
           expandSubscript: (subscript, keyed) => this.arithmeticSubscript(subscript, keyed, ctx),
           arrayRefs,
@@ -2266,17 +2498,37 @@ export class AstExecutor {
 
         code = result.code;
 
+        // `foo=bar export foo`, `x=1 readonly x`, `declare -x`: a temporary value
+        // the builtin exports or makes readonly outlasts the command, as bash
+        // propagates it, and so does what it assigns there, `o=1 export o=2`
+        const propagates = cmdName === 'export' || cmdName === 'readonly' ||
+          (/^(declare|typeset)$/.test(cmdName) && (args ?? []).some((arg) => /^-[a-zA-Z]*[xr]/.test(arg)));
+
+        if (propagates) {
+          for (const arg of node.prefix ?? []) {
+            const name = arg.type === 'AssignmentWord' ? (arg as AstNodeAssignmentWord).text.match(/^[A-Za-z_][A-Za-z0-9_]*/)?.[0] : undefined;
+
+            if (name && (args ?? []).some((word) => word === name || word.startsWith(`${name}=`) || word.startsWith(`${name}+=`))) ctx.propagateTemporary?.(name);
+          }
+        }
+
         // Write stdout/stderr if present. Output that cannot be written — stdout
         // closed with `>&-`, or a descriptor open only for reading — fails the
         // builtin, as bash's "write error", and not the script.
         try {
+          const write = async (text: string) => {
+            if (ctx.getStdout() === CLOSED_FD) throw new Error('Bad file descriptor');
+
+            await this.shell.pipeWrite(ctx.getStdout(), text);
+          };
+
           for (const chunk of result.output ?? []) {
             if (chunk.stderr) await this.diagnose(ctx, chunk.stderr);
-            if (chunk.stdout) await this.shell.pipeWrite(ctx.getStdout(), chunk.stdout);
+            if (chunk.stdout) await write(chunk.stdout);
           }
 
           if (result.stdout) {
-            await this.shell.pipeWrite(ctx.getStdout(), result.stdout);
+            await write(result.stdout);
           }
         } catch (err) {
           await this.diagnose(ctx, `${cmdName}: write error: ${err instanceof Error ? err.message : err}`);
@@ -2386,12 +2638,14 @@ export class AstExecutor {
     }
 
     const returnTrap = ctx.getTrap('RETURN');
+    const traced = ctx.getShellOption('functrace') || Boolean(ctx.getFunctions()[fn.name]?.traced);
     const getopts = ctx.getGetoptsState();
     // A function is in no loop of its own, whatever loop it was called from
     const loopDepth = this.loopDepth;
 
     this.functionDepth++;
     this.loopDepth = 0;
+    this.traceStack.push({ traced, debugAtEntry: ctx.getTrap('DEBUG') });
 
     // Back from the function, $LINENO is the line it was called on again: an
     // ERR trap for a failing call says that line, not the body's last
@@ -2401,6 +2655,17 @@ export class AstExecutor {
     // The function's own redirections, `f() { …; } > log`, are expanded and opened each time it runs
     const redirections = fn.definition?.node.redirections;
     const run = async () => {
+      // A traced function sets the DEBUG trap off once as it starts, on its body's first line
+      const row = fn.body.loc?.start?.row;
+
+      if (traced && ctx.getTrap('DEBUG') && row !== undefined) {
+        fnCtx.setParams({ LINENO: String(this.sourceFrame.base + row) });
+
+        const trapped = await this.debugTrap(fn.body, fnCtx);
+
+        if (trapped !== undefined) return trapped;
+      }
+
       if (!redirections?.length) return await this.executeNode(fn.body, fnCtx);
 
       const pipes = await this.applyRedirections(fnCtx, redirections);
@@ -2416,13 +2681,18 @@ export class AstExecutor {
       const exiting = async () => {
         const code = await run();
 
-        return isExitSignal(code) ? makeExitSignal(await this.runExitTrap(fnCtx, getExitCode(code))) : code;
+        return isExitSignal(code) && !this.errexitExiting ? makeExitSignal(await this.runExitTrap(fnCtx, getExitCode(code))) : code;
       };
       const counted = frame ? () => this.inSourceFrame(frame, exiting) : exiting;
 
       result = await this.inCallFrame(fnCtx, fn.name, this.functionSources.get(fn.body) ?? 'environment', counted);
+    } catch (err) {
+      // bash puts its line count back as an error leaves a function: no drift from one
+      if (err instanceof CommandAbortError) (err as { inFunction?: boolean }).inFunction = true;
+      throw err;
     } finally {
       this.functionDepth--;
+      this.traceStack.pop();
       this.loopDepth = loopDepth;
       // What `local -` saved comes back
       fnCtx.restoreLocalOptions?.();
@@ -2440,7 +2710,7 @@ export class AstExecutor {
 
     // The RETURN trap runs as the function returns — one the function set itself,
     // or the caller's under `set -T`: functions do not inherit it otherwise
-    const inherited = ctx.getShellOption('functrace') || ctx.getTrap('RETURN') !== returnTrap;
+    const inherited = traced || ctx.getTrap('RETURN') !== returnTrap;
 
     // Not while a trap runs, though: a function the DEBUG trap calls sets off no RETURN trap
     if (!isExitSignal(code) && inherited && this.runningTraps.size === 0) {
@@ -2507,7 +2777,7 @@ export class AstExecutor {
     try {
       // Handle stdin redirection from file
       const stdin = ctx.getStdin();
-      if (!this.shell.isPipe(stdin)) {
+      if (stdin !== CLOSED_FD && !this.shell.isPipe(stdin)) {
         const pipe = await this.shell.pipeOpen();
         pipes.push(pipe);
         // Start reading from file in background (will close pipe when done)
@@ -2517,7 +2787,7 @@ export class AstExecutor {
 
       // Handle stdout redirection to file
       const stdout = ctx.getStdout();
-      if (!this.shell.isPipe(stdout)) {
+      if (stdout !== CLOSED_FD && !this.shell.isPipe(stdout)) {
         stdoutPipe = await this.shell.pipeOpen();
         pipes.push(stdoutPipe);
         const stdoutAppend = ctx.getStdoutAppend();
@@ -2532,7 +2802,7 @@ export class AstExecutor {
       const stderr = ctx.getStderr();
       if (stdoutPipe && stderr === stdout) {
         ctx.redirectStderr(stdoutPipe);
-      } else if (!this.shell.isPipe(stderr)) {
+      } else if (stderr !== CLOSED_FD && !this.shell.isPipe(stderr)) {
         stderrPipe = await this.shell.pipeOpen();
         pipes.push(stderrPipe);
         const stderrAppend = ctx.getStderrAppend();
@@ -2668,7 +2938,7 @@ export class AstExecutor {
         } else if (isFirstCommand) {
           // First command: check if stdin needs file bridging
           const stdin = cmdCtx.getStdin();
-          if (!this.shell.isPipe(stdin)) {
+          if (stdin !== CLOSED_FD && !this.shell.isPipe(stdin)) {
             const pipe = await this.shell.pipeOpen();
             pipes.push(pipe);
             // Start reading from file in background
@@ -2820,8 +3090,17 @@ export class AstExecutor {
       return code;
     }
 
+    this.errexitExiting = true;
+
     return makeExitSignal(code);
   }
+
+  /**
+   * Set while the shell is on its way out through errexit, which bash does as a
+   * jump back to its top level: the EXIT trap runs there, with the redirections
+   * of the function calls on the way undone, not where `exit` would run it.
+   */
+  private errexitExiting = false;
 
   /** How deep in function calls the executor is, for the traps functions do not inherit. */
   private functionDepth = 0;
@@ -2842,13 +3121,17 @@ export class AstExecutor {
     const at = (n: number) => this.lineNumbers ? `line ${n}: ` : '';
     // Without line numbers a diagnostic has no place before it, and this one just who said it
     const shell = this.lineNumbers ? `${name}: ` : '';
-    const prefix = 'eval' in where
-      ? `${shell}eval: ${at(Number(params.LINENO ?? 1) + line - 1)}`
-      : 'substitution' in where
-      ? `${shell}command substitution: ${at(Number(params.LINENO ?? 1) + line)}`
-      : `${where.file}: ${at(line)}`;
+    const prefixAt = (n: number) =>
+      'eval' in where
+        ? `${shell}eval: ${at(Number(params.LINENO ?? 1) + n - 1)}`
+        : 'substitution' in where
+        ? `${shell}command substitution: ${at(Number(params.LINENO ?? 1) + n)}`
+        : `${where.file}: ${at(n)}`;
+    const prefix = prefixAt(line);
+    // Here-documents the input ended inside of, warned about first
+    const warnings = syntaxErrorWarnings(err).map((warning) => `${prefixAt(warning.line)}${warning.text}\n`).join('');
 
-    await this.shell.pipeWrite(ctx.getStderr(), lines.map((text) => `${prefix}${text}\n`).join('')).catch(() => {});
+    await this.shell.pipeWrite(ctx.getStderr(), warnings + lines.map((text) => `${prefix}${text}\n`).join('')).catch(() => {});
   }
 
   /** Which traps are running now, so one does not set itself off again. */
@@ -2876,7 +3159,9 @@ export class AstExecutor {
     const base = name === 'EXIT' ? 0 : Number(line ?? 1) - 1;
 
     try {
-      const code = await this.inSourceFrame({ base, name: this.sourceFrame.name }, () => this.executeSource(action, ctx));
+      // A trap's commands are an indirection level down, as an eval's, bar the EXIT trap's
+      const runAction = () => this.inSourceFrame({ base, name: this.sourceFrame.name }, () => this.executeSource(action, ctx));
+      const code = name === 'EXIT' ? await runAction() : await this.indirect(runAction);
 
       if (isExitSignal(code)) {
         return code;
@@ -2920,6 +3205,8 @@ export class AstExecutor {
    * @returns The status the shell ends with.
    */
   public async runExitTrap(ctx: ExecContextIf, status: number): Promise<number> {
+    this.errexitExiting = false;
+
     const code = await this.runTrap('EXIT', ctx, status);
 
     ctx.setTrap('EXIT', null);
@@ -2988,8 +3275,22 @@ export class AstExecutor {
     return 0;
   }
 
-  /** Set while PS4 is expanded, so that what it runs is not traced in turn. */
-  private expandingPs4 = false;
+  /**
+   * Set while PS4 is expanded, so that what it runs is not traced in turn: in
+   * the call chain doing it only, as pipeline stages trace side by side.
+   */
+  private expandingPs4 = new AsyncLocalStorage<boolean>();
+
+  /**
+   * How many evals and traps deep this runs, each a level of bash's
+   * indirection: PS4's first character is said once more for each.
+   */
+  private indirection = new AsyncLocalStorage<number>();
+
+  /** Run what an eval or a trap runs, one indirection level down. */
+  private indirect<T>(fn: () => Promise<T>): Promise<T> {
+    return this.indirection.run((this.indirection.getStore() ?? 0) + 1, fn);
+  }
 
   /**
    * `set -x`: write what is about to run to the shell's stderr.
@@ -3001,28 +3302,26 @@ export class AstExecutor {
    * skipped rather than made to work: the trace is a diagnostic, not output.
    */
   protected async trace(ctx: ExecContextIf, line: string): Promise<void> {
-    if (!ctx.getShellOption('xtrace') || this.expandingPs4) {
+    if (!ctx.getShellOption('xtrace') || this.expandingPs4.getStore()) {
       return;
     }
 
     const params = this.paramView(ctx);
     let ps4 = params.PS4 ?? '+ ';
 
-    // PS4 is expanded, `PS4='+${LINENO}: '`, and its first character said once
+    // PS4 is a prompt, `PS4='+${LINENO}: '`, and its first character said once
     // more for each command substitution the command runs in
     if (/[$`\\]/.test(ps4)) {
-      this.expandingPs4 = true;
+      const prompt = ps4;
 
       try {
-        ps4 = await this.expandHereDocument(ps4, ctx);
+        ps4 = await this.expandingPs4.run(true, () => this.expandPrompt(prompt, ctx));
       } catch {
         // A PS4 that does not expand is used as it is
-      } finally {
-        this.expandingPs4 = false;
       }
     }
 
-    ps4 = ps4.charAt(0).repeat(this.substitutionDepth(ctx)) + ps4;
+    ps4 = ps4.charAt(0).repeat(this.substitutionDepth(ctx) + (this.indirection.getStore() ?? 0)) + ps4;
 
     // BASH_XTRACEFD names another descriptor for it, `exec 4>trace; BASH_XTRACEFD=4`
     const fd = params.BASH_XTRACEFD;
@@ -3078,7 +3377,7 @@ export class AstExecutor {
    * 1, with the reason on stderr, and the shell carries on. Rethrows anything
    * else.
    */
-  protected async noClobberStatus(err: unknown, ctx: ExecContextIf): Promise<number> {
+  protected async noClobberStatus(err: unknown, ctx: ExecContextIf, bang = false): Promise<number> {
     if (!(err instanceof RedirectionError)) {
       throw err;
     }
@@ -3096,7 +3395,7 @@ export class AstExecutor {
       await this.diagnose(ctx, err.message);
     }
 
-    return this.applyErrexit(1, ctx);
+    return bang ? 0 : this.applyErrexit(1, ctx);
   }
 
   /**
@@ -3641,7 +3940,7 @@ export class AstExecutor {
    * With `ampersand`, an unquoted `&` becomes MATCH_MARK instead — the
    * replacement of `${x/p/s}`, where it stands for what matched.
    */
-  protected async patternGlob(word: AstNodeWord, ctx: ExecContextIf, ampersand = false): Promise<string> {
+  protected async patternGlob(word: AstNodeWord, ctx: ExecContextIf, ampersand = false, replacement = false): Promise<string> {
     const text = word.text;
 
     // Pre-evaluate non-glob expansions by their location in the raw text,
@@ -3671,8 +3970,9 @@ export class AstExecutor {
     for (let i = 0; i < text.length; i++) {
       const expansion = !inSingle ? evaluated.get(i) : undefined;
       if (expansion) {
-        // In a replacement, an `&` an unquoted expansion brings is the match too, as in bash
-        glob += inDouble ? quoteGlob(expansion.value) : ampersand ? expansion.value.replaceAll('&', MATCH_MARK) : expansion.value;
+        // In a replacement an unquoted expansion's text is text, but for its `&`,
+        // the match too, as in bash; a backslash there quotes an `&` or itself
+        glob += inDouble ? quoteGlob(expansion.value) : replacement ? replacementText(expansion.value, ampersand) : expansion.value;
         i = expansion.end;
         continue;
       }
@@ -3686,6 +3986,9 @@ export class AstExecutor {
       } else if (!inSingle && !inDouble && c === '$' && text[i + 1] === '"') {
         // $"…" is a string to translate; untranslated it is "…"
       } else if (!inSingle && !inDouble && c === '\\' && i + 1 < text.length) {
+        glob += quoteGlob(text[++i]);
+      } else if (inDouble && c === '\\' && i + 1 < text.length && '$`"\\\n'.includes(text[i + 1])) {
+        // In double quotes a backslash quotes only what is special there: `"\\&"` is `\&`
         glob += quoteGlob(text[++i]);
       } else if (!inDouble && c === "'") {
         inSingle = !inSingle;
@@ -3725,7 +4028,7 @@ export class AstExecutor {
 
     let template = xp.replacement === undefined
       ? ''
-      : await this.patternGlob(this.writtenWord(xp.replacement, xp.replacementSource), ctx, ctx.getShellOption('patsub_replacement'));
+      : await this.patternGlob(this.writtenWord(xp.replacement, xp.replacementSource), ctx, ctx.getShellOption('patsub_replacement'), true);
 
     // A tilde prefix in the replacement is expanded, in double quotes too, as bash does
     const tilde = /^~([+-]?\d+|[+-]|[A-Za-z0-9._][A-Za-z0-9._@-]*)?(?=\/|$)/.exec(String(xp.replacementSource ?? ''));
@@ -4350,10 +4653,10 @@ export class AstExecutor {
     // itself (`=~ "a.c"` is no pattern), what is not is part of the expression
     // (`=~ $re`).
     //
-    // A quoted character stands in the expression as a placeholder until it has
-    // been read, so that it is itself wherever it lands — in a bracket
-    // expression too, where a backslash would be a member of its own: `[']']`
-    // is a class holding `]`, `[^]"."]` one without `]` and `.`.
+    // A quoted character stands in the expression as a placeholder until the
+    // whole is read, then quoteRegexWord quotes it as bash does: escaped where
+    // it would be special, as it is inside a bracket expression — `[']']` is a
+    // class holding `]`, `['a]']` one holding `a` and then a `]`.
     const text = word.text;
     const literals: string[] = [];
     const literal = (chars: string) =>
@@ -4406,14 +4709,13 @@ export class AstExecutor {
       }
     }
 
-    const source = posixRegexToSource(regex);
+    const chars = [...regex].map((char) => {
+      const code = char.charCodeAt(0) - REGEX_LITERAL_BASE;
 
-    // Each placeholder is its character, escaped for wherever it is — `\-` too, for inside a class
-    return source.replace(REGEX_LITERALS, (placeholder) => {
-      const char = literals[placeholder.charCodeAt(0) - REGEX_LITERAL_BASE];
-
-      return char === '-' ? '\\-' : quoteRegex(char);
+      return REGEX_LITERALS.test(char) ? { char: literals[code], quoted: true } : { char, quoted: false };
     });
+
+    return posixRegexToSource(quoteRegexWord(chars));
   }
 
   /**
@@ -4568,7 +4870,23 @@ export class AstExecutor {
       }
 
       // Quote removal already ran at parse time, gaps and all
-      return { values: parts.value.split(utils.ARRAY_ELEMENT_SEPARATOR), status: 0 };
+      const values = parts.value.split(utils.ARRAY_ELEMENT_SEPARATOR);
+
+      if ((assoc || ctx.getAssoc(parts.name)) && values.length > 0 && keyedElement(values[0]) === null) {
+        // Keys and values in turn: an empty key is named as it was written, `""`
+        const written = this.writtenText(node) ?? '';
+        const words = written.slice(written.indexOf('(') + 1, written.lastIndexOf(')')).match(ARRAY_WORDS) ?? [];
+        const pairs: string[] = [];
+
+        for (let i = 0; i < values.length; i += 2) {
+          if (values[i] === '') await this.diagnose(ctx, `${words[i] ?? ''}: bad array subscript`);
+          else pairs.push(keyedText(values[i], values[i + 1] ?? '', false));
+        }
+
+        return { values: pairs, status: 0 };
+      }
+
+      return { values, status: 0 };
     }
 
     const { text, protectedRanges, status } = await this.substituteExpansions(node, ctx);
@@ -4591,11 +4909,15 @@ export class AstExecutor {
     const values: string[] = [];
 
     if ((assoc || ctx.getAssoc(parts.name)) && written.length > 0 && keyed[0] === -1) {
+      const source = this.writtenText(node) ?? '';
+      const words = source.slice(source.indexOf('(') + 1, source.lastIndexOf(')')).match(ARRAY_WORDS) ?? [];
+
       for (let i = 0; i < written.length; i += 2) {
         const key = one(written[i].element, written[i].ranges);
         const value = written[i + 1] ? one(written[i + 1].element, written[i + 1].ranges) : '';
 
-        if (key === '') await this.diagnose(ctx, `${written[i].element}: bad array subscript`);
+        // An empty key is named as it was written, `""` or `"$e"`
+        if (key === '') await this.diagnose(ctx, `${words.length === written.length ? words[i] : written[i].element}: bad array subscript`);
         else values.push(keyedText(key, value, false));
       }
 
@@ -4873,10 +5195,10 @@ export class AstExecutor {
         index = await this.arithmeticValue({ expression: subscript }, ctx);
       } catch (err) {
         // bash names no command for an error in a subscript
-        if (!strict || !(err instanceof ArithmeticError)) {
+        if (!strict || !(err instanceof ArithmeticError || err instanceof ArithmeticSyntaxError)) {
           index = 0;
         } else {
-          err.nameless = true;
+          (err as ArithmeticError).nameless = true;
           throw err;
         }
       }
@@ -4951,8 +5273,9 @@ export class AstExecutor {
         quoted += char;
       } else if (depth === 0 && braces > 0 && (char === '"' || char === "'")) {
         quoted += char;
-      } else if (depth === 0 && char === '\\' && next === '"') {
-        // A literal backslash and quote, which in double quotes are written \\\"
+      } else if (depth === 0 && braces === 0 && char === '\\' && next === '"') {
+        // A literal backslash and quote, which in double quotes are written \\\". In
+        // a `${ }` word it is an escaped quote, as in double quotes: `${P+\"$P\"}`
         quoted += '\\\\\\"';
         i++;
       } else if (char === '\\' && next !== undefined) {
@@ -5063,7 +5386,7 @@ export class AstExecutor {
   private optionFlags(ctx: ExecContextIf): string {
     const flags = 'abefhikmnptuvxBCEHPT'
       .split('')
-      .filter((letter) => SHELL_OPTION_FLAG_MAP[letter] && ctx.getShellOption(SHELL_OPTION_FLAG_MAP[letter]))
+      .filter((letter) => letter === 'i' ? ctx.isInteractive?.() : SHELL_OPTION_FLAG_MAP[letter] && ctx.getShellOption(SHELL_OPTION_FLAG_MAP[letter]))
       .join('');
 
     // A shell running a -c string says so, last
@@ -5125,7 +5448,7 @@ export class AstExecutor {
     }
 
     const array = ctx.getArray(name);
-    const index = await this.resolveIndex(subscript, array?.length ?? 1, ctx);
+    const index = await this.resolveIndex(subscript, array?.length ?? 1, ctx, true);
 
     if (!array) {
       // `${x[0]}` on a scalar is the scalar itself
@@ -5159,7 +5482,7 @@ export class AstExecutor {
     }
 
     const array = ctx.getArray(name);
-    const index = await this.resolveIndex(subscript, array?.length ?? 1, ctx);
+    const index = await this.resolveIndex(subscript, array?.length ?? 1, ctx, true);
 
     return array ? array[index] !== undefined : index === 0 && params[name] !== undefined;
   }
@@ -5173,7 +5496,7 @@ export class AstExecutor {
    * and `${a[@]}` alone as well (those never reach here). The special parameters
    * are always set, whether or not this executor has got round to writing one.
    */
-  protected assertParameterSet(parameter: string | number, isSet: boolean, ctx: ExecContextIf, shown = String(parameter)): void {
+  protected assertParameterSet(parameter: string | number, isSet: boolean, ctx: ExecContextIf, shown: string = String(parameter)): void {
     if (isSet || !ctx.getShellOption('nounset')) {
       return;
     }
@@ -5187,13 +5510,60 @@ export class AstExecutor {
     throw new UnboundVariableError(shown);
   }
 
+  /** Whether the variable a parameter names holds anything at all: a value, or an element of some index. */
+  private hasAnyValue(parameter: string, ctx: ExecContextIf): boolean {
+    const { name, subscript } = this.splitSubscript(parameter);
+
+    if (subscript !== undefined) return false;
+
+    const array = ctx.getArray(name);
+    const assoc = ctx.getAssoc(name);
+
+    if (array) return Object.keys(array).length > 0;
+    if (assoc) return Object.keys(assoc).length > 0;
+
+    return ctx.getVariable(name)?.value !== undefined;
+  }
+
+  /**
+   * A prompt as bash shows it, PS1, PS4 or `${x@P}`: its backslash escapes
+   * decoded, then, under `shopt -s promptvars`, expanded as a double-quoted
+   * string is. `$?` stays what it was.
+   */
+  async expandPrompt(text: string, ctx: ExecContextIf, opts: { lineEditing?: boolean; commandNumber?: number } = {}): Promise<string> {
+    const params = ctx.getParams();
+    const promptvars = ctx.getShellOption('promptvars') || ctx.getShellOption('posix');
+    const history = ctx.getHistory?.();
+    const decoded = decodePrompt(text, {
+      get: (name) => params[name] ?? ctx.getEnv()[name],
+      shellName: params['0'] ?? 'bash',
+      promptvars,
+      historyNumber: history ? history.base + history.length : 1,
+      commandNumber: opts.commandNumber ?? 1,
+      jobs: ctx.getJobTable().list().length,
+      lineEditing: opts.lineEditing,
+    });
+
+    if (!promptvars) return decoded;
+
+    const status = params['?'];
+    // A backslash at the very end has nothing to quote, and stays
+    const trailing = /(^|[^\\])(\\\\)*\\$/.test(decoded) ? '\\' : '';
+
+    try {
+      return await this.expandHereDocument(trailing ? decoded.slice(0, -1) : decoded, ctx) + trailing;
+    } finally {
+      if (status !== undefined) ctx.setParams({ '?': status });
+    }
+  }
+
   /**
    * `${x@Q}` and the rest of the `@` operators: the value quoted to be read
    * back in (Q), its backslash escapes expanded (E), as a prompt (P), the
    * assignment that recreates it (A), its attributes (a), in upper case (U),
    * with the first letter upper (u), in lower case (L), as keys and values (K, k).
    */
-  private transformValue(letter: string, parameter: string, value: string, ctx: ExecContextIf): string {
+  private async transformValue(letter: string, parameter: string, value: string, ctx: ExecContextIf): Promise<string> {
     const name = this.splitSubscript(parameter).name;
     const info = ctx.getVariable(name);
     // The variable's attributes in declare's order; one in the environment only is exported
@@ -5207,12 +5577,16 @@ export class AstExecutor {
       case 'E':
         return utils.unquoteWord(`$'${value.replaceAll("'", "\\'")}'`).values[0] ?? '';
       case 'P':
-        return value;
+        return await this.expandPrompt(value, ctx);
       case 'A': {
         const flags = attributes();
 
-        // Declared and never given a value: `declare -rl VAR`, as declare -p says it
-        if (info && info.value === undefined) return `declare -${flags || '-'} ${name}`;
+        // Declared and never given a value: `declare -rl VAR`, as declare -p says it;
+        // an array without element 0 is said the same way
+        const element0 = !/\[/.test(parameter) && (ctx.getArray(name)?.[0] ?? ctx.getAssoc(name)?.['0']);
+        const array = ctx.getArray(name) !== undefined || ctx.getAssoc(name) !== undefined;
+
+        if (info && (info.value === undefined || (array && !/\[/.test(parameter) && element0 === undefined))) return `declare -${flags || '-'} ${name}`;
 
         return flags ? `declare -${flags} ${name}=${singleQuoted(value)}` : `${name}=${singleQuoted(value)}`;
       }
@@ -5285,7 +5659,7 @@ export class AstExecutor {
   protected async applyValueOperator(xp: Record<string, unknown>, value: string, ctx: ExecContextIf): Promise<string | null> {
     switch (xp.op) {
       case 'transformation':
-        return this.transformValue(String(xp.transform ?? ''), String(xp.parameter ?? ''), value, ctx);
+        return await this.transformValue(String(xp.transform ?? ''), String(xp.parameter ?? ''), value, ctx);
 
       case 'stringReplace':
         return this.replacePattern(xp, value, ctx);
@@ -5306,7 +5680,12 @@ export class AstExecutor {
         return this.removePrefix(value, await this.patternGlob(this.writtenWord(xp.word, xp.wordSource), ctx), true);
 
       case 'caseChange':
-        return this.changeCase(value, String(xp.pattern ?? '?'), xp.case === 'upper', Boolean(xp.globally));
+        return this.changeCase(
+          value,
+          await this.patternGlob(this.writtenWord(xp.patternWord, xp.patternWordSource ?? xp.pattern ?? '?'), ctx),
+          xp.case === 'upper',
+          Boolean(xp.globally),
+        );
 
       case 'substring': {
         // ${var:offset:length}, counted in characters
@@ -5334,10 +5713,20 @@ export class AstExecutor {
     positional = false,
     list = false,
   ): Promise<{ start: number; end: number } | undefined> {
-    const evaluate = async (expression: unknown, number: unknown) =>
-      typeof expression === 'string' && expression.trim() !== '' && !/^\s*-?\d+\s*$/.test(expression)
-        ? await this.arithmeticValue({ expression }, ctx)
-        : Number(expression ?? number) || 0;
+    const evaluate = async (expression: unknown, number: unknown) => {
+      if (typeof expression !== 'string' || expression.trim() === '' || /^\s*-?\d+\s*$/.test(expression)) return Number(expression ?? number) || 0;
+
+      try {
+        return await this.arithmeticValue({ expression }, ctx);
+      } catch (err) {
+        // bash names the parameter first: `x: 1+: syntax error: …`
+        if (err instanceof ArithmeticSyntaxError || err instanceof ArithmeticError) {
+          err.message = `${xp.parameter}: ${err.message}`;
+          (err as { substring?: boolean }).substring = true;
+        }
+        throw err;
+      }
+    };
 
     let start = await evaluate(xp.offsetExpression, xp.offset);
 
@@ -5436,6 +5825,19 @@ export class AstExecutor {
       return { values: names, join: xp.expandWords ? 'field' : 'ifs' };
     }
 
+    // `"${@-x}"`: a list that is there is the list, `"$@"`; `"${@:+x}"` one that
+    // is not, nothing — what is null being the elements joined, as `$*` is
+    if (xp.op && LIST_WORD_OPS.has(xp.op)) {
+      const plain = this.expandListParameter({ ...xp, op: undefined }, ctx, params);
+
+      if (!plain) return null;
+
+      const joined = plain.values.join(plain.join === 'field' ? ' ' : this.getIfs(ctx)[0] ?? '');
+      const there = plain.values.length > 0 && (xp.op.endsWith('IfUnset') || joined !== '');
+
+      return there !== xp.op.startsWith('useAlternative') ? plain : null;
+    }
+
     if (xp.op && !DISTRIBUTING_OPS.has(xp.op)) {
       return null;
     }
@@ -5470,6 +5872,38 @@ export class AstExecutor {
   }
 
   /**
+   * A name written quoted, which bash's extquote reads: `${$'x1'%t}` is
+   * `${x1%t}`. A name in plain single quotes is none, `${'x1'}`, and a bad
+   * substitution, said with its `$'…'` as the `'…'` they became.
+   */
+  protected async resolveQuotedNames<T extends { type: string; loc?: unknown }>(expansions: T[]): Promise<T[]> {
+    const resolved: T[] = [];
+
+    for (const xp of expansions) {
+      const parameter = (xp as { parameter?: unknown }).parameter;
+
+      if (xp.type !== 'ParameterExpansion' || typeof parameter !== 'string' || !/^\$?'/.test(parameter)) {
+        resolved.push(xp);
+        continue;
+      }
+
+      const ansi = parameter.match(/^\$'((?:[^'\\]|\\.)*)'(.*)$/s);
+      const name = ansi ? utils.unquoteWord(`$'${ansi[1]}'`).values[0] ?? '' : '';
+
+      if (!ansi || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+        throw new CommandAbortError(`\${${parameter.replace(/\$'/g, "'")}}: bad substitution`, { code: 'E_BAD_SUBSTITUTION' });
+      }
+
+      const ast = await parse(`\${${name}${ansi[2]}}`, { mode: 'word-expansion' });
+      const inner = (ast.commands[0] as AstNodeCommand | undefined)?.name?.expansion?.[0];
+
+      resolved.push(inner ? { ...inner, loc: xp.loc } as unknown as T : xp);
+    }
+
+    return resolved;
+  }
+
+  /**
    * `${!name…}`: the value of `name` is the parameter the expansion is really
    * about, `${!x//c/y}` with x=v being `${v//c/y}`. Each such expansion is
    * replaced by the one it leads to, parsed from that text, where it stands. A
@@ -5496,7 +5930,7 @@ export class AstExecutor {
 
       // `${!prefix*}` is the parser's when it is one; what is left here is no
       // such form, `${!_Q* }` or `${!1*}`
-      if (/^[*@]/.test(rest)) throw new CommandAbortError(`\${!${word}}: bad substitution`, { code: 'E_BAD_SUBSTITUTION' });
+      if (/^[*@]/.test(rest) && !/^@[QEPAaUuLKk]$/.test(rest)) throw new CommandAbortError(`\${!${word}}: bad substitution`, { code: 'E_BAD_SUBSTITUTION' });
 
       const nameref = ctx.getVariable(name);
 
@@ -5518,6 +5952,12 @@ export class AstExecutor {
         set = true;
       }
 
+      // An unset positional parameter leads to one as unset: `${!9:-x}` is x, `${!9}` nothing
+      if (!set && /^\d+$/.test(name)) {
+        target = name;
+        set = true;
+      }
+
       // `set -u` or not, as bash says it
       if (!set) {
         throw new CommandAbortError(`${name}: invalid indirect expansion`, { code: 'E_BAD_SUBSTITUTION' });
@@ -5528,7 +5968,11 @@ export class AstExecutor {
       }
 
       // `set -u` and what it leads to is unset: bash names the indirection, `!x`
-      if (ctx.getShellOption('nounset') && !/^:?[-=+?]/.test(rest) && !/^[@*]$|\[[@*]\]$/.test(target) && !(await this.isParameterSet(target, ctx, params))) {
+      const attributesOnly = /^@[aA]$/.test(rest) && this.hasAnyValue(target, ctx);
+
+      if (
+        ctx.getShellOption('nounset') && !/^:?[-=+?]/.test(rest) && !attributesOnly && !/^[@*]$|\[[@*]\]$/.test(target) && !(await this.isParameterSet(target, ctx, params))
+      ) {
         throw new UnboundVariableError(`!${name}`);
       }
 
@@ -5568,7 +6012,7 @@ export class AstExecutor {
     // Where a `"$@"` expanded to nothing
     const emptyAt: number[] = [];
 
-    for (const xp of await this.resolveIndirections(node.expansion, ctx)) {
+    for (const xp of await this.resolveIndirections(await this.resolveQuotedNames(node.expansion), ctx)) {
       if (xp.resolved) {
         continue;
       }
@@ -5608,13 +6052,28 @@ export class AstExecutor {
             // `${a[@]:1}` counts from the first element, `${@:1}` from the first
             // positional parameter — offset 0 there is $0
             const positional = xp.parameter === '@' || xp.parameter === '*';
-            const values = positional ? [params['0'] ?? '', ...list.values] : list.values;
-            const bounds = await this.substringBounds(xp as Record<string, unknown>, values.length, ctx, positional, true);
+            const { name, subscript } = this.splitSubscript(String(xp.parameter ?? ''));
+            const array = !positional && (subscript === '@' || subscript === '*') && !ctx.getAssoc(name) ? ctx.getArray(name) : undefined;
 
-            list.values = bounds ? values.slice(bounds.start, bounds.end) : [];
+            if (array) {
+              // An indexed array's offset is an index, not a count: `${a[@]:2}` is
+              // the elements from index 2 on, however few come before it
+              const indices = Object.keys(array).map(Number);
+              const size = indices.length > 0 ? indices[indices.length - 1] + 1 : 0;
+              const bounds = await this.substringBounds(xp as Record<string, unknown>, size, ctx, false, true);
+              const from = bounds ? indices.findIndex((index) => index >= bounds.start) : -1;
+              const counted = (xp as { lengthExpression?: unknown }).lengthExpression !== undefined || (xp as { length?: unknown }).length != null;
+
+              list.values = from === -1 ? [] : list.values.slice(from, counted ? from + bounds!.end - bounds!.start : undefined);
+            } else {
+              const values = positional ? [params['0'] ?? '', ...list.values] : list.values;
+              const bounds = await this.substringBounds(xp as Record<string, unknown>, values.length, ctx, positional, true);
+
+              list.values = bounds ? values.slice(bounds.start, bounds.end) : [];
+            }
           } else if (xp.op === 'transformation' && this.arrayTransform(xp, ctx) !== null) {
             list.values = this.arrayTransform(xp, ctx)!;
-          } else if (xp.op) {
+          } else if (xp.op && DISTRIBUTING_OPS.has(xp.op)) {
             const xpAny = xp as Record<string, unknown>;
 
             list.values = await Promise.all(list.values.map(async (value) => await this.applyValueOperator(xpAny, value, ctx) ?? value));
@@ -5658,6 +6117,20 @@ export class AstExecutor {
 
           if (takesWord && xpAny.word && !isDoubleQuotedAt(node.text, xp.loc!.start)) {
             const word = xpAny.word as AstNodeWord;
+            const ifs = this.getIfs(ctx);
+
+            // `${u-$@}` with an IFS that has no space: the parameters joined by
+            // spaces, and not split at all, as bash has it — "inconsistent", says
+            // its own test of it
+            const unquotedAt = (inner: AstNodeWord['expansion'][number]) =>
+              inner.type === 'ParameterExpansion' && /^@$|\[@\]$/.test(String(inner.parameter)) && !inner.op && !(inner.loc && isDoubleQuotedAt(word.text, inner.loc.start));
+
+            if (ifs !== '' && !ifs.includes(' ') && word.expansion?.some(unquotedAt)) {
+              const joined = singleQuoted(await this.operatorWordValue(xpAny, ctx, true));
+
+              rValue.replaceWithRanges(xp.loc!.start, xp.loc!.end + 1, joined, unquotedLiterals(joined, []));
+              continue;
+            }
             const inner = word.expansion?.length
               ? await this.substituteExpansions(word, ctx, subs, opts)
               : { text: String(xpAny.wordSource ?? word.text), protectedRanges: [], status: 0, emptyList: false };
@@ -5693,8 +6166,11 @@ export class AstExecutor {
             continue;
           }
 
-          // `set -u` holds for an operator on the value, `${u#x}` and `${u@Q}` alike
-          if (DISTRIBUTING_OPS.has(String(xpAny.op))) this.assertParameterSet(xp.parameter!, isSet, ctx);
+          // `set -u` holds for an operator on the value, `${u#x}` and `${u@Q}` alike,
+          // but for the attributes of a variable there is, `${a@a}` with no a[0]
+          const attributesOnly = xpAny.op === 'transformation' && 'aA'.includes(String(xpAny.transform)) && this.hasAnyValue(xp.parameter!, ctx);
+
+          if (DISTRIBUTING_OPS.has(String(xpAny.op)) && !attributesOnly) this.assertParameterSet(xp.parameter!, isSet, ctx);
 
           // A transformation of what is not set is nothing, not `''`; a declared
           // variable still has attributes for @a and @A to show
@@ -5738,6 +6214,9 @@ export class AstExecutor {
 
               if (home !== undefined) resolved = home + resolved.slice(tilde![0].length);
               await this.applyAssignment({ name, subscript, append: false, values: [resolved], list: false, status: 0 }, ctx, false);
+
+              // What it expands to is what the variable took: `declare -i n; ${n:=4+3}` is 7
+              resolved = (await this.lookupParameter(xp.parameter!, ctx, this.paramView(ctx))).value;
             } else {
               resolved = paramValue;
             }
@@ -5920,19 +6399,24 @@ export class AstExecutor {
       nocaseglob: ctx.getShellOption('nocaseglob'),
       globstar: ctx.getShellOption('globstar'),
       extglob: ctx.getShellOption('extglob'),
-      ignore: globignore.split(':').filter((glob) => glob !== ''),
+      ignore: splitIgnoreSpec(globignore),
       // bash's default locale is C, which sorts by bytes, as does POSIX
       bytewise: /^(C|POSIX)([._@]|$)/.test(locale),
+      globskipdots: ctx.getShellOption('globskipdots'),
     };
     const out: string[] = [];
 
     for (const [i, pattern] of patterns.entries()) {
-      if (!isGlobPattern(pattern, options.extglob)) {
+      if (!isGlobPattern(pattern, options.extglob, true)) {
         out.push(values[i]);
         continue;
       }
 
-      const matches = await expandPattern(pattern, (dir) => this.shell.readDirectory!(ctx, dir), options);
+      // A path is asked after, not looked for in a listing: a directory may be searched but not read
+      const stat = this.shell.testPath
+        ? async (path: string) => await this.shell.testPath!(ctx, path, 'EXISTS') ? { directory: await this.shell.testPath!(ctx, path, 'DIRECTORY') } : null
+        : undefined;
+      const matches = await expandPattern(pattern, (dir) => this.shell.readDirectory!(ctx, dir), options, stat);
 
       if (matches.length > 0) {
         out.push(...matches);
@@ -5961,8 +6445,9 @@ export class AstExecutor {
   private async operatorWordValue(xp: Record<string, unknown>, ctx: ExecContextIf, dquoted: boolean, fields = false, assigned = false): Promise<string> {
     const source = xp.wordSource;
 
-    // In double quotes the word is too: `"${u-$*}"` joins on IFS as "$*" does
-    if (!dquoted || typeof source !== 'string' || !/['"\\$`]/.test(source)) {
+    // In double quotes the word is too: `"${u-$*}"` joins on IFS as "$*" does,
+    // and `"${u-<(cmd)}"` substitutes no process
+    if (!dquoted || typeof source !== 'string' || !/['"\\$`]|[<>]\(/.test(source)) {
       return this.resolveWordValue(xp.word, ctx, assigned);
     }
 
@@ -5970,6 +6455,8 @@ export class AstExecutor {
     // Inside `$( )`, `${ }` and backquotes the word's own text stays as it is
     let depth = 0;
     let backquoted = false;
+    // Inside a nested pair, `"${u:-"\p"}"`, a backslash quotes any character, as bash has it
+    let nested = false;
 
     for (let i = 0; i < source.length; i++) {
       const char = source[i];
@@ -5977,7 +6464,9 @@ export class AstExecutor {
 
       if (char === '\\' && next !== undefined) {
         // `\}` is a `}`; any other escape is the double quotes'
-        text += depth === 0 && !backquoted && next === '}' ? '}' : char + next;
+        const plain = depth === 0 && !backquoted;
+
+        text += plain && next === '}' ? '}' : plain && nested && !'$`"\\\n'.includes(next) ? next : char + next;
         i++;
       } else if (char === '`') {
         backquoted = !backquoted;
@@ -5994,6 +6483,7 @@ export class AstExecutor {
         text += char;
       } else if (depth === 0 && !backquoted && char === '"') {
         // A nested pair only groups: its text is double-quoted either way
+        nested = !nested;
       } else {
         text += char;
       }

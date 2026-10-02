@@ -52,19 +52,21 @@ Deno.test('Stdin Redirection', async (t) => {
 });
 
 Deno.test('File Descriptor Duplication', async (t) => {
-  await t.step('>& redirects stdout', async () => {
+  await t.step('>& file redirects stdout and stderr both', async () => {
     const shell = new TestShell();
-    const result = await shell.runAndCapture('echo hello >& output.txt');
+    shell.mockCommand('bothout', async () => ({ code: 0, stdout: 'out\n', stderr: 'err\n' }));
+    const result = await shell.runAndCapture('echo hello >& output.txt; bothout >& both.txt');
     assertEquals(result.exitCode, 0);
     assertEquals(shell.getFile('output.txt'), 'hello\n');
+    assertEquals(shell.getFile('both.txt'), 'out\nerr\n');
   });
 
-  await t.step('2>& redirects stderr', async () => {
+  await t.step('2>& file is an ambiguous redirect, as in bash', async () => {
     const shell = new TestShell();
     shell.mockCommand('errcmd', async () => ({ code: 0, stderr: 'error\n' }));
-    const result = await shell.runAndCapture('errcmd 2>& error.txt');
-    assertEquals(result.exitCode, 0);
-    assertEquals(shell.getFile('error.txt'), 'error\n');
+    const result = await shell.runAndCapture('errcmd 2>& error.txt; echo rc=$?');
+    assertEquals(result.stdout, 'rc=1\n');
+    assertEquals(result.stderr, 'error.txt: ambiguous redirect\n');
   });
 });
 

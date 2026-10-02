@@ -6,9 +6,9 @@ see [README.md](README.md) for what the scores mean.
 | Measure | Result |
 | --- | --- |
 | Test files that parse | 462 / 471 |
-| `run-*` scripts passing | 37 / 83 (real bash here: 74) |
-| Mean upstream score | 92% |
-| Mean stdout score | 93% |
+| `run-*` scripts passing | 58 / 83 (real bash here: 74) |
+| Mean upstream score | 94% |
+| Mean stdout score | 95% |
 
 ## Gaps
 
@@ -33,8 +33,6 @@ Bash builtins that reached the host as external commands.
 | Name | Tests | Times hit |
 | --- | --- | --- |
 | test | cond, cprint | 7 |
-| complete | complete | 37 |
-| help | redir | 1 |
 
 ### Keywords run as commands
 
@@ -63,9 +61,7 @@ What bash-ts refused to parse as it ran: test scripts, the `.sub` files and `-c`
 
 Errors that escaped the executor and ended the script.
 
-| Name | Tests | Times hit |
-| --- | --- | --- |
-| Error: No such device or address (os error 6): open '/dev/tty' | vredir | 1 |
+None.
 
 ### Invocation options not supported
 
@@ -81,14 +77,12 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | --- | --- |
 | foo: command not found | alias, heredoc |
 | syntax error near unexpected token 'in' | alias, comsub |
-| [N] N | jobs, trap |
 | /dev/tty: No such device or address (os error N): open '/dev/tty' | read, test |
 | x=value: command not found | alias |
 | x=newvalue: command not found | alias |
 | a: command not found | alias |
 | ever: command not found | alias |
 | 'alias long_comment='# for x in '' | alias |
-| complete: command not found | complete |
 | 'switch foo in foo) echo ok N;; esac' | comsub |
 | 'comsubN)' | comsub |
 | ﷑second): command not found | array |
@@ -99,13 +93,7 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | unset: scalar: not an array variable | array |
 | a\[N\]: syntax error: invalid arithmetic operator (error token is "\[N\]") | array |
 | a\[a\[N\]\]: syntax error: invalid arithmetic operator (error token is "\[a\[N\]\]") | array |
-| cd: bash-dir-a: No such file or directory | builtins |
-| declare: foo: not found | builtins |
-| : bad array subscript | assoc |
-| source: /: is a directory | execscript |
-| bash-notthere: command not found | execscript |
 | bar: command not found | heredoc |
-| %: syntax error: operand expected (error token is "%") | more-exp |
 | unset: x: not an array variable | nameref |
 | #? #? | nameref |
 | 'N': not a valid identifier | nameref |
@@ -115,10 +103,18 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | declare: XXX: cannot convert indexed to associative array | nameref |
 | declare: 'one﷑two﷑three': invalid variable name for name reference | nameref |
 | declare: array: not found | nameref |
-| }: syntax error: operand expected (error token is "}") | new-exp |
-| N: invalid indirect expansion | new-exp |
-| '&lt;(echo': No such file or directory | new-exp |
-| 'a)': No such file or directory | new-exp |
+| real N.N | posixpipe |
+| user N.N | posixpipe |
+| sys N.N | posixpipe |
+| wait: pid  is not a child of this shell | procsub |
+| set: -r: invalid option | rsh |
+| sh: command not found | rsh |
+| ./source.subN: No such file or directory | rsh |
+| c=N: command not found | varenv |
+| f=N: command not found | varenv |
+| a=/usr/chet: No such file or directory | varenv |
+| var[@]: bad array subscript | varenv |
+| local: x: readonly variable | varenv |
 
 ## Per test
 
@@ -128,40 +124,40 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | --- | --- | --- | --- | --- | --- |
 | alias | pass | no | 64% | 67% | 7,10c7,9 ⏎ &lt; ./alias1.sub: line 20: x=value: command not found ⏎ &lt;  |
 | appendop | pass | yes | 100% | 100% |  |
-| arith | pass | no | 98% | 97% | 196c196 ⏎ &lt;  ⏎ --- |
-| arith-for | pass | no | 97% | 97% | 67c67,68 ⏎ &lt; bash: -c: line 1: syntax error: for (( … )) takes three expressions separated by ';', got " i=0; "i &lt; 3" " ⏎ --- |
-| array | pass | no | 88% | 90% | 2,3c2,4 ⏎ &lt; ./array.tests: line 28: ﷑second): command not found ⏎ &lt; 127 |
+| arith | pass | yes | 100% | 100% |  |
+| arith-for | pass | yes | 100% | 100% |  |
+| array | pass | no | 90% | 93% | 2,3c2,4 ⏎ &lt; ./array.tests: line 28: ﷑second): command not found ⏎ &lt; 127 |
 | array2 | pass | yes | 100% | 100% |  |
-| assoc | pass | no | 100% | 100% | 243c243 ⏎ &lt; ./assoc11.sub: line 34: : bad array subscript ⏎ --- |
+| assoc | pass | yes | 100% | 100% |  |
 | attr | pass | yes | 100% | 100% |  |
-| braces | pass | no | 99% | 99% | 23c23 ⏎ &lt; bazx bazy ⏎ --- |
-| builtins | pass | no | 96% | 97% | 1,2c1 ⏎ &lt; core file size              (blocks, -c) 0 ⏎ &lt; 0 |
+| braces | pass | yes | 100% | 100% |  |
+| builtins | pass | yes | 100% | 100% |  |
 | case | pass | yes | 100% | 100% |  |
 | casemod | pass | yes | 100% | 100% |  |
-| complete | pass | no | 0% | 0% | 1,37c1,63 ⏎ &lt; ./complete.tests: line 19: complete: command not found ⏎ &lt; ./complete.tests: line 22: complete: command not found |
+| complete | pass | yes | 100% | 100% |  |
 | comsub | pass | no | 83% | 88% | 1c1 ⏎ &lt; ./comsub.tests: line 19: hijkl: command not found ⏎ --- |
 | comsub-eof | pass | no | 80% | 94% | 2,3d1 ⏎ &lt; hi EOF ⏎ &lt; ./comsub-eof1.sub: line 3: warning: here-document at line 1 delimited by end-of-file (wanted 'EOF') |
-| comsub-posix | pass | no | 99% | 99% | 93c93 ⏎ &lt; bad 3 ⏎ --- |
-| cond | pass | no | 99% | 99% | 82a83 ⏎ &gt; ok 4a ⏎ 89a91 |
+| comsub-posix | pass | yes | 100% | 100% |  |
+| cond | pass | yes | 100% | 100% |  |
 | coproc | pass | yes | 100% | 100% |  |
 | cprint | pass | yes | 100% | 100% |  |
-| dbg-support | pass | no | 76% | 76% | 4a5 ⏎ &gt; debug lineno: 30 fn1 ⏎ 14c15 |
+| dbg-support | pass | no | 79% | 78% | 15c15 ⏎ &lt; 81 ./dbg-support.tests ⏎ --- |
 | dbg-support2 | pass | no | 86% | 86% | 7c7 ⏎ &lt; x is 2 ⏎ --- |
 | dirstack | pass | yes | 100% | 100% |  |
-| dollars | pass | no | 99% | 99% | 393,400c393,395 ⏎ &lt; argv[1] = &lt;^?&gt; ⏎ &lt; argv[1] = &lt;^?&gt; |
+| dollars | pass | no | 99% | 99% | 392a393,395 ⏎ &gt; argv[1] = &lt;&gt; ⏎ &gt; argv[1] = &lt;&gt; |
 | dynvar | pass | yes | 100% | 100% |  |
-| errors | pass | no | 100% | 100% | 118c118 ⏎ &lt; ./errors4.sub: line 29: break: x: numeric argument required ⏎ --- |
-| execscript | env | no | 91% | 95% | 10c10 ⏎ &lt; notthere: notthere: No such file or directory ⏎ --- |
-| exp-tests | pass | no | 98% | 98% | 41c41 ⏎ &lt; argv[1] = &lt;"Hello world!"&gt; ⏎ --- |
+| errors | pass | yes | 100% | 100% |  |
+| execscript | env | no | 99% | 100% | 24d23 ⏎ &lt; trap -- 'echo USR1' SIGUSR1 ⏎ 25a25 |
+| exp-tests | pass | no | 100% | 100% | 239c239,240 ⏎ &lt; declare -a array=([0]="foo") ⏎ --- |
 | exportfunc | pass | no | 86% | 93% | 4c4 ⏎ &lt; ./exportfunc.tests: eval: line 43: syntax error: unexpected end of file ⏎ --- |
-| extglob | pass | no | 89% | 91% | 52c52 ⏎ &lt; no ⏎ --- |
+| extglob | pass | yes | 100% | 100% |  |
 | extglob2 | pass | yes | 100% | 100% |  |
 | extglob3 | pass | yes | 100% | 100% |  |
-| func | pass | no | 99% | 99% | 155c155 ⏎ &lt; 5 0 ⏎ --- |
+| func | pass | yes | 100% | 100% |  |
 | getopts | pass | yes | 100% | 100% |  |
-| glob-test | env | no | 94% | 96% | 1,3c1 ⏎ &lt; f*/bar ⏎ &lt; glob2.sub: warning: you do not have the zh_HK.big5hkscs locale installed; |
+| glob-test | env | no | 98% | 100% | 2,3d1 ⏎ &lt; glob2.sub: warning: you do not have the zh_HK.big5hkscs locale installed; ⏎ &lt; glob2.sub: warning: that will cause some of these tests to fail. |
 | globstar | pass | yes | 100% | 100% |  |
-| heredoc | env | no | 93% | 99% | 92a93 ⏎ &gt; ./heredoc3.sub: line 98: warning: here-document at line 96 delimited by end-of-file (wanted 'EOF') ⏎ 102,105d102 |
+| heredoc | env | no | 94% | 99% | 103,106d102 ⏎ &lt; cat: /home/mattias/m/git/bash-executor-conformance/conformance/.cache/work/ours/run-heredoc/config.h: No such file or directory ⏎ &lt; cmp: /home/m |
 | herestr | pass | yes | 100% | 100% |  |
 | histexpand | pass | yes | 100% | 100% |  |
 | history | pass | no | 97% | 96% | 190a191,195 ⏎ &gt; (left ⏎ &gt; mid |
@@ -171,12 +167,12 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | intl | env | no | 71% | 77% | 13a14 ⏎ &gt; 1,0000 ⏎ 18,19c19 |
 | invert | pass | yes | 100% | 100% |  |
 | iquote | pass | yes | 100% | 100% |  |
-| jobs | env | timeout | 38% | 48% | timeout |
+| jobs | env | timeout | 41% | 48% | timeout |
 | lastpipe | pass | yes | 100% | 100% |  |
 | mapfile | pass | no | 99% | 99% | 154c154 ⏎ &lt; declare -a array=([0]=$'a�b�c�\n') ⏎ --- |
-| more-exp | pass | no | 99% | 99% | 193c193 ⏎ &lt; ./more-exp.tests: line 449: %: syntax error: operand expected (error token is "%") ⏎ --- |
+| more-exp | pass | yes | 100% | 100% |  |
 | nameref | pass | no | 89% | 92% | 80d79 ⏎ &lt; ./nameref4.sub: line 181: unset: x: not an array variable ⏎ 157a157 |
-| new-exp | pass | no | 97% | 98% | 6,7c6,7 ⏎ &lt; ./new-exp.tests: line 41: }: syntax error: operand expected (error token is "}") ⏎ &lt; oops |
+| new-exp | pass | yes | 100% | 100% |  |
 | nquote | pass | no | 80% | 83% | 7,10c7,10 ⏎ &lt; argv[1] = &lt;$hello,&gt; ⏎ &lt; argv[2] = &lt;$world&gt; |
 | nquote1 | pass | yes | 100% | 100% |  |
 | nquote2 | pass | yes | 100% | 100% |  |
@@ -185,27 +181,27 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | nquote5 | pass | yes | 100% | 100% |  |
 | parser | pass | yes | 100% | 100% |  |
 | posix2 | pass | yes | 100% | 100% |  |
-| posixexp | pass | no | 96% | 96% | 40d39 ⏎ &lt; sh posixexp2.sub: test 15 failed ⏎ 109,111c108 |
+| posixexp | pass | yes | 100% | 100% |  |
 | posixexp2 | pass | yes | 100% | 100% |  |
 | posixpat | pass | yes | 100% | 100% |  |
 | posixpipe | env | yes | 100% | 100% |  |
 | precedence | pass | yes | 100% | 100% |  |
 | printf | pass | yes | 100% | 100% |  |
 | procsub | pass | no | 72% | 73% | 18,21c18,21 ⏎ &lt; 1 ⏎ &lt; 1 |
-| quote | pass | no | 100% | 100% | 77c77 ⏎ &lt; 'weferfds'\\''dsfsdf' ⏎ --- |
-| quotearray | pass | no | 99% | 100% | 97c97 ⏎ &lt; declare -a array=() ⏎ --- |
+| quote | pass | yes | 100% | 100% |  |
+| quotearray | pass | yes | 100% | 100% |  |
 | read | env | timeout | 64% | 66% | timeout |
-| redir | pass | no | 96% | 97% | 1c1 ⏎ &lt; foo ⏎ --- |
-| rhs-exp | pass | no | 95% | 95% | 11c11 ⏎ &lt; argv[1] = &lt;TDEFAULTS = -DSELECT_VECS=\'&m68kcoff_vec\'&gt; ⏎ --- |
+| redir | pass | yes | 100% | 100% |  |
+| rhs-exp | pass | yes | 100% | 100% |  |
 | rsh | pass | no | 17% | 0% | 1,13c1,14 ⏎ &lt; ./rsh1.sub: line 20: set: -r: invalid option ⏎ &lt; set: usage: set [-abefhkmnptuvxBCEHPT] [-o option-name] [--] [-] [arg ...] |
 | set-e | pass | yes | 100% | 100% |  |
 | set-x | pass | yes | 100% | 100% |  |
-| shopt | pass | no | 99% | 99% | 306a307,310 ⏎ &gt; 28c28 ⏎ &gt; &lt; globskipdots   	off |
+| shopt | pass | yes | 100% | 100% |  |
 | strip | pass | yes | 100% | 100% |  |
 | test | env | timeout | 98% | 98% | timeout |
 | tilde | pass | yes | 100% | 100% |  |
 | tilde2 | pass | yes | 100% | 100% |  |
-| trap | pass | no | 92% | 94% | 18a19 ⏎ &gt; func[29] funcdebug ⏎ 30,33d30 |
-| type | pass | no | 98% | 98% | 43,44c43,44 ⏎ &lt; /tmp/bash-ts ⏎ &lt; bash-ts is hashed (/tmp/bash-ts) |
-| varenv | pass | no | 83% | 85% | 2,5c2,3 ⏎ &lt; ./varenv.tests: line 42: c=7: command not found ⏎ &lt; 3 4 3 4 5 |
-| vredir | env | no | 95% | 97% | 14d13 ⏎ &lt; cat: /home/mattias/m/git/bash-executor-conformance/conformance/.cache/work/ours/run-vredir/tmp/foo: No such file or directory ⏎ 76c75 |
+| trap | pass | yes | 100% | 100% |  |
+| type | pass | yes | 100% | 100% |  |
+| varenv | pass | no | 85% | 87% | 2,5c2,3 ⏎ &lt; ./varenv.tests: line 42: c=7: command not found ⏎ &lt; 3 4 3 4 5 |
+| vredir | env | no | 100% | 100% | 101d100 ⏎ &lt; ./vredir8.sub: line 10: /dev/tty: No such device or address |
