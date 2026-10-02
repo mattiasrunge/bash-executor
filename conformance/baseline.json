@@ -475,9 +475,9 @@
   },
   "tests": {
     "run-alias": {
-      "upstream": 0.593,
+      "upstream": 0.642,
       "pass": false,
-      "stdout": 0.635,
+      "stdout": 0.667,
       "reference": "pass"
     },
     "run-appendop": {
@@ -782,7 +782,7 @@
       "reference": "pass"
     },
     "run-nquote": {
-      "upstream": 0.783,
+      "upstream": 0.795,
       "pass": false,
       "stdout": 0.827,
       "reference": "pass"

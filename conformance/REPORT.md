@@ -6,9 +6,9 @@ see [README.md](README.md) for what the scores mean.
 | Measure | Result |
 | --- | --- |
 | Test files that parse | 462 / 471 |
-| `run-*` scripts passing | 36 / 83 (real bash here: 74) |
-| Mean upstream score | 90% |
-| Mean stdout score | 92% |
+| `run-*` scripts passing | 37 / 83 (real bash here: 74) |
+| Mean upstream score | 92% |
+| Mean stdout score | 93% |
 
 ## Gaps
 
@@ -32,10 +32,8 @@ Bash builtins that reached the host as external commands.
 
 | Name | Tests | Times hit |
 | --- | --- | --- |
-| history | histexpand, history | 64 |
 | test | cond, cprint | 7 |
 | complete | complete | 37 |
-| fc | history | 28 |
 | help | redir | 1 |
 
 ### Keywords run as commands
@@ -83,12 +81,8 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | --- | --- |
 | foo: command not found | alias, heredoc |
 | syntax error near unexpected token 'in' | alias, comsub |
-| history: command not found | histexpand, history |
-| !!: command not found | histexpand, history |
-| !e: command not found | histexpand, history |
 | [N] N | jobs, trap |
 | /dev/tty: No such device or address (os error N): open '/dev/tty' | read, test |
-| quux: command not found | alias |
 | x=value: command not found | alias |
 | x=newvalue: command not found | alias |
 | a: command not found | alias |
@@ -111,16 +105,20 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | source: /: is a directory | execscript |
 | bash-notthere: command not found | execscript |
 | bar: command not found | heredoc |
-| !?ch?: command not found | histexpand |
-| !-N: command not found | histexpand |
-| ^N^N: command not found | histexpand |
-| !N: command not found | histexpand |
-| !!:s/foo/bar/: No such file or directory | histexpand |
-| !-N:gs/foo/bar/: No such file or directory | histexpand |
-| !!:gs/bar/x: No such file or directory | histexpand |
-| /: Is a directory | histexpand |
-| !-N:g: command not found | histexpand |
-| !!:gs+bar+whix+: command not found | histexpand |
+| %: syntax error: operand expected (error token is "%") | more-exp |
+| unset: x: not an array variable | nameref |
+| #? #? | nameref |
+| 'N': not a valid identifier | nameref |
+| unset: var: cannot unset: readonly variable | nameref |
+| var: readonly variable | nameref |
+| typeset: 'N': not a valid identifier | nameref |
+| declare: XXX: cannot convert indexed to associative array | nameref |
+| declare: 'one﷑two﷑three': invalid variable name for name reference | nameref |
+| declare: array: not found | nameref |
+| }: syntax error: operand expected (error token is "}") | new-exp |
+| N: invalid indirect expansion | new-exp |
+| '&lt;(echo': No such file or directory | new-exp |
+| 'a)': No such file or directory | new-exp |
 
 ## Per test
 
@@ -128,7 +126,7 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 
 | Test | ref | pass | upstream | stdout | First difference (upstream) |
 | --- | --- | --- | --- | --- | --- |
-| alias | pass | no | 59% | 64% | 3,4c3,4 ⏎ &lt; ./alias.tests: line 1: quux: command not found ⏎ &lt; baz |
+| alias | pass | no | 64% | 67% | 7,10c7,9 ⏎ &lt; ./alias1.sub: line 20: x=value: command not found ⏎ &lt;  |
 | appendop | pass | yes | 100% | 100% |  |
 | arith | pass | no | 98% | 97% | 196c196 ⏎ &lt;  ⏎ --- |
 | arith-for | pass | no | 97% | 97% | 67c67,68 ⏎ &lt; bash: -c: line 1: syntax error: for (( … )) takes three expressions separated by ';', got " i=0; "i &lt; 3" " ⏎ --- |
@@ -165,8 +163,8 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | globstar | pass | yes | 100% | 100% |  |
 | heredoc | env | no | 93% | 99% | 92a93 ⏎ &gt; ./heredoc3.sub: line 98: warning: here-document at line 96 delimited by end-of-file (wanted 'EOF') ⏎ 102,105d102 |
 | herestr | pass | yes | 100% | 100% |  |
-| histexpand | pass | no | 33% | 44% | 1,27c1,51 ⏎ &lt; ./histexp.tests: line 23: history: command not found ⏎ &lt; ./histexp.tests: line 34: history: command not found |
-| history | pass | no | 29% | 39% | 1,17c1,36 ⏎ &lt; ./history.tests: line 17: history: command not found ⏎ &lt; ./history.tests: line 19: history: command not found |
+| histexpand | pass | yes | 100% | 100% |  |
+| history | pass | no | 97% | 96% | 190a191,195 ⏎ &gt; (left ⏎ &gt; mid |
 | ifs | pass | yes | 100% | 100% |  |
 | ifs-posix | pass | yes | 100% | 100% |  |
 | input-test | pass | yes | 100% | 100% |  |
@@ -179,7 +177,7 @@ Normalized stderr lines from the stdout tier that real bash never printed for th
 | more-exp | pass | no | 99% | 99% | 193c193 ⏎ &lt; ./more-exp.tests: line 449: %: syntax error: operand expected (error token is "%") ⏎ --- |
 | nameref | pass | no | 89% | 92% | 80d79 ⏎ &lt; ./nameref4.sub: line 181: unset: x: not an array variable ⏎ 157a157 |
 | new-exp | pass | no | 97% | 98% | 6,7c6,7 ⏎ &lt; ./new-exp.tests: line 41: }: syntax error: operand expected (error token is "}") ⏎ &lt; oops |
-| nquote | pass | no | 78% | 83% | 7,10c7,10 ⏎ &lt; argv[1] = &lt;$hello,&gt; ⏎ &lt; argv[2] = &lt;$world&gt; |
+| nquote | pass | no | 80% | 83% | 7,10c7,10 ⏎ &lt; argv[1] = &lt;$hello,&gt; ⏎ &lt; argv[2] = &lt;$world&gt; |
 | nquote1 | pass | yes | 100% | 100% |  |
 | nquote2 | pass | yes | 100% | 100% |  |
 | nquote3 | pass | yes | 100% | 100% |  |
