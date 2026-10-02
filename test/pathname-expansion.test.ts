@@ -23,6 +23,11 @@ Deno.test('pathname expansion is done as bash does it', async (t) => {
     ['p "a*"* a"*"b', '<a*b><a*b>'],
     ['x=\'t*\'; p $x "$x"', '<top.c><t*>'],
     ['d=\'a\'; p "$d"/*', '<a/b><a/f.c>'],
+    // A quoted directory, the leading slash in it too, is still the path's
+    ['d=\'/w/a\'; p "$d"/*.c "/w"/d/*', '</w/a/f.c></w/d/i.txt>'],
+    // A bracket expression stays within a segment: `[a/b]` is no pattern
+    ['shopt -s nullglob; p [a/b] [a\\/b] x', '<[a/b]><x>'],
+    ['shopt -u globskipdots; p .*', '<.><..><.dot><.hid>'],
     ['shopt -s nocaseglob; p t*', '<Top.C><top.c>'],
     ['shopt -s dotglob; p *', '<.dot><.hid><Top.C><a><a*b><ab><d><top.c>'],
     ['shopt -s globstar; p **/*.c', '<a/b/c/h.c><a/b/g.c><a/f.c><top.c>'],

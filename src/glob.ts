@@ -219,6 +219,9 @@ export async function expandPattern(
   opts: GlobOptions,
   stat?: (path: string) => Promise<{ directory: boolean } | null>,
 ): Promise<string[]> {
+  // A quoted `/` closed no bracket expression; past that it is a `/` like any
+  pattern = pattern.replaceAll(QUOTED_SLASH, '/');
+
   const absolute = pattern.startsWith('/');
   const trailingSlash = pattern.length > 1 && pattern.endsWith('/') && !pattern.endsWith('\\/');
   const written = splitSegments(pattern).filter((segment) => segment !== '');
@@ -390,9 +393,6 @@ function splitSegments(pattern: string): string[] {
       segments.push(`${current}\\`);
       current = '';
       i++;
-    } else if (pattern[i] === QUOTED_SLASH) {
-      segments.push(current);
-      current = '';
     } else if (pattern[i] === '\\' && i + 1 < pattern.length) {
       current += pattern[i] + pattern[++i];
     } else if (pattern[i] === '/') {
