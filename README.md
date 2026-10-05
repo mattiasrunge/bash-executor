@@ -1,6 +1,10 @@
 # bash-executor
 
-Execute bash AST nodes given by bash-parser.
+Execute bash scripts, with the AST given by [bash-parser](https://github.com/mattiasrunge/bash-parser).
+
+The executor implements the shell itself (expansions, control flow, functions, variables, redirections and bash's
+builtins) and leaves what touches the outside world to a host: running external commands, files, pipes and directories
+go through the `ShellIf` interface it implements.
 
 ## Table of Contents
 
@@ -9,6 +13,7 @@ Execute bash AST nodes given by bash-parser.
 - [Arrays and field splitting](#arrays-and-field-splitting)
 - [Shell options](#shell-options)
 - [An interactive prompt](#an-interactive-prompt)
+- [Bash conformance](#bash-conformance)
 - [Contributing](#contributing)
 - [License](#license)
 - [Contact](#contact)
@@ -16,9 +21,7 @@ Execute bash AST nodes given by bash-parser.
 ## Installation
 
 ```bash
-deno add @ein/bash-executor
-# or
-jsr add @ein/bash-executor
+deno add jsr:@ein/bash-executor
 ```
 
 ## Usage
@@ -32,9 +35,13 @@ class Shell implements ShellIf {
 
 const ctx: ExecContextIf = new ExecContext();
 const shell: ShellIf = new Shell();
-const executor = new AstExecutor();
-const exitCode = await this.executor.execute('echo "Hello World"', ctx);
+const executor = new AstExecutor(shell);
+const exitCode = await executor.execute('echo "Hello World"', ctx);
 ```
+
+[`conformance/host-shell.ts`](./conformance/host-shell.ts) is a complete `ShellIf` on the real operating system: external
+commands are processes, redirections are files and globs read directories. [`conformance/cli.ts`](./conformance/cli.ts)
+uses it to run scripts as `bash` would, from bash's own command line.
 
 ## Arrays and field splitting
 
@@ -185,6 +192,53 @@ directory is the host's `readDirectory`'s say.
 `appendHistory` adds what was run since to its end (`history -a`) and
 `saveHistory` writes it as the shell ends; none of them touch a file unless the
 context is interactive.
+
+## Bash conformance
+
+The executor and bash-parser are tested against GNU bash 5.2.21's own test suite: each of its `run-*` scripts runs
+through the executor on a real host and its output is compared with what bash prints.
+[`conformance/REPORT.md`](./conformance/REPORT.md) is the current state, and
+[`conformance/README.md`](./conformance/README.md) explains how to run it and what the scores mean.
+
+| Measure                                      | Result    |
+| -------------------------------------------- | --------- |
+| Test files that parse                        | 462 / 471 |
+| `run-*` scripts passing                      | 59 / 83   |
+| ...passing for real bash on the same machine | 74 / 83   |
+| Mean share of the expected output produced   | 95%       |
+
+### What works
+
+These test scripts pass in full: arithmetic and `for (( ))`, indexed and associative arrays and `+=`, variable
+attributes, brace expansion, `case`, case modification, `[[ ]]`, coprocesses, the directory stack, dynamic variables
+(`RANDOM`, `SECONDS`, `LINENO`…), `set -e`, `set -x`, extended globs and `globstar`, functions, `getopts`, here-strings,
+history and `!` expansion, IFS splitting, `lastpipe`, parameter expansion in all its forms, POSIX mode, operator
+precedence, `printf`, quoting, redirections, `shopt`, tildes, `trap`, `type` and programmable completion. In the rest,
+most of the output matches: the mean over all 83 is 95%.
+
+### Where it differs from bash
+
+- **A script is parsed one complete command at a time**, as bash reads it, but a few constructs bash-parser rejects
+  outright: an alias whose value opens a comment (`alias c='# for x in '`), and a here-document begun inside `$( … )`
+  whose body comes after the `)`. An alias that expands to a reserved word opening a compound command (`alias switch=case`)
+  is not supported either.
+- **Some syntax errors are found later than bash finds them**, or not at all, such as `a=(first & second)`.
+- **Restricted mode** (`set -r`, `bash -r`) is not implemented.
+- **`set -k`** (assignments anywhere on the command line) is not implemented, and an assignment after a redirection
+  (`< /dev/null x=value`) is taken as a command name.
+- **`$"…"`** (locale translation) keeps the `$` rather than dropping it.
+- **Debugger support** (`extdebug`): `BASH_ARGV`, `BASH_ARGC` and some line numbers differ.
+- **Process substitution** does not set `$!`, so `wait $!` after one fails.
+- **Error messages** are bash's in most places, but some differ in wording or the line they name, and a few errors bash
+  reports (around namerefs and readonly variables, for example) are not reported.
+
+The rest of the failing tests come from the test host, `RealShell`, not from the executor:
+
+- Pipes carry strings, so bytes that are not valid UTF-8 are replaced (`intl`, `mapfile`, `nquote4`).
+- A child process gets only descriptors 0–2, and there is no controlling terminal for `read` from `/dev/tty`.
+- Background jobs run, but job control (`jobs`, `fg`, signals to jobs) is the host's, and the test host has none
+  (`jobs` times out).
+- Errors the host prints, such as `command not found`, lack bash's `line N:` prefix.
 
 ## Contributing
 

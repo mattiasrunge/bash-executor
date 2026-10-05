@@ -41,8 +41,7 @@ Deno.test('Command Expansion', async (t) => {
   });
 
   await t.step('command substitution with long JSON output containing equals signs', async () => {
-    // Tests a scenario similar to the MURRiX exiftool.sh bug
-    // where command output is JSON containing = signs
+    // Command output that is JSON containing = signs, as exiftool's is
     const shell = new TestShell();
     const jsonOutput = '{"size":3687764,"mtime":1768376602848,"birthtime":1768376602647,"uri":"/home/user/files/file.txt","mode":33204,"uid":1000,"gid":1000}';
     shell.mockCommand('file-stat', async (_ctx, _args) => {

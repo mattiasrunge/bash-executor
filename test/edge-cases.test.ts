@@ -83,7 +83,7 @@ Deno.test('Subshell isolation', async (t) => {
   });
 
   await t.step('executeAndCapture does not leak env into the calling shell', async () => {
-    // Regression for the MURRiX pipeline-engine bug: a captured command exporting
+    // Regression: a captured command exporting
     // PATH must not clobber the persistent shell's executable search path.
     const shell = new TestShell();
     shell.setEnv({ PATH: '/bin' });
@@ -94,7 +94,7 @@ Deno.test('Subshell isolation', async (t) => {
   });
 
   await t.step('executeAndCapture is not a terminal', async () => {
-    // Regression for the MURRiX generate-derivatives bug: capturing redirects stdout to a
+    // Regression: capturing redirects stdout to a
     // pipe, so the captured command must see TERM=0 exactly as a pipeline stage or `$( )`
     // does. It did not, so a command that colours or syntax-highlights for a human wrote
     // ANSI escapes into the captured string and the caller parsed them as data.

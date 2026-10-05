@@ -582,7 +582,7 @@ export class RealShell implements ShellIf {
 
     if (pipe && !pipe.isClosed) {
       if (data === '') {
-        // An empty write is EOF, as in the test shell and MURRiX
+        // An empty write is EOF, as in the test shell
         pipe.close();
       } else {
         await pipe.write(encodeShellText(data)).catch(() => {});

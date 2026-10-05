@@ -10,19 +10,8 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: bash-executor
     steps:
-      # deno.jsonc links ../bash-parser: the executor is developed and tested
-      # against the parser's master, so check both out side by side.
       - uses: actions/checkout@v4
-        with:
-          path: bash-executor
-      - uses: actions/checkout@v4
-        with:
-          repository: mattiasrunge/bash-parser
-          path: bash-parser
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x # Run with latest stable Deno.
@@ -49,19 +38,8 @@ jobs:
     permissions:
       contents: read
       id-token: write # The OIDC ID token is used for authentication with JSR.
-    defaults:
-      run:
-        working-directory: bash-executor
     steps:
-      # deno.jsonc links ../bash-parser: the executor is developed and tested
-      # against the parser's master, so check both out side by side.
       - uses: actions/checkout@v4
-        with:
-          path: bash-executor
-      - uses: actions/checkout@v4
-        with:
-          repository: mattiasrunge/bash-parser
-          path: bash-parser
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x # Run with latest stable Deno.

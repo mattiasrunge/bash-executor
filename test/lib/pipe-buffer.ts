@@ -1,6 +1,5 @@
 /**
  * PipeBuffer - Async pipe with proper backpressure and EOF signaling
- * Based on MURRiX implementation
  */
 export class PipeBuffer {
   private buffer: Uint8Array;

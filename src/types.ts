@@ -134,8 +134,8 @@ export type ExecuteAndCaptureOptions = PipeReadOptions;
 
 /**
  * The shell options `set` knows, and their default values. Options are per-shell
- * state and live on the context, not in a module global — MURRiX runs every
- * session's shell in one process, so a global would let one session's
+ * state and live on the context, not in a module global — a host may run every
+ * session's shell in one process, and a global would let one session's
  * `set -o pipefail` change another session's pipeline exit codes.
  */
 export const DEFAULT_SHELL_OPTIONS: Record<string, boolean> = {

@@ -1,6 +1,6 @@
 {
   "name": "@ein/bash-executor",
-  "version": "0.13.0",
+  "version": "1.0.0",
   "exports": "./mod.ts",
   "description": "Bash executor - execute bash AST nodes given by @ein/bash-parser",
   "repository": "https://github.com/mattiasrunge/bash-executor",
@@ -39,13 +39,14 @@
     "proseWrap": "preserve"
   },
   "imports": {
-    "@ein/bash-parser": "jsr:@ein/bash-parser@^0.18.0",
+    "@ein/bash-parser": "jsr:@ein/bash-parser@^1.0.0",
     "@std/assert": "jsr:@std/assert@^1.0.2",
     "@std/fmt": "jsr:@std/fmt@^1.0.0",
     "@std/path": "jsr:@std/path@^1.0.0"
   },
-  // Develop against the local parser checkout; MURRiX links both the same way
-  "links": ["../bash-parser"],
+  // The parser is released just before the executor that needs it; wait the
+  // default day only for packages that are not our own
+  "minimumDependencyAge": { "age": "P1D", "exclude": ["jsr:@ein/*"] },
   "tasks": {
     "check": "deno lint && deno fmt --check && deno publish --dry-run && deno task test && deno task coverage",
     "coverage-clean": "rm -rf coverage",
