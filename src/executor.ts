@@ -4297,7 +4297,7 @@ export class AstExecutor {
     // parameter-op/command/arithmetic handling is reused as-is
     const evaluated = new Map<number, { end: number; value: string }>();
     for (const xp of word.expansion ?? []) {
-      if (xp.type === 'PathExpansion' || xp.resolved || !xp.loc) {
+      if (xp.type === 'PathExpansion' || !xp.loc) {
         continue;
       }
       const synthetic = {
@@ -6223,7 +6223,7 @@ export class AstExecutor {
     for (const xp of expansions) {
       const word = (xp as { op?: string; word?: unknown }).op === 'indirection' ? String((xp as { word?: unknown }).word ?? '') : undefined;
 
-      if (word === undefined || (xp as { resolved?: boolean }).resolved) {
+      if (word === undefined) {
         resolved.push(xp);
         continue;
       }
@@ -6318,10 +6318,6 @@ export class AstExecutor {
     const emptyAt: number[] = [];
 
     for (const xp of await this.resolveIndirections(await this.resolveQuotedNames(node.expansion), ctx)) {
-      if (xp.resolved) {
-        continue;
-      }
-
       if (xp.type === 'ParameterExpansion') {
         // `${$x}`: no parameter has that name, and bash refuses the whole expansion. A name
         // with a quote in it is the parser's misreading instead — in POSIX mode a `'` inside
@@ -6633,7 +6629,7 @@ export class AstExecutor {
       noSplit: opts.split === false || node.type === 'AssignmentWord',
     });
 
-    const hasPathExpansion = node.expansion.some((xp) => xp.type === 'PathExpansion' && !xp.resolved);
+    const hasPathExpansion = node.expansion.some((xp) => xp.type === 'PathExpansion');
 
     // POSIX: Assignment values do not undergo field splitting
     if (node.type === 'AssignmentWord') {
