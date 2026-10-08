@@ -144,7 +144,7 @@ Deno.test('assigning to a declare -i variable evaluates the value', async () => 
   assertEquals(result.stdout, '3\n7\n10\n');
 });
 
-// Found running bash's own test suite: each case is what bash does
+// Each case is what bash does
 Deno.test('Variables as bash scopes and exports them', async (t) => {
   const run = async (script: string) => (await new TestShell().runAndCapture(script)).stdout;
 

@@ -263,8 +263,6 @@ Deno.test('Conditional Command [[]]', async (t) => {
     assertEquals(result.exitCode, 0);
   });
 
-  // Note: [[ ! ! "a" == "a" ]] (nested negation) is not supported by the parser
-
   // Edge cases
   await t.step('standalone non-empty word is true', async () => {
     const shell = new TestShell();

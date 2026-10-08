@@ -19,7 +19,7 @@ const mockShell: ShellIf = {
   pipeToFile: async () => {},
 };
 
-// Setup function to create context (dirstack is now per-context)
+// A fresh context, in `cwd`
 function setup(cwd: string = '/home/user'): ExecContext {
   const ctx = new ExecContext();
   ctx.setCwd(cwd);

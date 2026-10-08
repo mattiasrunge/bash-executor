@@ -135,7 +135,7 @@ Deno.test('printf builtin', async (t) => {
       const ctx = new ExecContext();
       const result = await printfBuiltin(ctx, ['%.2e', '1234'], mockShell, noopExecute);
       assertEquals(result.code, 0);
-      // @std/fmt uses two-digit exponent (e+03) instead of bash's (e+3)
+      // At least two exponent digits, as C's printf writes them
       assertEquals(result.stdout, '1.23e+03');
     });
   });

@@ -64,10 +64,9 @@ export class TestShell implements ShellIf {
   }
 
   /**
-   * Register mock commands for external utilities used in tests.
-   * Note: Builtins like echo, printf, true, false, exit, test, [, export, unset, read, return, :
-   * are now handled by the real builtin registry passed to AstExecutor.
-   * This method only registers mock versions of external commands like cat, grep, wc.
+   * Register mock commands for the external utilities the tests use: cat,
+   * grep and wc. Builtins are the real ones, from the registry the AstExecutor
+   * is given.
    */
   private registerBuiltins(): void {
     // cat - read from stdin or echo args (outputs content as-is, no extra newline)

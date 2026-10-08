@@ -85,7 +85,6 @@ Deno.test('If Statements', async (t) => {
 
   await t.step('if with arithmetic condition', async () => {
     const shell = new TestShell();
-    // Use [ ] for comparison to avoid parser issue with > in (( ))
     const result = await shell.runAndCapture(`
       x=10
       if [ $x -gt 5 ]; then
@@ -99,8 +98,6 @@ Deno.test('If Statements', async (t) => {
 Deno.test('While Loops', async (t) => {
   await t.step('while loop executes while condition is true', async () => {
     const shell = new TestShell();
-    // Note: Using i=$((i+1)) instead of (( i++ )) because postfix increment
-    // returns 0 when i=0, causing exit code 1 which stops the compound list
     const result = await shell.runAndCapture(`
       i=0
       while [ $i -lt 3 ]; do
@@ -295,8 +292,6 @@ Deno.test('For Loops', async (t) => {
   });
 });
 
-// A body that fails is ordinary — `for f in *; do grep x $f; done` runs to the
-// end. Aborting the loop instead turned a scan into a silent "nothing found".
 Deno.test('Arithmetic For Loops', async (t) => {
   await t.step('init, test and update', async () => {
     const shell = new TestShell();
@@ -339,6 +334,7 @@ Deno.test('Arithmetic For Loops', async (t) => {
   });
 });
 
+// A body that fails is ordinary — `for f in *; do grep x $f; done` runs to the end
 Deno.test('Loops - failing body', async (t) => {
   await t.step('for loop runs every iteration when the body fails', async () => {
     const shell = new TestShell();

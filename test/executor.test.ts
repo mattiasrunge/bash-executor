@@ -182,7 +182,7 @@ Deno.test('executeAndCapture', async (t) => {
 
   await t.step('an aborted command keeps the output it had written', async () => {
     // A pipeline step stopped at its deadline has nothing but this to say where
-    // it got to; dropping it left every timeout as a bare "exceeded N ms".
+    // it got to
     const shell = new TestShell();
     shell.mockCommand('tick', async () => {
       await new Promise((resolve) => setTimeout(resolve, 1));

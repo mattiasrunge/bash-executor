@@ -161,10 +161,8 @@ Deno.test('Case Statement Glob Patterns - Character Classes', async (t) => {
 
   /**
    * `[!...]` is the POSIX spelling of a negated class and the one scripts actually use;
-   * `[^...]` is bash's alias for it. The bracket used to be copied straight into a JS
-   * regex, where `!` is an ordinary character — so `[!0-9]` meant "a `!` or a digit" and
-   * matched the exact set it was written to exclude. Found in the wild: a guard rejecting
-   * non-numeric ffprobe output accepted `N/A` and rejected `64000`.
+   * `[^...]` is bash's alias for it. Neither makes `!` a member: `[!0-9]` is anything
+   * but a digit.
    */
   await t.step('[!...] negates, and is not a literal !', async () => {
     const shell = new TestShell();
@@ -202,7 +200,7 @@ Deno.test('Case Statement Glob Patterns - Character Classes', async (t) => {
     assertEquals(result.stdout, 'no match\n');
   });
 
-  /** The numeric guard this was found by: "is every character a digit?" */
+  /** A numeric guard: "is every character a digit?" */
   await t.step('*[!0-9]* rejects a number and accepts anything else', async () => {
     const shell = new TestShell();
     for (const [value, expected] of [['64000', 'numeric'], ['N/A', 'not numeric'], ['64000,', 'not numeric'], ['', 'numeric']]) {

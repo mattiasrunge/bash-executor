@@ -430,8 +430,8 @@ Deno.test('arg builtin', async (t) => {
   });
 
   await t.step('spawned context shares registry with root', async () => {
-    // This tests the real-world scenario where each arg command
-    // runs in a different spawned context (via executeCommand)
+    // Each `arg` command runs in a context of its own, spawned from the
+    // script's, as the executor runs commands
     const root = new ExecContext();
     root.setParams({
       '1': 'alice',

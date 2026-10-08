@@ -23,7 +23,7 @@ const mockShell: ShellIf = {
   pipeToFile: async () => {},
 };
 
-// Create a fresh context for each test (attributes are now per-context)
+// A fresh context for each test
 function setup() {
   return new ExecContext();
 }

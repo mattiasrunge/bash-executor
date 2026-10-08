@@ -25,8 +25,7 @@ Deno.test('Command Expansion', async (t) => {
 
   await t.step('command substitution larger than the pipe capacity', async () => {
     // A pipe holds 64 KiB and a writer that fills it blocks until someone
-    // reads. Reading only after the command returned meant a substitution of
-    // this size never returned at all.
+    // reads: the substitution is drained while it runs
     const shell = new TestShell();
     const line = 'x'.repeat(99) + '\n';
     const lines = 2000; // 200 000 bytes
@@ -48,7 +47,6 @@ Deno.test('Command Expansion', async (t) => {
       return { code: 0, stdout: jsonOutput };
     });
     const result = await shell.runAndCapture(`STAT_OUTPUT=$(JSON_OUTPUT=1 file-stat "/path"); echo "$STAT_OUTPUT"`);
-    // Note: The output may have quotes stripped - that's a separate issue
     assertEquals(result.exitCode, 0);
   });
 
@@ -368,7 +366,7 @@ Deno.test('Quoting and Expansion', async (t) => {
   });
 });
 
-// Found running bash's own test suite: each case is what bash does
+// Each case is what bash does
 Deno.test('Expansions as bash has them', async (t) => {
   const run = async (script: string) => (await new TestShell().runAndCapture(script)).stdout;
 

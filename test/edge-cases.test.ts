@@ -2,10 +2,6 @@ import { assertEquals } from '@std/assert';
 import { TestShell } from './lib/test-shell.ts';
 
 Deno.test('Empty and Minimal Scripts', async (t) => {
-  // Note: bash-parser throws "Unexpected EOF" for empty/comment-only scripts
-  // This is a parser limitation - real bash would return 0 for these cases
-  // See: https://github.com/vorpaljs/bash-parser/issues/XXX
-
   await t.step('shebang line is handled', async () => {
     const shell = new TestShell();
     const result = await shell.runAndCapture('#!/bin/bash\necho "hello"');
@@ -83,8 +79,8 @@ Deno.test('Subshell isolation', async (t) => {
   });
 
   await t.step('executeAndCapture does not leak env into the calling shell', async () => {
-    // Regression: a captured command exporting
-    // PATH must not clobber the persistent shell's executable search path.
+    // A captured command exporting PATH leaves the persistent shell's
+    // executable search path alone
     const shell = new TestShell();
     shell.setEnv({ PATH: '/bin' });
     const result = await shell.executeAndCapture('export PATH=/tmp/node-path; echo done');
@@ -94,10 +90,8 @@ Deno.test('Subshell isolation', async (t) => {
   });
 
   await t.step('executeAndCapture is not a terminal', async () => {
-    // Regression: capturing redirects stdout to a
-    // pipe, so the captured command must see TERM=0 exactly as a pipeline stage or `$( )`
-    // does. It did not, so a command that colours or syntax-highlights for a human wrote
-    // ANSI escapes into the captured string and the caller parsed them as data.
+    // Capturing redirects stdout to a pipe, so the captured command sees TERM=0
+    // as a pipeline stage or `$( )` does, and writes no escapes for a human
     const shell = new TestShell();
     shell.setEnv({ TERM: '1' });
     const result = await shell.executeAndCapture('echo "[$TERM]"');

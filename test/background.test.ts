@@ -1,12 +1,10 @@
 /**
  * `&` on something that is not a single external command.
  *
- * The executor can only hand a command *name* to `ShellIf.execute`, so that is
- * the only `&` it ever acted on. A list, a group, a subshell, a loop, a builtin
- * and a function all ignored the `&` and ran in the foreground — which is why a
- * multi-step sweep could not be backgrounded, let alone detached. They go
- * through the optional `executeBackground` hook instead: the shell is handed a
- * thunk, because only it can give such a command a process of its own.
+ * The executor can only hand a command *name* to `ShellIf.execute`. A list, a
+ * group, a subshell, a loop, a builtin and a function go through the optional
+ * `executeBackground` hook instead: the shell is handed a thunk, because only it
+ * can give such a command a process of its own.
  */
 
 import { assert, assertEquals } from '@std/assert';
@@ -80,8 +78,8 @@ Deno.test('`&` on a compound command', async (t) => {
     assertEquals(result.stdout, 'hello\n');
   });
 
-  // The single-command path predates the hook and still owns it: the shell gets
-  // a name and an `async` option, which is what lets it spawn a real process.
+  // A single command goes to `execute`: the shell gets a name and an `async`
+  // option, which is what lets it spawn a real process.
   await t.step('a single external command still goes through `execute`', async () => {
     const shell = new BackgroundingShell();
     shell.mockCommand('worker', async () => ({ code: 0 }));

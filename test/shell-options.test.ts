@@ -1,8 +1,7 @@
 /**
  * The `set` options, other than pipefail (which `pipelines.test.ts` covers).
  *
- * Every expectation here was measured against real bash before it was written
- * down — the exemption rules for `set -e` in particular are easy to state wrong
+ * Every expectation here is real bash's — the exemption rules for `set -e` in particular are easy to state wrong
  * from memory, and `false && echo t` not ending the shell is the case that shows
  * errexit is decided per command rather than on an assembled status.
  */
@@ -52,8 +51,8 @@ Deno.test('errexit', async (t) => {
   });
 
   await t.step('where a function was defined does not exempt it', async () => {
-    // Only the call site decides: defining f inside an `if` clause used to leave
-    // it exempt for ever after, because the body inherits the definition context
+    // Only the call site decides: a function defined inside an `if` clause is
+    // not exempt when it is called elsewhere
     assertEquals(await out('set -e; if f() { false; echo in-f; }; then :; fi; f; echo after'), '');
   });
 
@@ -148,8 +147,7 @@ Deno.test('the ${x:?message} family', async (t) => {
   });
 
   await t.step('a message with blanks in it survives', async () => {
-    // The word used to be parsed as a command line and only its first word kept,
-    // so `${x:-a b}` came back as "a"
+    // The word is one word, blanks and all
     assertEquals(await out('echo "[${NOPE:-a b}][${NOPE:-}][${NOPE:-a  b}]"'), '[a b][][a  b]\n');
   });
 });
@@ -266,7 +264,7 @@ Deno.test('noglob, allexport, noclobber, noexec, verbose', async (t) => {
   });
 });
 
-// Found running bash's own test suite: each case is what bash does
+// Each case is what bash does
 Deno.test('set -e and $? as bash has them', async (t) => {
   const run = async (script: string) => {
     const result = await new TestShell().runAndCapture(script);

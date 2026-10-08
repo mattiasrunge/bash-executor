@@ -72,9 +72,6 @@ Deno.test('Bang Operator', async (t) => {
     const result = await shell.runAndCapture('! exit 5');
     assertEquals(result.exitCode, 5);
   });
-
-  // Note: Bang with pipelines/compound commands is not fully implemented
-  // in the executor - bang only applies correctly to simple commands
 });
 
 Deno.test('Unknown Commands', async (t) => {

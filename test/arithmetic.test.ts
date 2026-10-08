@@ -58,9 +58,6 @@ Deno.test('Arithmetic Expansion', async (t) => {
     assertEquals(result.stdout, 'Sum: 10\n');
   });
 
-  // Note: Parentheses for grouping in arithmetic (e.g., $((2 * (3 + 4))))
-  // is not supported by bash-parser - skipping this test
-
   await t.step('operator precedence (* before +)', async () => {
     const shell = new TestShell();
     // Tests that multiplication has higher precedence than addition
@@ -302,7 +299,6 @@ Deno.test('Arithmetic Command (( ))', async (t) => {
 
   await t.step('(( )) in if condition', async () => {
     const shell = new TestShell();
-    // Use [ ] for comparison to avoid parser issue with > in (( ))
     const result = await shell.runAndCapture('x=5; if [ $x -gt 3 ]; then echo yes; fi');
     assertEquals(result.stdout, 'yes\n');
   });
@@ -369,7 +365,7 @@ Deno.test('Arithmetic: ${…} and $(…) inside', async (t) => {
   }
 });
 
-// Found running bash's own test suite: each case is what bash gives
+// Each case is what bash gives
 Deno.test('Arithmetic as bash evaluates it', async (t) => {
   const run = async (script: string) => {
     const result = await new TestShell().runAndCapture(script);
