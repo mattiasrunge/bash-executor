@@ -1,10 +1,6 @@
 import { decodeEscapedBytes, escapedByte } from '../bytes.ts';
 import type { BuiltinHandler } from './types.ts';
 
-/**
- * Interpret escape sequences in a string.
- * Supports: \n, \t, \r, \\, \a, \b, \f, \v, \0nnn (octal), \xHH (hex)
- */
 /** The text with its escapes made; `stopped` when a `\c` ended it there. */
 function interpretEscapes(str: string): { text: string; stopped: boolean } {
   let result = '';

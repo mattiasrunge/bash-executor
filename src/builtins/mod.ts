@@ -5,18 +5,16 @@
  * that can be used with the AstExecutor.
  */
 
-// Export types
 export * from './types.ts';
 
-// Export individual builtins
 export { argBuiltin } from './arg.ts';
 export { aliasBuiltin, unaliasBuiltin } from './alias.ts';
 export { callerBuiltin } from './caller.ts';
 export { timesBuiltin } from './times.ts';
 export { cdBuiltin } from './cd.ts';
 export { completeBuiltin, compoptBuiltin, createCompgenBuiltin } from './compgen.ts';
-export { clearAttributes, declareBuiltin, isReadonly, typesetBuiltin } from './declare.ts';
-export { clearDirStack, dirsBuiltin, getDirStack, popdBuiltin, pushdBuiltin } from './dirstack.ts';
+export { declareBuiltin, typesetBuiltin } from './declare.ts';
+export { dirsBuiltin, popdBuiltin, pushdBuiltin } from './dirstack.ts';
 export { echoBuiltin } from './echo.ts';
 export { createEnableBuiltin } from './enable.ts';
 export { evalBuiltin } from './eval.ts';
@@ -91,7 +89,7 @@ import { ulimitBuiltin } from './ulimit.ts';
 import { fcBuiltin, historyBuiltin } from './history.ts';
 import { bracketBuiltin, testBuiltin } from './test.ts';
 import { colonBuiltin, falseBuiltin, trueBuiltin } from './trivial.ts';
-import type { BuiltinHandler, BuiltinRegistry } from './types.ts';
+import type { BuiltinRegistry } from './types.ts';
 import { exportBuiltin, localBuiltin, unsetBuiltin } from './variables.ts';
 
 /**
@@ -102,7 +100,7 @@ import { exportBuiltin, localBuiltin, unsetBuiltin } from './variables.ts';
 export function createBuiltinRegistry(): BuiltinRegistry {
   const registry: BuiltinRegistry = new Map();
 
-  // Phase 1: Trivial builtins
+  // Trivial builtins
   registry.set(':', colonBuiltin);
   registry.set('true', trueBuiltin);
   registry.set('false', falseBuiltin);
@@ -111,7 +109,7 @@ export function createBuiltinRegistry(): BuiltinRegistry {
   registry.set('exit', exitBuiltin);
   registry.set('return', returnBuiltin);
 
-  // Phase 2: Context-modifying builtins
+  // Context-modifying builtins
   registry.set('cd', cdBuiltin);
   registry.set('umask', umaskBuiltin);
   registry.set('ulimit', ulimitBuiltin);
@@ -121,11 +119,11 @@ export function createBuiltinRegistry(): BuiltinRegistry {
   registry.set('alias', aliasBuiltin);
   registry.set('unalias', unaliasBuiltin);
 
-  // Phase 3: Test and conditionals
+  // Test and conditionals
   registry.set('test', testBuiltin);
   registry.set('[', bracketBuiltin);
 
-  // Phase 3: Script execution
+  // Script execution
   registry.set('eval', evalBuiltin);
   registry.set('shopt', shoptBuiltin);
   registry.set('trap', trapBuiltin);
@@ -140,14 +138,14 @@ export function createBuiltinRegistry(): BuiltinRegistry {
   registry.set('source', sourceBuiltin);
   registry.set('.', dotBuiltin);
 
-  // Phase 3: Parameter manipulation
+  // Parameter manipulation
   registry.set('shift', shiftBuiltin);
   registry.set('getopts', getoptsBuiltin);
 
-  // Phase 3: Output formatting
+  // Output formatting
   registry.set('printf', printfBuiltin);
 
-  // Phase 3: Introspection (need registry reference)
+  // Introspection, which needs the registry
   registry.set('type', createTypeBuiltin(registry));
   registry.set('command', createCommandBuiltin(registry));
   registry.set('builtin', createBuiltinBuiltin(registry));
@@ -159,20 +157,20 @@ export function createBuiltinRegistry(): BuiltinRegistry {
   registry.set('complete', completeBuiltin);
   registry.set('compopt', compoptBuiltin);
 
-  // Phase 3: Arithmetic
+  // Arithmetic
   registry.set('let', letBuiltin);
 
-  // Phase 3: Input
+  // Input
   registry.set('read', readBuiltin);
   registry.set('mapfile', mapfileBuiltin);
   registry.set('readarray', mapfileBuiltin);
 
-  // Phase 4: Variable attributes
+  // Variable attributes
   registry.set('declare', declareBuiltin);
   registry.set('typeset', typesetBuiltin);
   registry.set('readonly', readonlyBuiltin);
 
-  // Phase 4: Directory stack
+  // Directory stack
   registry.set('dirs', dirsBuiltin);
   registry.set('pushd', pushdBuiltin);
   registry.set('popd', popdBuiltin);
@@ -182,61 +180,11 @@ export function createBuiltinRegistry(): BuiltinRegistry {
   registry.set('help', createHelpBuiltin(registry));
   registry.set('fc', fcBuiltin);
 
-  // Phase 4: Shell options
+  // Shell options
   registry.set('set', setBuiltin);
 
-  // Phase 5: Argument parsing
+  // Argument parsing
   registry.set('arg', argBuiltin);
 
   return registry;
-}
-
-/**
- * Register a builtin handler in the registry.
- *
- * @param registry - The builtin registry
- * @param name - The builtin name
- * @param handler - The builtin handler function
- */
-export function registerBuiltin(
-  registry: BuiltinRegistry,
-  name: string,
-  handler: BuiltinHandler,
-): void {
-  registry.set(name, handler);
-}
-
-/**
- * Get a builtin handler from the registry.
- *
- * @param registry - The builtin registry
- * @param name - The builtin name
- * @returns The builtin handler or undefined if not found
- */
-export function getBuiltin(
-  registry: BuiltinRegistry,
-  name: string,
-): BuiltinHandler | undefined {
-  return registry.get(name);
-}
-
-/**
- * Check if a name is a registered builtin.
- *
- * @param registry - The builtin registry
- * @param name - The name to check
- * @returns True if the name is a builtin
- */
-export function isBuiltin(registry: BuiltinRegistry, name: string): boolean {
-  return registry.has(name);
-}
-
-/**
- * Get all builtin names.
- *
- * @param registry - The builtin registry
- * @returns Set of all builtin names
- */
-export function getBuiltinNames(registry: BuiltinRegistry): Set<string> {
-  return new Set(registry.keys());
 }

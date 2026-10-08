@@ -264,7 +264,6 @@ export const readBuiltin: BuiltinHandler = async (
     await shell.pipeWrite(ctx.getStdout(), options.prompt);
   }
 
-  // Determine which FD to read from
   // A descriptor the command or the shell opened is the context's to name; one `exec` opened, the host's
   const fd = options.fd ? (ctx.getFd(options.fd) ?? options.fd) : ctx.getStdin();
 

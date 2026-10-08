@@ -276,8 +276,7 @@ function parseArgDeclaration(args: string[]): ParseResult {
     return { type: 'returns', returns: args[1] };
   }
 
-  // What a call does to the system, for a caller that must know before running it: an assistant
-  // runs a read at once and shows a write to its user first.
+  // What a call does to the system, for a caller that must know before running it.
   if (args[0] === '--effect') {
     if (args[1] !== 'read' && args[1] !== 'write') {
       return { type: 'error', message: 'arg --effect: expected read or write' };
@@ -354,8 +353,7 @@ export function generateSpec(registry: ArgRegistry, scriptName: string): Record<
     }
   }
   // The name a caller would type, not the path the shell resolved it to: `$0` is the full
-  // path for a script run from PATH, and a spec naming "/usr/modules/core/bin/mkfile" is not
-  // a command anyone can call.
+  // path for a script run from PATH.
   const name = scriptName.split('/').filter(Boolean).pop() || scriptName;
   return {
     name,
@@ -730,10 +728,9 @@ export const argBuiltin: BuiltinHandler = async (
         return { code: 0 }; // `arg --export` with nothing declared at all
       }
 
-      // NOT `specs.length === 0`: a script that declares only a description — mkdir and mkbuf
-      // forward every argument to another command and so declare none — still has help to
-      // give, and used to fall through to the wrapped command's own `--help` instead. Only
-      // the parse-and-export half below needs declared arguments.
+      // NOT `specs.length === 0`: a script that declares only a description, forwarding every
+      // argument to another command, still has help to give. Only the parse-and-export half
+      // below needs declared arguments.
 
       // Extract raw positional arguments from context
       const params = ctx.getParams();
@@ -753,10 +750,8 @@ export const argBuiltin: BuiltinHandler = async (
       // Handle help request - EXIT the script
       if (result.helpRequested) {
         const scriptName = params['0'] || 'script';
-        // Asked in JSON, answer with the declarations themselves rather than the rendered help.
-        // A script that declares its arguments with `arg` knows them as precisely as a compiled
-        // command knows its spec, and a caller that asked for JSON — a tool-schema generator,
-        // an agent reading `command_help` — wants the structure, not a usage block to parse.
+        // Asked in JSON, answer with the declarations themselves rather than the rendered help:
+        // a caller that asks for JSON wants the structure, not a usage block to parse.
         const helpText = ctx.getEnv().JSON_OUTPUT === '1' ? JSON.stringify(generateSpec(registry, scriptName)) : generateHelp(registry, scriptName);
 
         // Clean up registry

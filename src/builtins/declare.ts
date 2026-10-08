@@ -20,7 +20,6 @@ import { exportFunctions } from './variables.ts';
 
 type Command = 'declare' | 'typeset' | 'local' | 'readonly' | 'export';
 
-/** The options each takes, as bash's getopt strings. */
 /** Each command's usage line, as bash words it. */
 const USAGE: Record<Command, string> = {
   declare: 'declare [-aAfFgiIlnrtux] [name[=value] ...] or declare -p [-aAfFilnrtux] [name ...]',
@@ -305,11 +304,10 @@ class Declaration {
     }
 
     if (info?.attributes.includes('r') && assigning) {
-      // A plain `readonly x=1` fails as the assignment it is, and so does a
-      // written list, which bash assigns as it expands it; the rest is
-      // declare's own refusal, which says who refused
       // A written list is assigned as bash expands the word, so failing it
-      // abandons the rest of the line, as an expansion error does
+      // abandons the rest of the line, as an expansion error does. A plain
+      // `readonly x=1` fails as the assignment it is; the rest is declare's
+      // own refusal, which says who refused
       if (compound) throw new CommandAbortError(`${name}: readonly variable`, { code: 'E_READONLY' });
 
       const plain = (this.command === 'readonly' || this.command === 'export') && !creatingArray;
@@ -724,22 +722,3 @@ export const declareBuiltin: BuiltinHandler = (ctx, args, _shell, _execute, serv
 
 /** typeset is declare by its ksh name. */
 export const typesetBuiltin: BuiltinHandler = (ctx, args, _shell, _execute, services) => declareCommand('typeset', ctx, args, services);
-
-/**
- * Check if a variable is readonly.
- * @deprecated Use ctx.isReadonlyVar(name) instead. This function is kept for backwards compatibility.
- *
- * @param _name - The variable name (ignored)
- * @returns Always returns false since readonly tracking is now per-context
- */
-export function isReadonly(_name: string): boolean {
-  return false;
-}
-
-/**
- * Clear all tracked attributes (no-op for backwards compatibility).
- * @deprecated No longer needed since attributes are tracked per-context.
- */
-export function clearAttributes(): void {
-  // No-op - attributes are now tracked in the context
-}

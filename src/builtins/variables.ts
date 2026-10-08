@@ -1,6 +1,4 @@
-import { utils } from '@ein/bash-parser';
 import { contextVariables, evaluateArithmeticText, subscriptEnd } from '../arith.ts';
-import { assocEntries } from '../assoc-list.ts';
 import { exportedFunctionText, functionEnvName } from '../print-command.ts';
 import type { ExecContextIf } from '../types.ts';
 import type { BuiltinHandler } from './types.ts';
@@ -15,60 +13,6 @@ const subscripted = (name: string): { name: string; subscript: string } | null =
   return match ? { name: match[1], subscript: match[2] } : null;
 };
 
-/**
- * Store an array literal argument, `x=(a b)` as passed to local/declare.
- */
-export const assignArrayArg = (ctx: ExecContextIf, arg: string, local: boolean): boolean => {
-  const parts = utils.parseAssignmentWord(arg);
-
-  if (!parts?.list) {
-    return false;
-  }
-
-  const elements = parts.value === '' ? [] : parts.value.split(utils.ARRAY_ELEMENT_SEPARATOR);
-
-  // An associative array takes `[key]=value` elements; the name has to have been
-  // declared -A already, which is what tells the two kinds apart
-  if (ctx.getAssoc(parts.name)) {
-    const entries = parts.append ? { ...ctx.getAssoc(parts.name) } : {};
-
-    for (const { key, value } of assocEntries(parts.name, elements).entries) entries[key] = value;
-
-    if (local) {
-      ctx.setLocalAssoc(parts.name, entries);
-    } else {
-      ctx.setAssoc(parts.name, entries);
-    }
-
-    return true;
-  }
-
-  const existing = parts.append ? ctx.getArray(parts.name) ?? [] : [];
-  const values = existing.concat(elements);
-
-  if (local) {
-    ctx.setLocalArray(parts.name, values);
-    ctx.setLocalParams({ [parts.name]: null });
-  } else {
-    ctx.setArray(parts.name, values);
-    ctx.setParams({ [parts.name]: null });
-  }
-
-  return true;
-};
-
-/**
- * The export builtin - set environment variables.
- *
- * Usage: export [name[=value] ...]
- *
- * Set export attribute for shell variables. If name=value is given,
- * the variable is assigned the value before exporting.
- *
- * Options:
- *   -n    Remove the export property from each name
- *   -p    Display all exported variables (not implemented)
- */
 /**
  * `export -f name`: the function goes to the commands the shell runs as
  * `BASH_FUNC_name%%`, which a bash among them defines again; `-n` takes it back.
@@ -97,6 +41,18 @@ export async function exportFunctions(ctx: ExecContextIf, names: string[], remov
   return { code, stderr };
 }
 
+/**
+ * The export builtin - give variables the export attribute.
+ *
+ * Usage: export [-fn] [name[=value] ...] or export -p
+ *
+ * If name=value is given, the variable is assigned the value before exporting.
+ *
+ * Options:
+ *   -f    The names are functions
+ *   -n    Remove the export property from each name
+ *   -p    Display all exported variables
+ */
 export const exportBuiltin: BuiltinHandler = (ctx, args) => declareCommand('export', ctx, args);
 
 /**

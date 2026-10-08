@@ -69,7 +69,6 @@ export const shiftBuiltin: BuiltinHandler = async (
   // Count positional parameters (highest index)
   const count = positional.length;
 
-  // Check if we can shift
   // Past the last one it fails, and says so only under `shopt -s shift_verbose`, or in POSIX mode
   if (n > count) {
     if (!ctx.getShellOption('shift_verbose') && !ctx.getShellOption('posix')) return { code: 1 };

@@ -279,20 +279,3 @@ export const popdBuiltin: BuiltinHandler = async (ctx: ExecContextIf, args: stri
 
   return { code: 0, stdout: stdout + listing(ctx) };
 };
-
-/**
- * Clear the directory stack (no-op for backwards compatibility).
- * @deprecated Use ctx.clearDirStack() instead. Directory stack is now per-context.
- */
-export function clearDirStack(): void {
-  // No-op - directory stack is now in context
-}
-
-/**
- * Get the current directory stack (returns empty for backwards compatibility).
- * @deprecated Use ctx.getDirStack() instead. Directory stack is now per-context.
- */
-export function getDirStack(): string[] {
-  // Returns empty - directory stack is now in context
-  return [];
-}
