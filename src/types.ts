@@ -24,13 +24,6 @@ export type FunctionDef = {
 };
 
 /**
- * Represents the input/output streams.
- * @typedef {Object} IO
- * @property {string} stdin - The standard input stream.
- * @property {string} stdout - The standard output stream.
- * @property {string} stderr - The standard error stream.
- */
-/**
  * Where getopts stands inside a group of options such as `-abc` between two
  * calls: the argument, and the index of its next option character. bash's
  * sh_curopt and sh_charindex.
@@ -277,8 +270,8 @@ export interface ShellIf {
   /**
    * Job control, when the host has it: with this the executor runs every `&`
    * as a job in its table and provides `jobs`, `wait`, `kill`, `disown`, `fg`
-   * and `bg`. Without it `&` goes to `execute` and `executeBackground` as
-   * before, and those names are left to the host's own commands.
+   * and `bg`. Without it `&` goes to `execute` and `executeBackground`, and
+   * those names are left to the host's own commands.
    */
   jobs?: JobHostIf;
 
@@ -294,7 +287,7 @@ export interface ShellIf {
    * source text, for the job table to show.
    *
    * Optional: where a shell does not implement it, such a command runs in the
-   * foreground, which is what every shell did before.
+   * foreground.
    * @param {ExecContextIf} ctx - The execution context the command was reached from.
    * @param {Function} run - Runs the command, in the context it is given.
    * @param {string} command - The command's source text.
@@ -441,7 +434,8 @@ export interface ShellIf {
   lookupCommand?: (ctx: ExecContextIf, name: string, path?: string) => Promise<string[]>;
 
   /**
-   * A callback to resolve path globbing. If specified, the parser calls it whenever it needs to resolve path globbing. It should return the expanded path. If the option is not specified, the parser won't try to resolve any path globbing.
+   * Expands a glob pattern into the paths it matches: pathname expansion when
+   * the host has no `readDirectory`, and file names for completion.
    *
    * @param ctx - The execution context.
    * @param text - The text to resolve.
@@ -463,7 +457,7 @@ export interface ShellIf {
   readDirectory?: (ctx: ExecContextIf, path: string) => Promise<DirectoryEntry[] | null>;
 
   /**
-   * A callback to resolve users' home directories. If specified, the parser calls it whenever it needs to resolve a tilde expansion. If the option is not specified, the parser won't try to resolve any tilde expansion. When the callback is called with a null value for `username`, the callback should return the current user's home directory.
+   * Resolves users' home directories, for tilde expansion. Without it a `~user` stays as it is. When the callback is called with a null value for `username`, it should return the current user's home directory.
    *
    * @param ctx - The execution context.
    * @param username - The username whose home directory to resolve, or `null` for the current user.
@@ -487,7 +481,7 @@ export interface ShellIf {
    * @param ctx - The execution context.
    * @param path - The path to check.
    * @param op - The test operation to check.
-   * @param path - Optional second path which is needed for some test operations.
+   * @param path2 - Optional second path which is needed for some test operations.
    * @returns If the path passed the operation test or not.
    */
   testPath?: (ctx: ExecContextIf, path: string, op: PathTestOperation, path2?: string) => Promise<boolean>;
@@ -757,7 +751,7 @@ export interface ExecContextIf {
   /**
    * Sets an alias in the execution context.
    * @param {string} name - The name of the alias.
-   * @param {string} args - The arguments of the alias.
+   * @param {string} alias - The text of the alias.
    */
   setAlias: (name: string, alias: string) => void;
 
@@ -770,7 +764,7 @@ export interface ExecContextIf {
   /**
    * Gets an alias from the execution context.
    * @param {string} name - The name of the alias.
-   * @returns {string | undefined} The alias arguments or undefined if not found.
+   * @returns {string | undefined} The text of the alias, or undefined if not found.
    */
   getAlias: (name: string) => string | undefined;
 
@@ -811,17 +805,17 @@ export interface ExecContextIf {
 
   setUmask(mask: number): void;
 
+  /** `local -`: save the `set` options in this function's scope, to come back when it returns. */
+  saveLocalOptions?(): void;
+  /** Put back what `local -` saved, as the function returns. */
+  restoreLocalOptions?(): void;
+
   /**
    * The resource limits `ulimit` keeps, by its option letter (`n`, `s`, …):
    * soft and hard, a number in ulimit's units or `unlimited`. Recorded for
    * the host to apply to what it starts, as the umask is; a subshell gets a
    * copy. A letter never set is not there.
    */
-  /** `local -`: save the `set` options in this function's scope, to come back when it returns. */
-  saveLocalOptions?(): void;
-  /** Put back what `local -` saved, as the function returns. */
-  restoreLocalOptions?(): void;
-
   getResourceLimits?(): Record<string, { soft: string; hard: string }>;
   /** The shell's command history; a subshell has a copy of it */
   getHistory?(): History;
@@ -961,7 +955,7 @@ export interface ExecContextIf {
   /**
    * Redirects the standard error.
    * @param {string} name - The name of the error destination.
-   * * @param {boolean} append - Optional if we should append destination
+   * @param {boolean} append - Optional if we should append destination
    * @returns {string} The redirected error destination.
    */
   redirectStderr: (name: string, append?: boolean) => string;
@@ -991,7 +985,7 @@ export interface ExecContextIf {
   getStdoutAppend: () => boolean;
 
   /**
-   * Gets the appen flag for standard error.
+   * Gets the append flag for standard error.
    * @returns {boolean} The standard error append flag.
    */
   getStderrAppend: () => boolean;
@@ -1031,12 +1025,6 @@ export interface ExecContextIf {
    */
   getFd: (fd: string) => string | undefined;
 
-  /**
-   * Redirects an arbitrary file descriptor. For 0-2 delegates to redirectStdin/Stdout/Stderr.
-   * FDs 3+ propagate to parent context (shell-level persistence for exec).
-   * @param {string} fd - The file descriptor number.
-   * @param {string} target - The target pipe/file name.
-   */
   /**
    * Point descriptor `fd` at `target`. A descriptor above 2 is the shell's, and
    * outlives the context, unless `local`: then it is this context's own, as

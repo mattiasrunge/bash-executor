@@ -2,7 +2,6 @@
  * Custom error types for bash-executor with source location information.
  */
 
-// Re-export BashSyntaxError and location types from bash-parser
 export { BashSyntaxError, type ErrorLocation, type ErrorPosition } from '@ein/bash-parser';
 
 import type { ErrorPosition } from '@ein/bash-parser';
@@ -142,23 +141,6 @@ export class UnsupportedOperatorError extends BashExecutorError {
 }
 
 /**
- * Error thrown for unsupported arithmetic expression types.
- */
-export class UnsupportedArithmeticNodeError extends BashExecutorError {
-  readonly arithmeticNodeType: string;
-
-  constructor(nodeType: string, location?: ErrorPosition, source?: string) {
-    super(`Unsupported arithmetic node type: ${nodeType}`, {
-      code: 'E_UNSUPPORTED_ARITHMETIC_NODE',
-      location,
-      source,
-    });
-    this.name = 'UnsupportedArithmeticNodeError';
-    this.arithmeticNodeType = nodeType;
-  }
-}
-
-/**
  * Error thrown when `set -u` meets a parameter that is not set, and when
  * `${x:?message}` is asked to complain.
  *
@@ -251,13 +233,6 @@ export class ReadonlyVariableError extends CommandAbortError {
 }
 
 /**
- * Error thrown when `set -C` refuses to let `>` truncate a file that is there.
- *
- * Like `UnboundVariableError` this is a diagnostic rather than a defect: the
- * command it belongs to fails with status 1 and the shell carries on, so it is
- * caught where redirections are applied.
- */
-/**
  * A redirection that could not be made: `< missing`, `> /no/dir/x`. It fails
  * the one command it was for, which does not run, with status 1.
  */
@@ -271,6 +246,13 @@ export class RedirectionError extends BashExecutorError {
   }
 }
 
+/**
+ * Error thrown when `set -C` refuses to let `>` truncate a file that is there.
+ *
+ * Like `UnboundVariableError` this is a diagnostic rather than a defect: the
+ * command it belongs to fails with status 1 and the shell carries on, so it is
+ * caught where redirections are applied.
+ */
 export class NoClobberError extends RedirectionError {
   readonly path: string;
 

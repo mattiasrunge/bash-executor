@@ -590,11 +590,6 @@ function tokenize(text: string, commentChar: string, wind = -1): { words: string
   return { words, index };
 }
 
-/** The words of a line, as `history_tokenize` splits them. */
-export function historyTokenize(text: string): string[] {
-  return tokenize(text, '').words;
-}
-
 /** history_arg_extract: words `first` to `last` (`$` the last, negative from the end). */
 function argExtract(first: number | '$', last: number | '$', text: string): string | undefined {
   const words = tokenize(text, '').words;

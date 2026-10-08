@@ -583,8 +583,3 @@ export function quoteRegexWord(chars: { char: string; quoted: boolean }[]): stri
 
   return out;
 }
-
-/** Quote every character of a text so a regular expression matches it literally. */
-export function quoteRegex(text: string): string {
-  return [...text].map(escapeRegexChar).join('');
-}

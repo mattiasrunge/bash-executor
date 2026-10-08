@@ -20,7 +20,7 @@ import type { DirectoryEntry } from './types.ts';
  */
 const PATTERN_CHARS = '\\*?[]()|@!+:=.';
 
-/** The characters field splitting counts as whitespace, as the parser's does. */
+/** The characters field splitting counts as whitespace. */
 const WHITESPACE = ' \t\n\r\v\f';
 
 type Char = { c: string; quoted: boolean; split?: 'blank' | 'delimiter' | 'field' };
@@ -87,7 +87,7 @@ export function globPatterns(text: string, ranges: { start: number; end: number 
   return splitChars(chars);
 }
 
-/** Field splitting over characters, as `splitByIfs` does it over text: a field marker always splits. */
+/** Field splitting over characters: a field marker always splits. */
 function splitChars(chars: Char[]): Char[][] {
   const fields: Char[][] = [];
   let current: Char[] = [];

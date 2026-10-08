@@ -17,9 +17,6 @@ import {
 
 // TODO: We need to define when cwd or params should go to parent or not...
 
-/**
- * Execution context for shell commands, managing environment variables, I/O streams, and function definitions.
- */
 /** bash's dynamic variables: made each time they are read. */
 const DYNAMIC_PARAMS = ['SECONDS', 'EPOCHSECONDS', 'EPOCHREALTIME', 'RANDOM', 'SRANDOM', 'BASH_ARGV0', 'BASHPID', 'SHELLOPTS', 'BASHOPTS', 'BASH_SUBSHELL'];
 
@@ -76,12 +73,14 @@ const cased = (variable: Variable, value: string): string =>
     ? value.charAt(0).toUpperCase() + value.slice(1).toLowerCase()
     : value;
 
-/** `$1`, `$#`, `$?` and the like: parameters, but no variables. */
 /** How many name references bash follows before it calls the chain circular. */
 const NAMEREF_MAX = 8;
 
 const isSpecialParam = (name: string): boolean => /^(\d+|[#@*?$!-])$/.test(name);
 
+/**
+ * Execution context for shell commands, managing environment variables, I/O streams, and function definitions.
+ */
 export class ExecContext implements ExecContextIf {
   private cwd = '/';
   private parent?: ExecContext;
@@ -459,12 +458,6 @@ export class ExecContext implements ExecContextIf {
     return params;
   }
 
-  /**
-   * One parameter as `$name` gives it, without making all of them: a special or
-   * positional one, the nearest variable of that name (what a nameref refers
-   * to), exported or not, or a dynamic one. An array is not one here, as it is
-   * not in `getParams`.
-   */
   /** A special parameter from the nearest scope that has it; a function's positional ones stop at its frame. */
   private specialParam(name: string, positional: boolean): string | undefined {
     if (name in this.special) return this.special[name];
@@ -473,6 +466,12 @@ export class ExecContext implements ExecContextIf {
     return this.parent?.specialParam(name, positional);
   }
 
+  /**
+   * One parameter as `$name` gives it, without making all of them: a special or
+   * positional one, the nearest variable of that name (what a nameref refers
+   * to), exported or not, or a dynamic one. An array is not one here, as it is
+   * not in `getParams`.
+   */
   getParam(name: string): string | undefined {
     if (isSpecialParam(name)) {
       // A function frame's positional parameters are the whole set, as in getParams
@@ -523,7 +522,7 @@ export class ExecContext implements ExecContextIf {
       }
     }
 
-    // What was set, not every parameter: making those on every assignment cost more than the rest of a command
+    // What was set, not every parameter: making those on every assignment costs more than the rest of a command
     return Object.fromEntries(Object.entries(values).filter((entry): entry is [string, string] => entry[1] !== null));
   }
 
@@ -1384,11 +1383,6 @@ export class ExecContext implements ExecContextIf {
     return '#' in this.special ? this : this.parent.getFunctionScope();
   }
 
-  /**
-   * `x=1 f`, and in f a POSIX special builtin assigning x, `x=2 return`: the
-   * value goes on to the x the command's temporary one stood in front of, and
-   * outlasts the call. A function's `local x` keeps it.
-   */
   /** The value a command's temporary assignment gives `name`, `x=1 f`, when that is what it sees; else undefined. */
   temporaryValue(name: string): string | undefined {
     const found = this.lookup(this.ref(name));
@@ -1398,6 +1392,11 @@ export class ExecContext implements ExecContextIf {
     return found.variable.value === undefined ? undefined : String(found.variable.value);
   }
 
+  /**
+   * `x=1 f`, and in f a POSIX special builtin assigning x, `x=2 return`: the
+   * value goes on to the x the command's temporary one stood in front of, and
+   * outlasts the call. A function's `local x` keeps it.
+   */
   propagateTemporary(name: string): void {
     const target = this.ref(name);
     const found = this.lookup(target);

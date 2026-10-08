@@ -73,7 +73,7 @@ import {
 import { cpuTime, timeReport } from './timing.ts';
 import { closingBracket, closingQuote, contextVariables, evaluateArithmeticText, subscriptEnd } from './arith.ts';
 import { decodePrompt } from './prompt.ts';
-import { bracketExpression, globToRegExp, globToRegexSource, posixRegexToSource, quoteGlob, quoteRegexWord, unquoteGlob } from './pattern.ts';
+import { globToRegExp, globToRegexSource, posixRegexToSource, quoteGlob, quoteRegexWord, unquoteGlob } from './pattern.ts';
 import {
   ArithmeticError,
   ArithmeticSyntaxError,
@@ -99,8 +99,6 @@ import {
 } from './types.ts';
 
 // The special parameters, which are set even when nothing has assigned to them
-/** POSIX's special builtins: in POSIX mode an assignment before one outlasts it. */
-
 const ALWAYS_SET_PARAMS = new Set(['?', '#', '$', '0', '-', '_', '@', '*']);
 
 // What bash running a -c string exits with when an expansion fails
@@ -229,6 +227,15 @@ function isArrayReference(text: string): boolean {
 /** Builtins whose arguments are assignments rather than ordinary words */
 const DECLARATION_COMMANDS = new Set(['declare', 'typeset', 'local', 'export', 'readonly']);
 
+/** Private-use characters that stand for quoted characters in a `=~` expression while it is read. */
+const REGEX_LITERAL_BASE = 0xe000;
+const REGEX_LITERALS = /^[\ue000-\uf8ff]$/;
+
+/** Whether a word, after quote removal, could still be a pattern. */
+function hasGlobCharacters(text: string): boolean {
+  return /[*?[]|[@+!?*]\(/.test(text);
+}
+
 /**
  * Mark a detached promise as handled, and return it unchanged for awaiting.
  *
@@ -242,15 +249,6 @@ const DECLARATION_COMMANDS = new Set(['declare', 'typeset', 'local', 'export', '
  * Attaching a no-op catch marks the promise handled without consuming it: the
  * reference kept in the array still rejects normally for the Promise.all.
  */
-/** Private-use characters that stand for quoted characters in a `=~` expression while it is read. */
-const REGEX_LITERAL_BASE = 0xe000;
-const REGEX_LITERALS = /^[\ue000-\uf8ff]$/;
-
-/** Whether a word, after quote removal, could still be a pattern. */
-function hasGlobCharacters(text: string): boolean {
-  return /[*?[]|[@+!?*]\(/.test(text);
-}
-
 function handled<T>(promise: Promise<T>): Promise<T> {
   promise.catch(() => {});
   return promise;
@@ -281,13 +279,6 @@ function isDoubleQuotedAt(text: string, pos: number): boolean {
   return inDouble;
 }
 
-/**
- * The process substitutions made while expanding one command's words.
- *
- * `<(cmd)` runs as the word is expanded and its output goes in the file the word
- * became; `>(cmd)` reads that file, so it can only run once the command that
- * writes it has finished. Either way the file is removed afterwards.
- */
 /**
  * What completing a word gave: the word and where it is in the line, the
  * words that could replace it, and the `-o` options the specification had
@@ -340,6 +331,13 @@ function unquoteText(text: string): string {
 /** Text run as the shell's own input: kept in the history, and echoed as it is read. */
 type ReadInput = { history?: boolean; echo?: boolean };
 
+/**
+ * The process substitutions made while expanding one command's words.
+ *
+ * `<(cmd)` runs as the word is expanded and its output goes in the file the word
+ * became; `>(cmd)` reads that file, so it can only run once the command that
+ * writes it has finished. Either way the file is removed afterwards.
+ */
 type ProcessSubstitutions = {
   paths: string[];
   deferred: { path: string; ast: AstNode }[];
@@ -611,9 +609,9 @@ export class AstExecutor {
       }
     }
 
-    // Saved rather than cleared: `eval`/`source` run through here too, and
-    // dropping the source on the way out left the script around them with none —
-    // no snippet in an error, and nothing for `set -v` to echo
+    // Saved rather than cleared: `eval`/`source` run through here too, and the
+    // script around them keeps its source, for a snippet in an error and for
+    // `set -v` to echo
     const previous = this.currentSource;
 
     this.currentSource = source;
@@ -860,11 +858,6 @@ export class AstExecutor {
   }
 
   /**
-   * Whether `source` stops inside a command — an open quote, `if` or
-   * here-document — so that a prompt should ask for another line (PS2)
-   * before running it. Read with the shell's aliases and POSIX mode.
-   */
-  /**
    * An interactive shell's history, as bash starts it: HISTFILE, unless set,
    * `~/.bash_history` (or the `file` the host gives, null for none); history
    * and `!` expansion on; and the file cut to HISTFILESIZE and read, HISTSIZE
@@ -911,6 +904,11 @@ export class AstExecutor {
     if (ctx.isInteractive?.()) await appendHistory(ctx, this.shell);
   }
 
+  /**
+   * Whether `source` stops inside a command — an open quote, `if` or
+   * here-document — so that a prompt should ask for another line (PS2)
+   * before running it. Read with the shell's aliases and POSIX mode.
+   */
   public async isUnfinished(source: string, ctx: ExecContextIf): Promise<boolean> {
     return await this.unfinished(source, {
       insertLOC: true,
@@ -1560,7 +1558,7 @@ export class AstExecutor {
 
     const text = start.char !== undefined && end.char !== undefined ? this.currentSource?.slice(start.char, end.char + 1) : undefined;
 
-    // Not this command's text after all: its first line, as before
+    // Not this command's text after all: its first line
     if (text === undefined || (text.match(/\n/g)?.length ?? 0) !== end.row - start.row) return start.row;
 
     // Newlines in quotes count, those after a backslash or inside `$( )` do not
@@ -1612,9 +1610,8 @@ export class AstExecutor {
 
     // `&` on anything but a single command. A single command reaches the shell
     // through `execute`, which takes an `async` option; a list, a group, a
-    // subshell or a loop has no such call, and used to run in the foreground
-    // instead — silently, with no job to bring back or disown. That is what made
-    // a multi-step sweep impossible to detach from the session that started it.
+    // subshell or a loop has no such call, and is started as a job here, or
+    // handed to `executeBackground`
     if (node.async && this.shell.jobs) {
       return this.startJob(node, ctx);
     }
@@ -2400,8 +2397,7 @@ export class AstExecutor {
   /**
    * A script's commands in turn. An `exit` stops them, and comes back as the
    * exit signal rather than its status, for the caller to end its shell by.
-   */
-  /**
+   *
    * @param reparse - For a script read from its source: stop at the first line
    *                  after the shell changed from `state` in a way that parses
    *                  differently, and say in `resume` which one it is (1-based)
@@ -2420,7 +2416,7 @@ export class AstExecutor {
 
       if (!err.reported) await this.diagnose(ctx, err.message);
 
-      // Measured: bash leaves 1 behind for an expansion error, 127 when it
+      // bash leaves 1 behind for an expansion error, 127 when it
       // runs a -c string; under `set -e` the shell goes out through errexit
       // with the command's own 1, and a `$( )` that dies of one leaves 1
       const code = this.commandString && !ctx.getShellOption('errexit') && !this.inSubshell(ctx) ? UNBOUND_VARIABLE_CODE : 1;
@@ -2522,9 +2518,6 @@ export class AstExecutor {
       if (reparse && command.loc?.end?.row !== undefined && (staleAfter !== undefined || this.parseState(ctx) !== reparse.state)) {
         staleAfter = command.loc.end.row;
       }
-
-      // Note: Non-zero exit codes do NOT stop script execution
-      // (unless set -e is enabled, which we'd need to check here)
     }
 
     return lastCode;
@@ -2597,10 +2590,9 @@ export class AstExecutor {
       return await this.runCommand({ ...node, name: first, suffix: node.suffix!.filter((arg) => arg !== first) }, parentCtx);
     }
 
-    // Handle exec: apply redirections to parent context, ignore args.
-    // Only a literal `exec` counts. Expanding the name here as well as below ran
-    // every command substitution in it twice — `$(pick-a-command) arg` executed
-    // `pick-a-command` two times, side effects included.
+    // `exec`: its redirections apply to the shell. Only a literal `exec` counts:
+    // expanding the name here as well as below would run every command
+    // substitution in it twice.
     if (node.name && !node.name.expansion?.length && node.name.text === 'exec') {
       // `exec >file &` runs in a background subshell: it opens the file there,
       // and the shell's own descriptors stay as they were
@@ -2690,13 +2682,12 @@ export class AstExecutor {
     }
 
     // `&` on a builtin or a function. Only the external branch below hands
-    // `async` to the shell; a builtin and a function run in this process and
-    // ignored it, so `source sweep.sh &` ran in the foreground and left no job
-    // behind to disown. Caught here, before any expansion, so the work is done
+    // `async` to the shell; a builtin and a function run in this process, so
+    // they go to the background here, before any expansion, and the work is done
     // once and in the background context. A name that has to be expanded before
-    // we know what it is (`$cmd &`) still takes the old path, for the same
-    // reason `exec` above only matches a literal: expanding it twice would run
-    // its command substitutions twice.
+    // we know what it is (`$cmd &`) is not caught, for the same reason `exec`
+    // above only matches a literal: expanding it twice would run its command
+    // substitutions twice.
     if (node.async && this.shell.executeBackground && node.name && !node.name.expansion?.length && this.isInProcessCommand(node.name.text, parentCtx)) {
       return this.executeInBackground(node, parentCtx);
     }
@@ -2830,7 +2821,7 @@ export class AstExecutor {
 
     // Loop control is carried out of the body as a reserved exit code. Only the
     // command *name* means it — `echo break` is an argument that happens to read
-    // "break", and used to terminate the enclosing loop.
+    // "break".
     if (cmdName === 'break' || cmdName === 'continue') {
       return this.loopControl(cmdName, args, ctx);
     }
@@ -2967,9 +2958,7 @@ export class AstExecutor {
   ): Promise<number> {
     // bash scopes dynamically: the frame hangs off the caller, so a function
     // sees and assigns its caller's locals, and one called in a subshell or a
-    // pipeline stage stays inside it. Hanging it off the context the function
-    // was defined in let `g` miss `f`'s locals and wrote a stage's assignments
-    // back into the shell.
+    // pipeline stage stays inside it, not in the context it was defined in.
     const fnCtx = ctx.spawnContext();
 
     // Where a function was *defined* says nothing about errexit; where it is
@@ -3203,11 +3192,8 @@ export class AstExecutor {
    * bash runs `$(false; echo hi)` to the end under `set -e` and hands back what
    * it printed.
    *
-   * The pipe is drained *while* the command runs, not after it. A pipe has a
-   * fixed capacity, and a writer that fills it blocks until someone reads;
-   * reading only once the command had returned meant the command never
-   * returned, so any substitution larger than the capacity — a `find` over a
-   * corpus, say — hung the shell for good.
+   * The pipe is drained *while* the command runs, not after it: a pipe has a
+   * fixed capacity, and a writer that fills it blocks until someone reads.
    */
   private async substitute(commandAST: AstNode, ctx: ExecContextIf): Promise<{ code: number; output: string }> {
     const cmdCtx = this.subshellOf(ctx, true);
@@ -3341,7 +3327,7 @@ export class AstExecutor {
               if (err instanceof CommandAbortError) return this.abortStatus(err, cmdCtx);
               if (!(err instanceof UnboundVariableError)) return Promise.reject(err);
 
-              // Measured: 1, or under -c 127 for a simple command, as bash's stages leave
+              // 1, or under -c 127 for a simple command, as bash's stages leave
               if (!err.reported) await this.diagnose(cmdCtx, err.message);
 
               return this.commandString && node.commands[n].type === 'Command' ? UNBOUND_VARIABLE_CODE : 1;
@@ -3813,7 +3799,7 @@ export class AstExecutor {
 
     try {
       // `{ a; b; } > file`: the file is opened once for the whole group, as a
-      // loop's is — each command opening it again truncated what the one before wrote
+      // loop's is — each command opening it again would truncate what the one before wrote
       return node.redirections?.length ? await this.withFileBridging(ctx, runAll) : await runAll();
     } catch (err) {
       throw node.redirections?.length ? await this.reportedWithin(err, ctx) : err;
@@ -4478,35 +4464,6 @@ export class AstExecutor {
     return out;
   }
 
-  /**
-   * Translate a shell bracket expression to a JavaScript character class.
-   *
-   * `pattern[open]` must be the `[`. Returns the emitted regex source and the index of
-   * the closing `]`, or `undefined` when the bracket is unterminated — the caller then
-   * treats the `[` as a literal, which is what bash does.
-   *
-   * The reason this exists rather than copying `[...]` through verbatim: shell and
-   * JavaScript spell negation differently. POSIX globs negate with `[!...]`, JS regex only
-   * understands `[^...]`, so a copied `[!0-9]` becomes "a `!` or a digit" — the exact
-   * inverse of what was written, silently. `[^...]` happened to work because bash accepts
-   * that spelling too, which is what kept the bug hidden.
-   *
-   * Also handled here: a `]` immediately after the `[` (or after the negation) is a literal
-   * `]` and does not close the expression, so the naive `indexOf(']')` search terminated
-   * `[]]` at the wrong place and produced an empty, invalid class.
-   */
-  protected translateBracketExpression(pattern: string, open: number): { source: string; end: number } | undefined {
-    return bracketExpression(pattern, open);
-  }
-
-  /**
-   * Matches a glob pattern against a value.
-   * Supports *, ?, and character classes.
-   */
-  protected matchGlobPattern(pattern: string, value: string): boolean {
-    return globToRegExp(pattern).test(value);
-  }
-
   protected async executeLogicalExpression(node: AstNodeLogicalExpression, ctx: ExecContextIf): Promise<number> {
     // Only the command following the final && or || is subject to errexit, so
     // the left side is exempt however deep it goes; the right side runs as-is
@@ -4566,12 +4523,6 @@ export class AstExecutor {
     return this.applyErrexit(1, ctx);
   }
 
-  /**
-   * The value of an arithmetic expression. The parser hands over an AST when
-   * the text was arithmetic as written; otherwise — `a[i]`, `16#ff`, `$#`, or
-   * something that is not arithmetic at all — the text is expanded, as bash
-   * always does first, and parsed now.
-   */
   /**
    * An arithmetic expression's value: expanded first — parameters, command
    * substitutions, quote removal, as in double quotes — then evaluated as bash
@@ -4683,8 +4634,7 @@ export class AstExecutor {
 
   /**
    * Recursively evaluates a conditional expression AST node.
-   */
-  /**
+   *
    * @param negated - The term is under a `!`, which `set -x` shows before it
    */
   protected async evaluateConditionalExpression(
@@ -4824,7 +4774,7 @@ export class AstExecutor {
       return await this.isParameterSet(arg, ctx, params);
     }
 
-    // File tests - delegate to shell.execCommand('test', ...)
+    // File tests: the host's `test` command answers them
     const fileTestOps = new Set([
       '-e',
       '-f',
@@ -4985,9 +4935,6 @@ export class AstExecutor {
   }
 
   /**
-   * Expands the right-hand side of =~ without unquoting (preserves regex metacharacters).
-   */
-  /**
    * An ANSI-C quoted string, `$'\t…'`, starting at `start`: its value and the
    * index of its closing quote, or undefined when there is none.
    */
@@ -5007,6 +4954,9 @@ export class AstExecutor {
     return undefined;
   }
 
+  /**
+   * Expands the right-hand side of =~ without unquoting (preserves regex metacharacters).
+   */
   protected async expandConditionalRegex(
     word: AstConditionalWord,
     ctx: ExecContextIf,
@@ -5094,8 +5044,9 @@ export class AstExecutor {
 
   /**
    * The parameters and the environment as one record, as `{ ...getEnv(),
-   * ...getParams() }` would be, but read a name at a time: expanding `$x` made
-   * every variable of every scope, which was most of what a simple command cost.
+   * ...getParams() }` would be, but read a name at a time: making every
+   * variable of every scope for each `$x` would cost more than the rest of a
+   * simple command.
    * Listing it — `${!prefix*}` — still makes them all.
    */
   protected paramView(ctx: ExecContextIf): Record<string, string> {
@@ -5757,14 +5708,6 @@ export class AstExecutor {
   }
 
   /**
-   * The value of a parameter, which may name one array element (`a[0]`) or a
-   * whole array (`a[@]`, joined for use as a single string).
-   */
-  protected async parameterValue(parameter: string | number, ctx: ExecContextIf, params: Record<string, string>): Promise<string> {
-    return (await this.lookupParameter(parameter, ctx, params)).value;
-  }
-
-  /**
    * A parameter's value, and whether it is set, with its subscript expanded
    * once for both: `${A[$(cmd)]%x}` runs cmd once.
    */
@@ -6371,7 +6314,6 @@ export class AstExecutor {
     // reports a status the caller may adopt (only a bare assignment does).
     let status = 0;
 
-    // Set when the whole word is a list expansion that turned out to be empty
     // Where a `"$@"` expanded to nothing
     const emptyAt: number[] = [];
 
@@ -6630,11 +6572,10 @@ export class AstExecutor {
       } else if (xp.type === 'CommandExpansion') {
         const { code, output } = await this.substitute(xp.commandAST, ctx);
 
-        // A failing substitution still substitutes what it wrote. Bailing out
-        // here instead made `for e in $(ls maybe-missing)` abort the enclosing
-        // command — and with it the loop around it — instead of iterating over
-        // nothing. `exit`/`return` inside `$( )` ends that subshell only, so
-        // both are reduced to a plain status as well.
+        // A failing substitution still substitutes what it wrote, and the
+        // command around it goes on: `for e in $(ls maybe-missing)` iterates
+        // over nothing. `exit`/`return` inside `$( )` ends that subshell only,
+        // so both are reduced to a plain status as well.
         status = isExitSignal(code) ? getExitCode(code) : isReturnSignal(code) ? getReturnCode(code) : code;
 
         rValue.replace(
@@ -6748,11 +6689,6 @@ export class AstExecutor {
     return result;
   }
 
-  /**
-   * Each field that is a pattern, `*.txt`, as the paths it matches, or itself
-   * when none does — unless `nullglob` drops it or `failglob` makes that an
-   * error.
-   */
   /** Whether the locale orders by bytes: bash's default, C, does, as does POSIX. */
   private bytewiseLocale(ctx: ExecContextIf): boolean {
     const params = this.paramView(ctx);
@@ -6760,6 +6696,11 @@ export class AstExecutor {
     return /^(C|POSIX)([._@]|$)/.test(params.LC_ALL || params.LC_COLLATE || params.LANG || 'C');
   }
 
+  /**
+   * Each field that is a pattern, `*.txt`, as the paths it matches, or itself
+   * when none does — unless `nullglob` drops it or `failglob` makes that an
+   * error.
+   */
   private async expandPathnames(ctx: ExecContextIf, values: string[], patterns: string[]): Promise<string[]> {
     const params = this.paramView(ctx);
     const globignore = params.GLOBIGNORE ?? '';
@@ -6804,9 +6745,7 @@ export class AstExecutor {
    * character like any other, `"${x+'y'}"` gives 'y', a `\` escapes only what
    * it would between double quotes (and the `}`), and a nested `"…"` only
    * groups. Outside double quotes the word is read as a word anywhere is.
-   */
-  /**
-   * The word of `${x-word}` and its kin, in double quotes as the expansion is.
+   *
    * With `fields`, a `"$@"` in it stays one field per parameter, as bash keeps
    * them in `"${1+ $@ }"`: they come back joined by the field marker.
    */
@@ -6890,10 +6829,6 @@ export class AstExecutor {
     return w.text ?? '';
   }
 
-  private globToRegexStr(pattern: string): string {
-    return globToRegexSource(pattern);
-  }
-
   private removePrefix(value: string, pattern: string, greedy: boolean): string {
     const re = globToRegExp(pattern);
     if (greedy) {
@@ -6922,12 +6857,6 @@ export class AstExecutor {
     return value;
   }
 
-  /**
-   * Evaluates a arithmetic AST node.
-   * @param node - The AST node to evaluate
-   * @param ctx - The execution context for variable resolution
-   * @returns The numeric result of the arithmetic expression
-   */
   /** How deep variables that hold expressions have sent the evaluation; bash stops at 1024. */
   private arithmeticDepth = 0;
 }
