@@ -79,21 +79,11 @@ export type RealShellOptions = {
 /** Where a job's child processes are recorded, and how the job itself is stopped. */
 type JobRecord = { children: Set<Deno.ChildProcess>; abort: AbortController; finished: boolean; killedBy?: number };
 
-/** Signals whose default is to do nothing; every other one ends what it reaches. */
 /** The kernel's USER_HZ, what /proc counts CPU time in. */
 const CLOCK_TICKS = 100;
 
 const HARMLESS_SIGNALS = new Set(['0', 'CHLD', 'CONT', 'URG', 'WINCH']);
 
-/**
- * A ShellIf on the real operating system: external commands are processes,
- * redirections are files, globs read directories. It exists so bash's own test
- * suite can run against the executor; it is not meant as a production shell.
- *
- * Names the executor passes around as I/O endpoints are `0`/`1`/`2` (this
- * process's own stdio), pipes this shell opened, and descriptors opened with
- * `fdOpen`. Anything else is a path, which the executor bridges through a pipe.
- */
 /**
  * Whether the kernel would run the file at `path`: not without an execute bit,
  * and as a script of its own — which bash runs itself — without an ELF header
@@ -122,6 +112,15 @@ async function launchable(path: string): Promise<'binary' | 'script' | 'denied'>
   }
 }
 
+/**
+ * A ShellIf on the real operating system: external commands are processes,
+ * redirections are files, globs read directories. It exists so bash's own test
+ * suite can run against the executor; it is not meant as a production shell.
+ *
+ * Names the executor passes around as I/O endpoints are `0`/`1`/`2` (this
+ * process's own stdio), pipes this shell opened, and descriptors opened with
+ * `fdOpen`. Anything else is a path, which the executor bridges through a pipe.
+ */
 export class RealShell implements ShellIf {
   private pipes = new Map<string, PipeBuffer>();
   private files = new Map<string, FileHandle>();
