@@ -121,6 +121,24 @@ Deno.test('command names that expand to zero or several words', async (t) => {
     assertEquals(result.stdout, 'a b c\n');
   });
 
+  await t.step('"$@" as the name runs the positional parameters', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('set -- echo top a; "$@"');
+    assertEquals(result.stdout, 'top a\n');
+  });
+
+  await t.step('"${arr[@]}" as the name runs the array, then the words after it', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('arr=(echo arr c); "${arr[@]}" d');
+    assertEquals(result.stdout, 'arr c d\n');
+  });
+
+  await t.step('"$@" as the name in a function runs its arguments', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('f() { "$@"; }; f echo x');
+    assertEquals(result.stdout, 'x\n');
+  });
+
   await t.step('nothing left is no command, and takes the substitution status', async () => {
     const shell = new TestShell();
     const result = await shell.runAndCapture('$(false); echo "s=$?"; $unset; echo "s=$?"');
