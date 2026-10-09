@@ -265,6 +265,28 @@ Deno.test('arg builtin', async (t) => {
       assertEquals(spec.flags.find((f) => f.name === 'verbose')?.type, 'bool');
     });
 
+    await t.step('path, user, group and command are strings that the spec names', async () => {
+      const json = new ExecContext();
+      json.setEnv({ JSON_OUTPUT: '1' });
+      json.setParams({ '1': '--help', '#': '1', '0': 'myscript' });
+      await argBuiltin(json, ['<target>', 'path', 'Where to create it'], mockShell, noopExecute);
+      await argBuiltin(json, ['--owner', 'user', 'Who owns it'], mockShell, noopExecute);
+      const spec = JSON.parse((await argBuiltin(json, ['--export'], mockShell, noopExecute)).stdout!) as {
+        args: { name: string; type: string }[];
+        flags: { name: string; type: string }[];
+      };
+      assertEquals(spec.args[0].type, 'path');
+      assertEquals(spec.flags.find((f) => f.name === 'owner')?.type, 'user');
+
+      const run = new ExecContext();
+      run.setParams({ '1': '/a/b', '2': '--owner', '3': 'anna', '#': '3', '0': 'myscript' });
+      await argBuiltin(run, ['<target>', 'path', 'Where to create it'], mockShell, noopExecute);
+      await argBuiltin(run, ['--owner', 'user', 'Who owns it'], mockShell, noopExecute);
+      assertEquals((await argBuiltin(run, ['--export'], mockShell, noopExecute)).code, 0);
+      assertEquals(run.getEnv()['TARGET'], '/a/b');
+      assertEquals(run.getEnv()['OWNER'], 'anna');
+    });
+
     await t.step('--example and --returns reach both shapes of help', async () => {
       const json = new ExecContext();
       json.setEnv({ JSON_OUTPUT: '1' });

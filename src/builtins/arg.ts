@@ -3,7 +3,7 @@
  *
  * Syntax:
  *   arg --desc "description"           # Set command description
- *   arg <name> type "desc"             # Required positional
+ *   arg <name> type "desc"             # Required positional; type: string number boolean path user group command
  *   arg [<name>] type = default "desc" # Optional positional with default
  *   arg --option type "desc"           # Named option
  *   arg --option type = default "desc" # Named option with default
@@ -29,7 +29,11 @@ import type { BuiltinHandler, BuiltinResult } from './types.ts';
 // Types
 // ============================================================================
 
-type ArgType = 'string' | 'number' | 'boolean';
+/**
+ * `path`, `user`, `group` and `command` are strings to the parser; the name says what a value is,
+ * which the spec carries for a host's tab completion to offer.
+ */
+type ArgType = 'string' | 'number' | 'boolean' | 'path' | 'user' | 'group' | 'command';
 
 interface PositionalArgSpec {
   kind: 'positional';
@@ -125,7 +129,7 @@ type ParseResult =
   | { type: 'error'; message: string };
 
 function parseArgType(s: string): ArgType | null {
-  const types: ArgType[] = ['string', 'number', 'boolean'];
+  const types: ArgType[] = ['string', 'number', 'boolean', 'path', 'user', 'group', 'command'];
   return types.includes(s as ArgType) ? (s as ArgType) : null;
 }
 
