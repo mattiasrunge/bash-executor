@@ -201,3 +201,13 @@ Deno.test('executeAndCapture', async (t) => {
     assertEquals(result.stderr, 'phase-two\nError: deadline\n');
   });
 });
+
+Deno.test('Host data reaches every command a script runs', async () => {
+  const shell = new TestShell();
+  shell.setHostData('run-1');
+  shell.mockCommand('who', async (ctx) => ({ code: 0, stdout: `${ctx.getHostData()}\n` }));
+
+  const result = await shell.runAndCapture('who; echo x | who; echo "$(who)"; (who); f() { who; }; f; who & wait');
+
+  assertEquals(result.stdout, 'run-1\n'.repeat(6));
+});

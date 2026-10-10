@@ -514,3 +514,28 @@ Deno.test('ExecContext - Multi-level Parent Chain', async (t) => {
     assertEquals(grandparent.getEnv()['LEVEL'], 'gp');
   });
 });
+
+Deno.test('ExecContext - host data', async (t) => {
+  await t.step('spawned and copied contexts see the value of the context they came from', () => {
+    const root = new ExecContext();
+    root.setHostData({ run: 'a' });
+
+    assertEquals(root.spawnContext().getHostData(), { run: 'a' });
+    assertEquals(root.subContext(true).spawnContext().getHostData(), { run: 'a' });
+  });
+
+  await t.step('a value set on a child stays with the child and what is made from it', () => {
+    const root = new ExecContext();
+    root.setHostData('root');
+
+    const child = root.spawnContext();
+    child.setHostData('child');
+
+    assertEquals(child.subContext().getHostData(), 'child');
+    assertEquals(root.getHostData(), 'root');
+  });
+
+  await t.step('a context nobody gave one has none', () => {
+    assertEquals(new ExecContext().spawnContext().getHostData(), undefined);
+  });
+});

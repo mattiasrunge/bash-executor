@@ -106,6 +106,7 @@ export class ExecContext implements ExecContextIf {
   private fds: Record<string, string> = {};
   private options!: Record<string, boolean>;
   private abortSignal?: AbortSignal;
+  private hostData?: unknown;
   // undefined means "whatever the shell above says"; set explicitly, it decides
   private errexitSuppressed?: boolean;
 
@@ -215,6 +216,7 @@ export class ExecContext implements ExecContextIf {
     // `if ( false; echo here ); then` — the exemption covers the subshell too
     ctx.errexitSuppressed = this.getErrexitSuppressed();
     ctx.abortSignal = this.getAbortSignal();
+    ctx.hostData = this.getHostData();
 
     return ctx;
   }
@@ -225,6 +227,14 @@ export class ExecContext implements ExecContextIf {
 
   setAbortSignal(signal: AbortSignal | undefined): void {
     this.abortSignal = signal;
+  }
+
+  getHostData(): unknown {
+    return this.hostData ?? this.parent?.getHostData();
+  }
+
+  setHostData(value: unknown): void {
+    this.hostData = value;
   }
 
   getCwd(): string {

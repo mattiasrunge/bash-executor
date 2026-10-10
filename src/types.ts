@@ -516,6 +516,16 @@ export interface ExecContextIf {
   setAbortSignal(signal: AbortSignal | undefined): void;
 
   /**
+   * Gets the value the host gave this context, or the nearest context it was made from. The
+   * executor never reads it: it is how a host tells, from the context a command runs in, which of
+   * its own runs the command belongs to.
+   */
+  getHostData(): unknown;
+
+  /** Sets the host's value for this context and every context made from it from now on. */
+  setHostData(value: unknown): void;
+
+  /**
    * Gets the current working directory.
    * @returns {string} The current working directory.
    */

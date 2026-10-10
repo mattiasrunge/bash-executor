@@ -412,6 +412,11 @@ export class TestShell implements ShellIf {
     this.ctx.setEnv(values);
   }
 
+  /** Give the shell's context a host value, as a host does before it runs a script. */
+  setHostData(value: unknown): void {
+    this.ctx.setHostData(value);
+  }
+
   /**
    * Set the current working directory
    */
