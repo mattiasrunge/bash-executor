@@ -90,14 +90,6 @@ export const cdBuiltin: BuiltinHandler = async (ctx, args, shell) => {
     targetDir = pathArgs[0];
   }
 
-  // Handle tilde expansion if not already expanded
-  if (targetDir.startsWith('~')) {
-    const home = env['HOME'];
-    if (home) {
-      targetDir = home + targetDir.slice(1);
-    }
-  }
-
   // A relative name not starting `.` or `..` is looked for in each CDPATH
   // directory first, an empty one the current; one found through a directory
   // named there is said, as bash says where it went

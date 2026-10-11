@@ -10,6 +10,18 @@ Deno.test('a tilde is expanded as the word runs, with HOME as it is then', async
   assertEquals(result.stdout, '/h1 /h1/a a=/h1:/h1/b\n/h2\n/h2/c:/h2 ~ ~\n');
 });
 
+Deno.test('cd goes where its expanded word says: a quoted ~, or one no user has, is a name', async () => {
+  const shell = new TestShell();
+
+  shell.setFile('/h/x/.keep', '');
+  shell.setFile('/d/~/.keep', '');
+
+  const result = await shell.runAndCapture('HOME=/h; cd ~/x; pwd; cd "~"; cd ~nosuchuser; pwd; cd /d; cd "~"; pwd');
+
+  assertEquals(result.stdout, '/h/x\n/h/x\n/d/~\n');
+  assertEquals(result.stderr, 'cd: ~: No such file or directory\ncd: ~nosuchuser: No such file or directory\n');
+});
+
 Deno.test('the directory stack: pushd, popd, dirs and DIRSTACK', async () => {
   const shell = new TestShell();
 

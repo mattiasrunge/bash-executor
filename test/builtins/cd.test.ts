@@ -93,13 +93,13 @@ Deno.test('cd builtin', async (t) => {
     assertEquals(env['OLDPWD'], '/home/user');
   });
 
-  await t.step('handles tilde expansion', async () => {
+  await t.step('a ~ it is given is part of the name', async () => {
     const ctx = new ExecContext();
     ctx.setCwd('/tmp');
     ctx.setEnv({ HOME: '/home/user' });
     const result = await cdBuiltin(ctx, ['~/documents'], mockShell, noopExecute);
     assertEquals(result.code, 0);
-    assertEquals(ctx.getCwd(), '/home/user/documents');
+    assertEquals(ctx.getCwd(), '/tmp/~/documents');
   });
 
   await t.step('-L flag (logical path)', async () => {
