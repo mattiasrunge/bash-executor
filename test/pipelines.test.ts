@@ -280,3 +280,42 @@ Deno.test('shopt -s lastpipe runs the last stage in the shell', async (t) => {
     assertEquals(result.exitCode, 4);
   });
 });
+
+Deno.test('A stage that writes to an ended stage ends with 141', async (t) => {
+  await t.step('a loop writing to a stage that reads nothing ends', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('while :; do echo y; done | true; echo "ps=${PIPESTATUS[@]}"');
+    assertEquals(result.stdout, 'ps=141 0\n');
+    assertEquals(result.stderr, '');
+  });
+
+  await t.step('the stage reading gets what it read before it ended', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('while :; do echo y; done | { read v; echo "[$v]"; }');
+    assertEquals(result.stdout, '[y]\n');
+  });
+
+  await t.step('the commands of a stage read its input in turn', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('printf "a\\nb\\n" | { read x; read y; echo "$x$y"; }');
+    assertEquals(result.stdout, 'ab\n');
+  });
+
+  await t.step('pipefail reports it', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('set -o pipefail; while :; do echo y; done | true; echo "code=$?"');
+    assertEquals(result.stdout, 'code=141\n');
+  });
+
+  await t.step('a subshell it ends leaves 141 to the rest of its stage', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('{ (while :; do echo y; done); echo "sub=$?" >&2; } | true');
+    assertEquals(result.stderr, 'sub=141\n');
+  });
+
+  await t.step('the process it ends runs no EXIT trap', async () => {
+    const shell = new TestShell();
+    const result = await shell.runAndCapture('(trap "echo trapped >&2" EXIT; while :; do echo y; done) | true');
+    assertEquals(result.stderr, '');
+  });
+});

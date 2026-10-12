@@ -178,6 +178,10 @@ export class TestShell implements ShellIf {
     this.pipes.delete(name);
   }
 
+  async pipeCloseRead(name: string): Promise<void> {
+    this.pipes.get(name)?.closeRead();
+  }
+
   async pipeRead(name: string): Promise<string> {
     const pipe = this.pipes.get(name);
     if (!pipe) return '';

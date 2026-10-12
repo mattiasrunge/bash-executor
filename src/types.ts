@@ -334,12 +334,26 @@ export interface ShellIf {
   pipeRead: (name: string, opts?: PipeReadOptions) => Promise<string>;
 
   /**
-   * Write to a pipe.
+   * Write to a pipe. A write to a pipe that `pipeCloseRead` was called on,
+   * waiting for room or made after, throws a `BrokenPipeError`.
    * @param {string} name - The name of the pipe.
    * @param {string} data - The content to write to the pipe.
    * @returns {Promise<void>}
    */
   pipeWrite: (name: string, data: string) => Promise<void>;
+
+  /**
+   * Marks a pipe as having no reader any more, as closing the last read end of
+   * a pipe does: what is still in it is dropped, and a write to it, by the
+   * shell or by a command, fails with a `BrokenPipeError`. Called on a pipeline
+   * stage's input once the stage has ended.
+   *
+   * Optional: without it, a stage writing more than the next one reads waits
+   * until the pipe is removed.
+   * @param {string} name - The name of the pipe.
+   * @returns {Promise<void>}
+   */
+  pipeCloseRead?: (name: string) => Promise<void>;
 
   /**
    * Checks if a name refers to a managed pipe (as opposed to a file path).

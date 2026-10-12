@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { isAbsolute, join } from '@std/path';
 import type { CpuTimes, DirectoryEntry, ExecCommandOptions, ExecContextIf, JobHandle, JobHostIf, PathTestOperation, ShellIf } from '../mod.ts';
-import { CLOSED_FD, encodeShellText } from '../mod.ts';
+import { BrokenPipeError, CLOSED_FD, encodeShellText } from '../mod.ts';
 import { globToRegexSource } from '../src/pattern.ts';
 import { PipeBuffer } from '../test/lib/pipe-buffer.ts';
 
@@ -542,6 +542,12 @@ export class RealShell implements ShellIf {
     await undefined;
   }
 
+  async pipeCloseRead(name: string): Promise<void> {
+    this.pipes.get(name)?.closeRead();
+
+    await undefined;
+  }
+
   async pipeRead(name: string): Promise<string> {
     if (name === '0') {
       return await new Response(Deno.stdin.readable).text();
@@ -584,7 +590,9 @@ export class RealShell implements ShellIf {
         // An empty write is EOF, as in the test shell
         pipe.close();
       } else {
-        await pipe.write(encodeShellText(data)).catch(() => {});
+        await pipe.write(encodeShellText(data)).catch((err) => {
+          if (err instanceof BrokenPipeError) throw err;
+        });
       }
     }
   }

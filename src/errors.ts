@@ -262,3 +262,19 @@ export class NoClobberError extends RedirectionError {
     this.path = path;
   }
 }
+
+/** The status of a process a write to a pipe nobody reads ended: 128 + SIGPIPE, as in bash. */
+export const BROKEN_PIPE_STATUS = 141;
+
+/**
+ * A write to a pipe that has no reader any more, what SIGPIPE is to a process
+ * in bash. A shell's `pipeWrite` throws it once `pipeCloseRead` has been called
+ * on the pipe. It ends the process that wrote — a pipeline stage or a `( )`
+ * subshell — quietly, with {@link BROKEN_PIPE_STATUS}.
+ */
+export class BrokenPipeError extends BashExecutorError {
+  constructor() {
+    super('broken pipe', { code: 'E_BROKEN_PIPE' });
+    this.name = 'BrokenPipeError';
+  }
+}

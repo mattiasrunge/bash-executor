@@ -1,3 +1,5 @@
+import { BrokenPipeError } from '../../mod.ts';
+
 /**
  * PipeBuffer - Async pipe with proper backpressure and EOF signaling
  */
@@ -7,6 +9,7 @@ export class PipeBuffer {
   private writePos = 0;
   private size = 0;
   private _closed = false;
+  private _unread = false;
 
   private writeWaiters: Array<() => void> = [];
   private readWaiters: Array<() => void> = [];
@@ -29,6 +32,16 @@ export class PipeBuffer {
     this.readWaiters = [];
   }
 
+  /** Nothing reads the pipe any more: drop what is in it, and fail every write from here on. */
+  closeRead(): void {
+    this._unread = true;
+    this.size = 0;
+    this.readPos = 0;
+    this.writePos = 0;
+    this.writeWaiters.forEach((w) => w());
+    this.writeWaiters = [];
+  }
+
   async write(data: Uint8Array | string): Promise<void> {
     if (this._closed) {
       throw new Error('Cannot write to closed pipe');
@@ -41,6 +54,9 @@ export class PipeBuffer {
     let offset = 0;
 
     while (offset < input.length) {
+      if (this._unread) {
+        throw new BrokenPipeError();
+      }
       if (this._closed) {
         throw new Error('Cannot write to closed pipe');
       }

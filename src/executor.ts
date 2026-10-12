@@ -77,6 +77,8 @@ import { globToRegExp, globToRegexSource, posixRegexToSource, quoteGlob, quoteRe
 import {
   ArithmeticError,
   ArithmeticSyntaxError,
+  BROKEN_PIPE_STATUS,
+  BrokenPipeError,
   CommandAbortError,
   GlobNoMatchError,
   NoClobberError,
@@ -2868,7 +2870,8 @@ export class AstExecutor {
 
         // Write stdout/stderr if present. Output that cannot be written — stdout
         // closed with `>&-`, or a descriptor open only for reading — fails the
-        // builtin, as bash's "write error", and not the script.
+        // builtin, as bash's "write error", and not the script. A pipe nobody
+        // reads ends the whole process instead, as SIGPIPE does.
         try {
           const write = async (text: string) => {
             if (ctx.getStdout() === CLOSED_FD) throw new Error('Bad file descriptor');
@@ -2885,6 +2888,8 @@ export class AstExecutor {
             await write(result.stdout);
           }
         } catch (err) {
+          if (err instanceof BrokenPipeError) throw err;
+
           await this.diagnose(ctx, `${cmdName}: write error: ${err instanceof Error ? err.message : err}`);
           code = 1;
         }
@@ -3099,6 +3104,11 @@ export class AstExecutor {
       // `(exit 3)` ends the subshell, not the shell: to the caller it is status 3.
       // Its EXIT trap runs as it ends.
       return await this.runExitTrap(ctx, isExitSignal(result) ? getExitCode(result) : isReturnSignal(result) ? getReturnCode(result) : result);
+    }).catch((err) => {
+      // A process a broken pipe ends runs no trap, and leaves 141 to its parent
+      if (err instanceof BrokenPipeError) return BROKEN_PIPE_STATUS;
+
+      return Promise.reject(err);
     });
 
     // To the caller the subshell is one command, so it leaves one status behind —
@@ -3281,18 +3291,23 @@ export class AstExecutor {
           cmdCtx.setErrexitSuppressed(true);
         }
 
+        // The pipe this stage reads, when the pipeline made it: nothing reads it
+        // once the stage has ended
+        let stdinPipe: string | undefined;
+
         // If not the first command, redirect stdin from the last command's stdout
         if (lastCtx) {
-          cmdCtx.redirectStdin(lastCtx.getStdout());
+          stdinPipe = lastCtx.getStdout();
+          cmdCtx.redirectStdin(stdinPipe);
         } else if (isFirstCommand) {
           // First command: check if stdin needs file bridging
           const stdin = cmdCtx.getStdin();
           if (stdin !== CLOSED_FD && !this.shell.isPipe(stdin)) {
-            const pipe = await this.shell.pipeOpen();
-            pipes.push(pipe);
+            stdinPipe = await this.shell.pipeOpen();
+            pipes.push(stdinPipe);
             // Start reading from file in background
-            this.shell.pipeFromFile(ctx, stdin, pipe).catch((err) => console.error('Failed to read from file:', err));
-            cmdCtx.redirectStdin(pipe);
+            this.shell.pipeFromFile(ctx, stdin, stdinPipe).catch((err) => console.error('Failed to read from file:', err));
+            cmdCtx.redirectStdin(stdinPipe);
           }
         }
 
@@ -3336,9 +3351,21 @@ export class AstExecutor {
               if ((isLastCommand && lastpipe) || cmdCtx.getTrap('EXIT') === undefined) return code;
 
               return isExitSignal(code) ? makeExitSignal(await this.runExitTrap(cmdCtx, getExitCode(code))) : await this.runExitTrap(cmdCtx, code);
+            }).catch((err) => {
+              // A stage that wrote to a stage that has ended is ended by it, as
+              // SIGPIPE ends it in bash: quietly, and without its EXIT trap
+              if (err instanceof BrokenPipeError && !(isLastCommand && lastpipe)) return BROKEN_PIPE_STATUS;
+
+              return Promise.reject(err);
             }).finally(() => {
               if (stdoutRedirected) {
                 this.shell.pipeClose(cmdCtx.getStdout()).catch((err) => console.error('Failed to close pipe: ', err));
+              }
+
+              // Not before the stage ends: several commands in it may read the
+              // pipe in turn, `seq 10 | (head -n1; cat)`
+              if (stdinPipe && this.shell.pipeCloseRead) {
+                this.shell.pipeCloseRead(stdinPipe).catch((err) => console.error('Failed to close pipe for reading: ', err));
               }
             }),
           ),
