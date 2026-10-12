@@ -1,4 +1,5 @@
-import { assertEquals } from '@std/assert';
+import { assertEquals, assertStringIncludes } from '@std/assert';
+import { JobShell } from './lib/job-shell.ts';
 import { TestShell } from './lib/test-shell.ts';
 
 Deno.test('Simple Pipelines', async (t) => {
@@ -317,5 +318,41 @@ Deno.test('A stage that writes to an ended stage ends with 141', async (t) => {
     const shell = new TestShell();
     const result = await shell.runAndCapture('(trap "echo trapped >&2" EXIT; while :; do echo y; done) | true');
     assertEquals(result.stderr, '');
+  });
+});
+
+Deno.test('A job a stage puts in the background holds its input', async (t) => {
+  // More than a pipe holds, so the writer waits on the job to read it
+  const count = 'i=0; while [ $i -lt 20000 ]; do echo $i; i=$((i+1)); done';
+
+  await t.step('the job reads all of it, and the writer ends 0', async () => {
+    const shell = new JobShell();
+    await shell.runAndCapture(`${count} | { { n=0; while read l; do n=$((n+1)); done; echo "n=$n"; } & }; echo "ps=\${PIPESTATUS[*]}"`);
+    await Promise.all(shell.started);
+    assertStringIncludes(shell.getStdout(), 'ps=0 0\n');
+    assertStringIncludes(shell.getStdout(), 'n=20000\n');
+  });
+
+  await t.step('the pipeline does not wait for it', async () => {
+    const shell = new JobShell();
+    const result = await shell.runAndCapture('echo a | { while :; do :; done & }; echo "ps=${PIPESTATUS[*]}"');
+    assertEquals(result.stdout, 'ps=0 0\n');
+    await shell.jobs.signal('1000', 'TERM');
+    await Promise.all(shell.started);
+  });
+
+  await t.step('once it has ended, the writer ends with 141', async () => {
+    const shell = new JobShell();
+    await shell.runAndCapture('while :; do echo y; done | { { read v; echo "[$v]"; } & }; echo "ps=${PIPESTATUS[*]}"');
+    await Promise.all(shell.started);
+    assertEquals(shell.getStdout(), '[y]\nps=141 0\n');
+  });
+
+  await t.step('so does one it holds on another descriptor', async () => {
+    const shell = new JobShell();
+    await shell.runAndCapture(`${count} | { { n=0; while read l <&3; do n=$((n+1)); done; echo "n=$n"; } 3<&0 & }; echo "ps=\${PIPESTATUS[*]}"`);
+    await Promise.all(shell.started);
+    assertStringIncludes(shell.getStdout(), 'ps=0 0\n');
+    assertStringIncludes(shell.getStdout(), 'n=20000\n');
   });
 });

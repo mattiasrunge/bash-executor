@@ -1841,6 +1841,7 @@ export class AstExecutor {
 
     const job = ctx.getJobTable().add(handle, command);
 
+    this.holdPipes(ctx, handle.done);
     ctx.setParams({ '!': handle.pid });
 
     // Its end is a SIGCHLD to the shell, whose trap runs when the shell gets to it
@@ -1875,21 +1876,33 @@ export class AstExecutor {
    * Hand a node to the shell to run in the background. The copy clears `async`
    * so that re-entering does the work rather than backgrounding it again.
    */
-  private executeInBackground(node: AstNode, ctx: ExecContextIf): Promise<number> {
+  private async executeInBackground(node: AstNode, ctx: ExecContextIf): Promise<number> {
     const foreground = { ...node, async: false };
+    const { promise: done, resolve: ended } = Promise.withResolvers<void>();
 
     const run = async (bgCtx: ExecContextIf): Promise<number> => {
-      const code = await this.executeNode(foreground, bgCtx);
+      try {
+        const code = await this.executeNode(foreground, bgCtx);
 
-      // A background job is a script in its own right, so an `exit` inside it —
-      // or an errexit trip, which is spelled the same way — ends the job and
-      // becomes its status. Left encoded, it surfaces as a nonsense exit code
-      // like -1001 in whatever records the job's result. This is the same
-      // resolution `executeScript` does at the top of a script.
-      return isExitSignal(code) ? getExitCode(code) : isReturnSignal(code) ? getReturnCode(code) : code;
+        // A background job is a script in its own right, so an `exit` inside it —
+        // or an errexit trip, which is spelled the same way — ends the job and
+        // becomes its status. Left encoded, it surfaces as a nonsense exit code
+        // like -1001 in whatever records the job's result. This is the same
+        // resolution `executeScript` does at the top of a script.
+        return isExitSignal(code) ? getExitCode(code) : isReturnSignal(code) ? getReturnCode(code) : code;
+      } finally {
+        ended();
+      }
     };
 
-    return this.shell.executeBackground!(ctx, run, this.nodeSource(node));
+    this.holdPipes(ctx, done);
+
+    try {
+      return await this.shell.executeBackground!(ctx, run, this.nodeSource(node));
+    } catch (err) {
+      ended();
+      throw err;
+    }
   }
 
   /** Whether a name runs in this process — a builtin or a shell function — rather than as a command of its own. */
@@ -3258,6 +3271,8 @@ export class AstExecutor {
 
   protected async executePipeline(node: AstNodePipeline, ctx: ExecContextIf): Promise<number> {
     const pipes: string[] = [];
+    // A stage's input once nothing reads it: the stage and the jobs it put in the background have ended
+    const unread = new Map<string, Promise<void>>();
     const executions: Promise<number>[] = [];
     const fileBridges: Promise<void>[] = [];
     let lastCtx: ExecContextIf | null = null;
@@ -3334,6 +3349,11 @@ export class AstExecutor {
           }
         }
 
+        // A background job the stage starts holds its input too, as a process holds its copy of the read end
+        if (stdinPipe) {
+          this.pipeReaders.set(stdinPipe, new Set());
+        }
+
         executions.push(
           handled(
             this.executeNode(node.commands[n], cmdCtx).catch(async (err) => {
@@ -3363,9 +3383,19 @@ export class AstExecutor {
               }
 
               // Not before the stage ends: several commands in it may read the
-              // pipe in turn, `seq 10 | (head -n1; cat)`
-              if (stdinPipe && this.shell.pipeCloseRead) {
-                this.shell.pipeCloseRead(stdinPipe).catch((err) => console.error('Failed to close pipe for reading: ', err));
+              // pipe in turn, `seq 10 | (head -n1; cat)`; nor before the jobs
+              // it started have, `seq 10 | { cat & }`, though the pipeline
+              // does not wait for them
+              if (stdinPipe) {
+                const pipe = stdinPipe;
+
+                unread.set(
+                  pipe,
+                  this.readersEnded(pipe).then(async () => {
+                    this.pipeReaders.delete(pipe);
+                    await this.shell.pipeCloseRead?.(pipe);
+                  }).catch((err) => console.error('Failed to close pipe for reading: ', err)),
+                );
               }
             }),
           ),
@@ -3382,8 +3412,40 @@ export class AstExecutor {
       return this.finishPipeline(node, codes, ctx, lastpipe);
     } finally {
       for (const pipe of pipes) {
-        this.shell.pipeRemove(pipe).catch((err) => console.error('Failed to remove pipe: ', err));
+        (unread.get(pipe) ?? Promise.resolve()).then(() => this.shell.pipeRemove(pipe)).catch((err) => console.error('Failed to remove pipe: ', err));
       }
+    }
+  }
+
+  /**
+   * The background jobs that hold a pipe a pipeline stage reads, by pipe: the
+   * stage closes it for reading only once they have ended, as in bash each
+   * holds its own copy of the read end. A pipe is here from when its stage
+   * starts until it is closed.
+   */
+  private pipeReaders = new Map<string, Set<Promise<unknown>>>();
+
+  /** A job started from `ctx` holds every such pipe it has open, on any descriptor, until `done`. */
+  private holdPipes(ctx: ExecContextIf, done: Promise<unknown>): void {
+    if (this.pipeReaders.size === 0) return;
+
+    for (let n = 0; n < 256; n++) {
+      const fd = ctx.getFd(String(n));
+
+      if (fd !== undefined) this.pipeReaders.get(fd)?.add(done);
+    }
+  }
+
+  /** Once every job holding `pipe` has ended, those that the jobs started while they ran too. */
+  private async readersEnded(pipe: string): Promise<void> {
+    const readers = this.pipeReaders.get(pipe);
+
+    while (readers?.size) {
+      const ending = [...readers];
+
+      await Promise.allSettled(ending);
+
+      for (const reader of ending) readers.delete(reader);
     }
   }
 
