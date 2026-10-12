@@ -256,6 +256,62 @@ function handled<T>(promise: Promise<T>): Promise<T> {
   return promise;
 }
 
+/** One end of a pipeline's pipe, and the background jobs that hold it besides its stage. */
+type PipeEnd = { pipe: string; jobs: Set<Promise<unknown>> };
+
+/** A node's own redirections, in order: a simple command's among its words, a compound command's after it. */
+function redirectionsOf(node: AstNode): AstNodeRedirect[] {
+  if (node.type === 'Command') {
+    const { prefix = [], suffix = [] } = node as AstNodeCommand;
+
+    return [...prefix, ...suffix].filter((part): part is AstNodeRedirect => part.type === 'Redirect');
+  }
+
+  return (node as { redirections?: AstNodeRedirect[] }).redirections ?? [];
+}
+
+/**
+ * What descriptors hold once `redirects` are made on `fds`, as far as their
+ * words tell without being expanded: a descriptor a file, a here-document or a
+ * here-string is put on, or one that is closed, no longer holds what it did.
+ * A duplication whose word has to be expanded is taken to leave it as it was.
+ */
+function descriptorsAfter(fds: Map<string, string>, redirects: AstNodeRedirect[]): Map<string, string> {
+  const after = new Map(fds);
+
+  for (const redirect of redirects) {
+    const op = redirect.op.text;
+    const io = redirect.numberIo?.text;
+    const word = redirect.file.expansion?.length ? undefined : redirect.file.text;
+
+    // `{fd}>file` opens a descriptor of its own
+    if (io?.startsWith('{')) continue;
+
+    const fd = io ?? (op.startsWith('<') ? '0' : '1');
+    const special = word?.match(/^\/dev\/(?:fd\/(\d+)|(stdin|stdout|stderr))$/);
+    const from = op === '>&' || op === '<&' ? word : special ? special[1] ?? String(['stdin', 'stdout', 'stderr'].indexOf(special[2])) : undefined;
+
+    if (op === '&>' || op === '&>>' || (op === '>&' && io === undefined && word !== undefined && !/^(\d+-?|-)$/.test(word))) {
+      after.delete('1');
+      after.delete('2');
+    } else if (from === undefined) {
+      if (op !== '>&' && op !== '<&') after.delete(fd);
+    } else if (from === '-') {
+      after.delete(fd);
+    } else {
+      const source = from.replace(/-$/, '');
+      const held = after.get(source);
+
+      if (held === undefined) after.delete(fd);
+      else after.set(fd, held);
+
+      if (from.endsWith('-') && source !== fd) after.delete(source);
+    }
+  }
+
+  return after;
+}
+
 /**
  * Whether `pos` in a word's text is inside double quotes: what `"$*"` and `$*`
  * differ by. Single quotes and backslashes are stepped over; an expansion's own
@@ -1833,6 +1889,8 @@ export class AstExecutor {
     const command = this.nodeSource(node);
 
     const handle = await this.shell.jobs!.start(ctx, async (jobCtx) => {
+      this.inheritPipeEnds(jobCtx, ctx);
+
       const code = await this.executeNode(foreground, jobCtx);
       const status = isExitSignal(code) ? getExitCode(code) : isReturnSignal(code) ? getReturnCode(code) : code;
 
@@ -1841,7 +1899,7 @@ export class AstExecutor {
 
     const job = ctx.getJobTable().add(handle, command);
 
-    this.holdPipes(ctx, handle.done);
+    this.holdPipes(ctx, node, handle.done);
     ctx.setParams({ '!': handle.pid });
 
     // Its end is a SIGCHLD to the shell, whose trap runs when the shell gets to it
@@ -1881,6 +1939,8 @@ export class AstExecutor {
     const { promise: done, resolve: ended } = Promise.withResolvers<void>();
 
     const run = async (bgCtx: ExecContextIf): Promise<number> => {
+      this.inheritPipeEnds(bgCtx, ctx);
+
       try {
         const code = await this.executeNode(foreground, bgCtx);
 
@@ -1895,7 +1955,7 @@ export class AstExecutor {
       }
     };
 
-    this.holdPipes(ctx, done);
+    this.holdPipes(ctx, node, done);
 
     try {
       return await this.shell.executeBackground!(ctx, run, this.nodeSource(node));
@@ -3271,8 +3331,8 @@ export class AstExecutor {
 
   protected async executePipeline(node: AstNodePipeline, ctx: ExecContextIf): Promise<number> {
     const pipes: string[] = [];
-    // A stage's input once nothing reads it: the stage and the jobs it put in the background have ended
-    const unread = new Map<string, Promise<void>>();
+    // A pipe's ends closed, once the stages and the jobs that held them have ended
+    const released = new Map<string, Promise<void>[]>();
     const executions: Promise<number>[] = [];
     const fileBridges: Promise<void>[] = [];
     let lastCtx: ExecContextIf | null = null;
@@ -3328,12 +3388,13 @@ export class AstExecutor {
 
         // If not the last command, create a pipe for stdout
         let stdoutRedirected = false;
+        let stdoutPipe: string | undefined;
         if (!isLastCommand) {
-          const pipe = await this.shell.pipeOpen();
-          pipes.push(pipe);
+          stdoutPipe = await this.shell.pipeOpen();
+          pipes.push(stdoutPipe);
 
           cmdCtx.setLocalEnv({ TERM: '0' });
-          cmdCtx.redirectStdout(pipe);
+          cmdCtx.redirectStdout(stdoutPipe);
           stdoutRedirected = true;
         } else {
           // Last command: check if stdout needs file bridging
@@ -3349,10 +3410,12 @@ export class AstExecutor {
           }
         }
 
-        // A background job the stage starts holds its input too, as a process holds its copy of the read end
-        if (stdinPipe) {
-          this.pipeReaders.set(stdinPipe, new Set());
-        }
+        // A background job the stage starts holds the ends of its pipes too, as
+        // a process holds its copies of them: those of the stages it is in as well
+        const input: PipeEnd | undefined = stdinPipe ? { pipe: stdinPipe, jobs: new Set() } : undefined;
+        const output: PipeEnd | undefined = stdoutPipe ? { pipe: stdoutPipe, jobs: new Set() } : undefined;
+
+        this.pipeEnds.set(cmdCtx, [...this.pipeEndsOf(ctx), ...(input ? [input] : []), ...(output ? [output] : [])]);
 
         executions.push(
           handled(
@@ -3378,7 +3441,15 @@ export class AstExecutor {
 
               return Promise.reject(err);
             }).finally(() => {
-              if (stdoutRedirected) {
+              // The next stage reads until the jobs this one started that write
+              // to it have ended too, `{ seq 10 & } | wc -l`. The pipeline's
+              // own output, bridged to a file, is closed as the stage ends: a
+              // job writing there would make the pipeline wait for it
+              if (output) {
+                const closed = this.jobsEnded(output).then(() => this.shell.pipeClose(output.pipe));
+
+                released.set(output.pipe, [...released.get(output.pipe) ?? [], closed.catch((err) => console.error('Failed to close pipe: ', err))]);
+              } else if (stdoutRedirected) {
                 this.shell.pipeClose(cmdCtx.getStdout()).catch((err) => console.error('Failed to close pipe: ', err));
               }
 
@@ -3386,16 +3457,10 @@ export class AstExecutor {
               // pipe in turn, `seq 10 | (head -n1; cat)`; nor before the jobs
               // it started have, `seq 10 | { cat & }`, though the pipeline
               // does not wait for them
-              if (stdinPipe) {
-                const pipe = stdinPipe;
+              if (input) {
+                const closed = this.jobsEnded(input).then(async () => await this.shell.pipeCloseRead?.(input.pipe));
 
-                unread.set(
-                  pipe,
-                  this.readersEnded(pipe).then(async () => {
-                    this.pipeReaders.delete(pipe);
-                    await this.shell.pipeCloseRead?.(pipe);
-                  }).catch((err) => console.error('Failed to close pipe for reading: ', err)),
-                );
+                released.set(input.pipe, [...released.get(input.pipe) ?? [], closed.catch((err) => console.error('Failed to close pipe for reading: ', err))]);
               }
             }),
           ),
@@ -3412,40 +3477,69 @@ export class AstExecutor {
       return this.finishPipeline(node, codes, ctx, lastpipe);
     } finally {
       for (const pipe of pipes) {
-        (unread.get(pipe) ?? Promise.resolve()).then(() => this.shell.pipeRemove(pipe)).catch((err) => console.error('Failed to remove pipe: ', err));
+        Promise.all(released.get(pipe) ?? []).then(() => this.shell.pipeRemove(pipe)).catch((err) => console.error('Failed to remove pipe: ', err));
       }
     }
   }
 
   /**
-   * The background jobs that hold a pipe a pipeline stage reads, by pipe: the
-   * stage closes it for reading only once they have ended, as in bash each
-   * holds its own copy of the read end. A pipe is here from when its stage
-   * starts until it is closed.
+   * The ends of pipeline pipes a context's background jobs hold, by the stage
+   * context: the read end of the stage's input and the write end of its output,
+   * and those of the stages it is nested in. A subshell or a job made from a
+   * context has them too, `pipeEndsOf` finds them up its parents.
    */
-  private pipeReaders = new Map<string, Set<Promise<unknown>>>();
+  private pipeEnds = new WeakMap<ExecContextIf, PipeEnd[]>();
 
-  /** A job started from `ctx` holds every such pipe it has open, on any descriptor, until `done`. */
-  private holdPipes(ctx: ExecContextIf, done: Promise<unknown>): void {
-    if (this.pipeReaders.size === 0) return;
+  private pipeEndsOf(ctx: ExecContextIf): PipeEnd[] {
+    for (let at: ExecContextIf | undefined = ctx; at; at = at.getParent()) {
+      const ends = this.pipeEnds.get(at);
+
+      if (ends) return ends;
+    }
+
+    return [];
+  }
+
+  /** A context made from `ctx` without a parent link, a subshell's or a job's, holds what `ctx` does. */
+  private inheritPipeEnds(sub: ExecContextIf, ctx: ExecContextIf): void {
+    const ends = this.pipeEndsOf(ctx);
+
+    if (ends.length) this.pipeEnds.set(sub, ends);
+  }
+
+  /**
+   * A job `node` started from `ctx` holds, until `done`, every pipe end of its
+   * stages that it has open on any descriptor once its own redirections are
+   * made: `cat >/dev/null &` holds the stage's input, not its output.
+   */
+  private holdPipes(ctx: ExecContextIf, node: AstNode, done: Promise<unknown>): void {
+    const ends = this.pipeEndsOf(ctx);
+
+    if (ends.length === 0) return;
+
+    const fds = new Map<string, string>();
 
     for (let n = 0; n < 256; n++) {
-      const fd = ctx.getFd(String(n));
+      const target = ctx.getFd(String(n));
 
-      if (fd !== undefined) this.pipeReaders.get(fd)?.add(done);
+      if (target !== undefined) fds.set(String(n), target);
+    }
+
+    const open = new Set(descriptorsAfter(fds, redirectionsOf(node)).values());
+
+    for (const end of ends) {
+      if (open.has(end.pipe)) end.jobs.add(done);
     }
   }
 
-  /** Once every job holding `pipe` has ended, those that the jobs started while they ran too. */
-  private async readersEnded(pipe: string): Promise<void> {
-    const readers = this.pipeReaders.get(pipe);
-
-    while (readers?.size) {
-      const ending = [...readers];
+  /** Once every job holding `end` has ended, those that the jobs started while they ran too. */
+  private async jobsEnded(end: PipeEnd): Promise<void> {
+    while (end.jobs.size) {
+      const ending = [...end.jobs];
 
       await Promise.allSettled(ending);
 
-      for (const reader of ending) readers.delete(reader);
+      for (const job of ending) end.jobs.delete(job);
     }
   }
 
@@ -3660,6 +3754,7 @@ export class AstExecutor {
     const sub = ctx.subContext(true, nested);
 
     this.substitutionDepths.set(sub, this.substitutionDepth(ctx) + (substitution ? 1 : 0));
+    this.inheritPipeEnds(sub, ctx);
 
     return sub;
   }

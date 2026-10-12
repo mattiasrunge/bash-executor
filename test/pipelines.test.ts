@@ -336,9 +336,9 @@ Deno.test('A job a stage puts in the background holds its input', async (t) => {
   await t.step('the pipeline does not wait for it', async () => {
     const shell = new JobShell();
     const result = await shell.runAndCapture('echo a | { while :; do :; done & }; echo "ps=${PIPESTATUS[*]}"');
-    assertEquals(result.stdout, 'ps=0 0\n');
     await shell.jobs.signal('1000', 'TERM');
     await Promise.all(shell.started);
+    assertEquals(result.stdout, 'ps=0 0\n');
   });
 
   await t.step('once it has ended, the writer ends with 141', async () => {
@@ -354,5 +354,50 @@ Deno.test('A job a stage puts in the background holds its input', async (t) => {
     await Promise.all(shell.started);
     assertStringIncludes(shell.getStdout(), 'ps=0 0\n');
     assertStringIncludes(shell.getStdout(), 'n=20000\n');
+  });
+});
+
+Deno.test('A job a stage puts in the background holds its output', async (t) => {
+  const count = 'i=0; while [ $i -lt 20000 ]; do echo $i; i=$((i+1)); done';
+  const lines = 'n=0; while read l; do n=$((n+1)); done; echo "n=$n"';
+
+  await t.step('the next stage reads all it writes', async () => {
+    const shell = new JobShell();
+    const result = await shell.runAndCapture(`{ { echo a; echo b; } & } | { ${lines}; }`);
+    assertEquals(result.stdout, 'n=2\n');
+  });
+
+  await t.step('more than the pipe holds, and every stage ends 0', async () => {
+    const shell = new JobShell();
+    const result = await shell.runAndCapture(`{ ${count} & } | { ${lines}; }; echo "ps=\${PIPESTATUS[*]}"`);
+    assertEquals(result.stdout, 'n=20000\nps=0 0\n');
+  });
+
+  await t.step('one that writes elsewhere does not hold it', async () => {
+    const shell = new JobShell();
+    const result = await shell.runAndCapture('{ while :; do :; done >out & } | { read v; echo "[$v]"; }; echo "ps=${PIPESTATUS[*]}"');
+    await shell.jobs.signal('1000', 'TERM');
+    await Promise.all(shell.started);
+    assertEquals(result.stdout, '[]\nps=0 0\n');
+  });
+
+  await t.step('one that reads elsewhere does not hold the input', async () => {
+    const shell = new JobShell();
+    await shell.runAndCapture('while :; do echo y; done | { { i=0; while [ $i -lt 2000 ]; do i=$((i+1)); done; echo job; } <<<x & }; echo "ps=${PIPESTATUS[*]}"');
+    await Promise.all(shell.started);
+    assertEquals(shell.getStdout(), 'ps=141 0\njob\n');
+  });
+
+  await t.step('one writing to a stage that has ended is ended by it', async () => {
+    const shell = new JobShell();
+    const result = await shell.runAndCapture('{ while :; do echo y; done & } | { read v; echo "[$v]"; }; echo "ps=${PIPESTATUS[*]}"');
+    // Killed if it has not ended in time, so that the test fails rather than hangs
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const ended = await Promise.race([Promise.all(shell.started).then(() => true), new Promise<false>((resolve) => timer = setTimeout(() => resolve(false), 2000))]);
+    clearTimeout(timer);
+    await shell.jobs.signal('1000', 'TERM');
+    await Promise.all(shell.started);
+    assertEquals(result.stdout, '[y]\nps=0 0\n');
+    assertEquals(ended, true);
   });
 });
