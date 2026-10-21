@@ -37,7 +37,7 @@ async function bashAccepts(source: string): Promise<'ok' | 'incomplete' | 'error
 
 async function parses(source: string): Promise<string | null> {
   try {
-    await parse(source);
+    parse(source);
     return null;
   } catch (err) {
     return (err instanceof Error ? err.message : String(err)).split('\n')[0];

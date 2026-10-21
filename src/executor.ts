@@ -682,7 +682,7 @@ export class AstExecutor {
       unterminatedHereDocuments: this.unterminatedHereDocuments,
       // Aliases expand only under `shopt -s expand_aliases`, which an
       // interactive bash turns on and a script has to ask for
-      resolveAlias: async (name: string) => ctx.getShellOption('expand_aliases') ? ctx.getAlias(name) : undefined,
+      resolveAlias: (name: string) => ctx.getShellOption('expand_aliases') ? ctx.getAlias(name) : undefined,
 
       // Tildes are expanded as each word runs, with HOME as it is then
       deferTildeExpansion: true,
@@ -737,7 +737,7 @@ export class AstExecutor {
 
         const to = await this.readCommandLines(lines, from, ctx, options, input.echo ?? false);
         const text = lines.map((line, i) => i < from ? ' '.repeat(line.length) : line).slice(0, to).join('\n');
-        const ast = await parse(text, { ...options, posix: ctx.getShellOption('posix') }) as AstNodeScript;
+        const ast = parse(text, { ...options, posix: ctx.getShellOption('posix') }) as AstNodeScript;
         const echoed = this.echoedScript;
 
         // Echoed as read already
@@ -766,13 +766,13 @@ export class AstExecutor {
       let end = lines.length;
 
       try {
-        ast = await parse(text, options) as AstNodeScript;
+        ast = parse(text, options) as AstNodeScript;
       } catch (err) {
         if (!(err instanceof BashSyntaxError)) {
           throw err;
         }
 
-        const complete = await this.completeCommandsBefore(lines, from, options);
+        const complete = this.completeCommandsBefore(lines, from, options);
         const prefix = (to: number) => lines.map((line, i) => i < from ? ' '.repeat(line.length) : line).slice(0, to).join('\n');
 
         if (complete.end === from) {
@@ -783,14 +783,14 @@ export class AstExecutor {
         // one pairs with one in the next. Then the first runs alone, and what it
         // does to the shell — `set -o posix` — may make the rest parse.
         try {
-          ast = await parse(prefix(complete.end), options) as AstNodeScript;
+          ast = parse(prefix(complete.end), options) as AstNodeScript;
           end = complete.end;
         } catch (inner) {
           if (!(inner instanceof BashSyntaxError)) {
             throw inner;
           }
 
-          ast = await parse(prefix(complete.first), options) as AstNodeScript;
+          ast = parse(prefix(complete.first), options) as AstNodeScript;
           end = complete.first;
         }
       }
@@ -816,7 +816,7 @@ export class AstExecutor {
    * still to come — takes more, and the first that fails for good is where the
    * error is.
    */
-  private async completeCommandsBefore(lines: string[], from: number, options: Parameters<typeof parse>[1]): Promise<{ end: number; first: number }> {
+  private completeCommandsBefore(lines: string[], from: number, options: Parameters<typeof parse>[1]): { end: number; first: number } {
     let start = from;
     // Where the first complete chunk ends
     let first = from;
@@ -826,7 +826,7 @@ export class AstExecutor {
 
     for (let end = from; end < lines.length; end++) {
       try {
-        await parse(lines.slice(start, end + 1).join('\n'), strict);
+        parse(lines.slice(start, end + 1).join('\n'), strict);
         start = end + 1;
         if (first === from) first = start;
       } catch (err) {
@@ -909,7 +909,7 @@ export class AstExecutor {
       text += `${line}\n`;
       to++;
 
-      if (!await this.unfinished(text, strict)) break;
+      if (!this.unfinished(text, strict)) break;
     }
 
     return to;
@@ -968,10 +968,10 @@ export class AstExecutor {
    * before running it. Read with the shell's aliases and POSIX mode.
    */
   public async isUnfinished(source: string, ctx: ExecContextIf): Promise<boolean> {
-    return await this.unfinished(source, {
+    return this.unfinished(source, {
       insertLOC: true,
       unterminatedHereDocuments: 'error',
-      resolveAlias: async (name: string) => ctx.getShellOption('expand_aliases') ? ctx.getAlias(name) : undefined,
+      resolveAlias: (name: string) => ctx.getShellOption('expand_aliases') ? ctx.getAlias(name) : undefined,
       deferTildeExpansion: true,
       posix: ctx.getShellOption('posix'),
     });
@@ -1485,9 +1485,9 @@ export class AstExecutor {
   }
 
   /** Whether text ends inside a command: more lines are needed to make it whole. */
-  private async unfinished(text: string, options: Parameters<typeof parse>[1]): Promise<boolean> {
+  private unfinished(text: string, options: Parameters<typeof parse>[1]): boolean {
     try {
-      await parse(text, options);
+      parse(text, options);
       return false;
     } catch (err) {
       if (!(err instanceof BashSyntaxError)) throw err;
@@ -4026,7 +4026,7 @@ export class AstExecutor {
       const source = `${name} ${value}`;
 
       try {
-        const ast = await parse(source, { insertLOC: true });
+        const ast = parse(source, { insertLOC: true });
         const [node, ...rest] = ast.commands;
 
         if (rest.length || node?.type !== 'Function' || (node as AstNodeFunction).name.text !== name) continue;
@@ -4773,7 +4773,7 @@ export class AstExecutor {
   private async subscriptWord(subscript: string, ctx: ExecContextIf): Promise<string> {
     if (!/[$`\\'"]/.test(subscript)) return subscript;
 
-    const ast = await parse(subscript, { mode: 'word-expansion' });
+    const ast = parse(subscript, { mode: 'word-expansion' });
     const word = (ast.commands[0] as AstNodeCommand).name;
 
     if (!word) return subscript;
@@ -5810,7 +5810,7 @@ export class AstExecutor {
     let ast: AstNode;
 
     try {
-      ast = await parse(quoted, { mode: 'word-expansion' });
+      ast = parse(quoted, { mode: 'word-expansion' });
     } catch (err) {
       if (!(err instanceof BashSyntaxError)) throw err;
 
@@ -5844,7 +5844,7 @@ export class AstExecutor {
     }
 
     try {
-      const ast = await parse(subscript, { mode: 'word-expansion' });
+      const ast = parse(subscript, { mode: 'word-expansion' });
       const word = (ast.commands[0] as AstNodeCommand).name;
 
       if (!word) {
@@ -6366,7 +6366,7 @@ export class AstExecutor {
    * `${x1%t}`. A name in plain single quotes is none, `${'x1'}`, and a bad
    * substitution, said with its `$'…'` as the `'…'` they became.
    */
-  protected async resolveQuotedNames<T extends { type: string; loc?: unknown }>(expansions: T[]): Promise<T[]> {
+  protected resolveQuotedNames<T extends { type: string; loc?: unknown }>(expansions: T[]): T[] {
     const resolved: T[] = [];
 
     for (const xp of expansions) {
@@ -6384,7 +6384,7 @@ export class AstExecutor {
         throw new CommandAbortError(`\${${parameter.replace(/\$'/g, "'")}}: bad substitution`, { code: 'E_BAD_SUBSTITUTION' });
       }
 
-      const ast = await parse(`\${${name}${ansi[2]}}`, { mode: 'word-expansion' });
+      const ast = parse(`\${${name}${ansi[2]}}`, { mode: 'word-expansion' });
       const inner = (ast.commands[0] as AstNodeCommand | undefined)?.name?.expansion?.[0];
 
       resolved.push(inner ? { ...inner, loc: xp.loc } as unknown as T : xp);
@@ -6466,7 +6466,7 @@ export class AstExecutor {
         throw new UnboundVariableError(`!${name}`);
       }
 
-      const ast = await parse(`\${${target}${rest}}`, { mode: 'word-expansion' });
+      const ast = parse(`\${${target}${rest}}`, { mode: 'word-expansion' });
       const inner = (ast.commands[0] as AstNodeCommand | undefined)?.name?.expansion?.[0];
 
       if (!inner) throw new CommandAbortError(`\${!${word}}: bad substitution`, { code: 'E_BAD_SUBSTITUTION' });
@@ -6501,7 +6501,7 @@ export class AstExecutor {
     // Where a `"$@"` expanded to nothing
     const emptyAt: number[] = [];
 
-    for (const xp of await this.resolveIndirections(await this.resolveQuotedNames(node.expansion), ctx)) {
+    for (const xp of await this.resolveIndirections(this.resolveQuotedNames(node.expansion), ctx)) {
       if (xp.type === 'ParameterExpansion') {
         // `${$x}`: no parameter has that name, and bash refuses the whole expansion. A name
         // with a quote in it is the parser's misreading instead — in POSIX mode a `'` inside
@@ -6978,7 +6978,7 @@ export class AstExecutor {
 
     text += '"';
 
-    const ast = await parse(text, { mode: 'word-expansion' });
+    const ast = parse(text, { mode: 'word-expansion' });
     const word = (ast.commands[0] as AstNodeCommand | undefined)?.name;
 
     if (!word) {

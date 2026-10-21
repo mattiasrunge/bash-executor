@@ -133,7 +133,7 @@ async function parseComsubs(node: unknown, found: Map<AstCommandExpansion, Comsu
 
     if (!found.has(xp)) {
       try {
-        const ast = await parse(xp.command, { insertLOC: true });
+        const ast = parse(xp.command, { insertLOC: true });
         found.set(xp, { ast, source: xp.command });
         await parseComsubs(ast, found);
       } catch {

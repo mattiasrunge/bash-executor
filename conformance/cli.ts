@@ -543,7 +543,7 @@ function ignoredSignals(): string[] {
 /** Whether text parses as whole commands, rather than ending inside one. */
 async function complete(text: string): Promise<boolean> {
   try {
-    await parse(text);
+    parse(text);
     return true;
   } catch (err) {
     return !(err instanceof BashSyntaxError && (err.detail?.kind === 'eof' || err.detail?.kind === 'unclosed'));
