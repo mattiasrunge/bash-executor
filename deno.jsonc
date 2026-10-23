@@ -50,7 +50,7 @@
   "tasks": {
     "check": "deno lint && deno fmt --check && deno publish --dry-run && deno task test && deno task coverage",
     "coverage-clean": "rm -rf coverage",
-    "coverage": "false && deno coverage coverage && deno coverage coverage --html",
+    "coverage": "deno coverage coverage && deno coverage coverage --html",
     "test": "deno task coverage-clean && deno test -R --coverage=coverage",
     "test-nc": "deno task coverage-clean && deno test -R --coverage=coverage --no-check",
     "test-fast": "deno test -A --parallel --no-check --quiet",
