@@ -1,6 +1,6 @@
 # bash-executor
 
-Execute bash scripts, with the AST given by [bash-parser](https://github.com/mattiasrunge/bash-parser).
+Execute bash scripts, with the AST given by [bash-parser](https://github.com/einhq/bash-parser).
 
 The executor implements the shell itself (expansions, control flow, functions, variables, redirections and bash's
 builtins) and leaves what touches the outside world to a host: running external commands, files, pipes and directories
@@ -250,4 +250,4 @@ This project is licensed under the MIT License. See the [`LICENSE`](./LICENCE) f
 
 ## Contact
 
-For questions or support, please open an issue on the [GitHub repository](https://github.com/mattiasrunge/bash-executor/issues).
+For questions or support, please open an issue on the [GitHub repository](https://github.com/einhq/bash-executor/issues).
